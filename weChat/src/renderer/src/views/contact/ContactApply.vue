@@ -1,9 +1,9 @@
 <template>
     <ContactPanel :showTopBorder="true" :infinite-scroll-immediate="false" v-infinite-scroll="loadApply">
         <div>
-            <div class="apply-item" v-for="item in applyList">
-                <div :class="['contactType',item.conatactType==0?'user-contact':'']">
-                    {{ item.conatactType==0?'好友':'群' }}
+            <div class="apply-item" v-for="item in applyList" :key="item.applyId">
+                <div :class="['contactType',item.contactType==0?'user-contact':'']">
+                    {{ item.contactType==0?'好友':'群' }}
                 </div>
                 <Avatar :width="50" :userId="item.userId"></Avatar>
                 <div class="contact-info">
@@ -37,20 +37,38 @@
 
 <script setup>
 
-import { ref, computed, getCurrentInstance } from 'vue';
-import { useRouter } from 'vue-router';
-import { useRoute } from 'vue-router';
+import { ref, getCurrentInstance } from 'vue';
 import {useContactStateStore} from '../../stores/ContactStateStore';
-import { useUserInfoStore } from '../../stores/userInfoStore';
 
-const router = useRouter();
-const route = useRoute();
 const { proxy } = getCurrentInstance();
 const contactStateStore = useContactStateStore();
-const userInfoStore = useUserInfoStore();
 const applyList = ref([]);
+const friendContactIds = ref(new Set());
 let pageNo=0;
 let pageTotal=1;
+
+const loadFriendContactIds = async () => {
+    const result = await proxy.Request({
+        url: proxy.Api.loadContact,
+        params: {
+            contactType: 'USER'
+        }
+    });
+    if (!result) {
+        return;
+    }
+    friendContactIds.value = new Set((result.data || []).map((item) => item.contactId));
+}
+
+const getApplyUserId = (item) => item.applyUserId || item.userId || item.contactId;
+
+const filterHandledFriendApply = (list = []) => {
+    return list.filter((item) => {
+        const isPendingFriendApply = item.contactType == 0 && item.status == 0;
+        return !(isPendingFriendApply && friendContactIds.value.has(getApplyUserId(item)));
+    });
+}
+
 // 加载申请列表
 const loadApply = async () => {
     pageNo++;
@@ -70,11 +88,17 @@ const loadApply = async () => {
     if(result.data.pageNo==1){
         applyList.value=[];
     }
-    applyList.value = result.data.list;
+    const list = filterHandledFriendApply(result.data.list);
+    applyList.value = result.data.pageNo == 1 ? list : applyList.value.concat(list);
     pageNo = result.data.pageNo;
   
 }
-loadApply();
+
+const init = async () => {
+    await loadFriendContactIds();
+    loadApply();
+}
+init();
 
 // 处理申请
 const dealWithApply = async (applyId,contactType,status) => {
@@ -94,6 +118,9 @@ const dealWithApply = async (applyId,contactType,status) => {
             }
             //重置分页，再刷新
             pageNo=0;
+            if(contactType==0&&status==1){
+                await loadFriendContactIds();
+            }
             loadApply();
             //同意好友申请，刷新好友列表
             if(contactType==0&&status==1){

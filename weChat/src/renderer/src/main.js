@@ -1,6 +1,23 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import ElementPlus from 'element-plus'
+import {
+    ChatDotRound,
+    Close,
+    Female,
+    FolderOpened,
+    FullScreen,
+    Male,
+    Minus,
+    MoreFilled,
+    Plus,
+    Promotion,
+    ScaleToOriginal,
+    Search,
+    Setting,
+    Top,
+    User
+} from '@element-plus/icons-vue'
 
 import 'element-plus/dist/index.css'
 import '@imengyu/vue3-context-menu/lib/vue3-context-menu.css'
@@ -25,6 +42,27 @@ import AvatarUpload from './components/AvatarUpload.vue'
 import { Confirm } from './utils/Confirm.js'
 const app = createApp(App)
 
+const iconComponents = {
+    ChatDotRound,
+    Close,
+    Female,
+    FolderOpened,
+    FullScreen,
+    Male,
+    Minus,
+    MoreFilled,
+    Plus,
+    Promotion,
+    ScaleToOriginal,
+    Search,
+    Setting,
+    Top,
+    User
+}
+
+for (const [name, component] of Object.entries(iconComponents)) {
+    app.component(name, component)
+}
 
 app.use(ElementPlus)
 app.use(router)

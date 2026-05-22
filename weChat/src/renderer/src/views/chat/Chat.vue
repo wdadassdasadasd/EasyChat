@@ -1,5 +1,6 @@
 <template>
     <Layout>
+        <!-- 左侧：聊天会话列表。数据来自本地 SQLite，由主进程通过 loadSessionData 返回。 -->
         <template #left-content>
             <div class="chat-list-header">
                 <span>聊天</span>
@@ -24,6 +25,7 @@
                 />
             </div>
         </template>
+        <!-- 右侧：当前聊天窗口。选中会话后展示标题、消息列表和发送框。 -->
         <template #right-content>
             <template v-if="hasCurrentChat">
                 <div class="title-panel drag">
@@ -33,23 +35,41 @@
                     </div>
                     <div
                         v-if="currentChatSession.contactType == 1"
-                        class="iconfont icon-more no-drag"
+                        class="title-more no-drag"
                         @click="shwGroupDetail"
                     >
+                        <el-icon>
+                            <MoreFilled />
+                        </el-icon>
                     </div>
                 </div>
                 <div class="chat-panel">
+                    <!-- messageList 是当前会话的消息数组；push 新消息后，页面会自动刷新。 -->
                     <div class="message-panel" id="message-panel" v-if="messageList.length > 0">
-                        <div class="message-item" v-for="(data, index) in messageList" :id="'message' + data.messageId">{{ data.messageContent }}</div>
+                        <div
+                            v-for="(data, index) in messageList"
+                            :key="data.messageId || index"
+                            :id="'message' + data.messageId"
+                            :class="['message-row', isSelfMessage(data) ? 'message-row-self' : '']"
+                        >
+                            <!-- 自己发送的消息靠右并显示绿色；别人发送的消息保持默认靠左白色。 -->
+                            <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '']">
+                                {{ data.messageContent }}
+                            </div>
+                        </div>
                     </div>
                     <div class="chat-empty" v-else>
                         <div class="empty-tip">{{ welcomeText }}</div>
                     </div>
                 </div>
-                <MessageSend :currentChatSession="currentChatSession"></MessageSend>
+                <!-- MessageSend 只负责输入；真正调发送接口的是父组件 sendChatMessage。 -->
+                <MessageSend :currentChatSession="currentChatSession" @sendMessage="sendChatMessage"></MessageSend>
             </template>
+            <!-- 没有选中会话时，右侧显示默认空状态。 -->
             <div class="chat-empty chat-empty-default" v-else>
-                <span class="iconfont icon-chat wechat-empty-icon"></span>
+                <el-icon class="wechat-empty-icon">
+                    <ChatDotRound />
+                </el-icon>
             </div>
             <WinOp :showSetTop="true" :showMin="true" :showMax="true" :closeType="1" showSetTop="1" />
         </template>
@@ -57,7 +77,7 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, onMounted, onUnmounted, ref } from 'vue';
+import { computed, getCurrentInstance, onMounted, onUnmounted, ref ,nextTick} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useUserInfoStore } from '../../stores/userInfoStore';
 import ChatSession from './ChatSession.vue';
@@ -69,16 +89,40 @@ const userInfoStore = useUserInfoStore();
 const route = useRoute();
 const router = useRouter();
 const searchKey = ref();
+
+// 左侧会话列表。每一项对应本地 chat_session_user 表中的一条会话。
 const chatSessionList = ref([]);
 
+/**
+ * 搜索会话。
+ *
+ * 调用时机：左侧搜索框输入内容时触发。
+ * 当前状态：函数还没有实现，后续可以根据 searchKey 过滤 chatSessionList。
+ */
 const search = () => {
 };
 
+/**
+ * 加载左侧会话列表。
+ *
+ * 渲染进程不直接操作 SQLite，所以这里只向主进程发送 IPC 事件。
+ * 主进程收到 loadSessionData 后，会查询本地 chat_session_user 表，
+ * 再通过 loadSessionDataCallback 把结果回传给 onLoadSessionData。
+ */
 const loadChatSession = () => {
+    // 渲染进程不能直接查 SQLite，这里通过 IPC 通知主进程加载本地会话列表。
     window.ipcRenderer.send('loadSessionData');
 };
 
+/**
+ * 对会话列表排序。
+ *
+ * 排序规则：
+ * 1. topType 大的排前面，也就是置顶会话优先。
+ * 2. topType 相同时，lastReceiveTime 越大越靠前，也就是最近聊天靠前。
+ */
 const sortChatSessionList = (dataList) => {
+    // 排序规则：置顶优先；同样置顶状态下，最近消息时间越新越靠前。
     dataList.sort((a, b) => {
         const topTypeResult = b.topType - a.topType;
         if (topTypeResult == 0) {
@@ -88,6 +132,12 @@ const sortChatSessionList = (dataList) => {
     });
 };
 
+/**
+ * 从前端会话列表中移除某个会话。
+ *
+ * 这里只改页面内存中的 chatSessionList，不负责写数据库。
+ * 真正写数据库的是 delChatSession 里的 IPC：delChatSession。
+ */
 const delChatSessionList = (contactId) => {
     chatSessionList.value = chatSessionList.value.filter((item) => {
         return item.contactId != contactId;
@@ -95,6 +145,8 @@ const delChatSessionList = (contactId) => {
 };
 
 const currentChatSession = ref({});
+
+// 当前会话的分页信息。加载历史消息时会用它继续查上一页。
 const messageCountInfo = {
     totalPage: 0,
     pageNo: 0,
@@ -102,8 +154,16 @@ const messageCountInfo = {
     noData: false
 };
 
+// 当前右侧聊天窗口展示的消息列表。
 const messageList = ref([]);
 const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0);
+
+// 判断消息是否由当前登录用户发送，用于控制左右对齐和气泡颜色。
+const isSelfMessage = (message) => {
+    return message?.sendUserId == userInfoStore.getInfo()?.userId;
+};
+
+// 没有消息时显示的欢迎文案，群聊和单聊文案不同。
 const welcomeText = computed(() => {
     if (currentChatSession.value.contactType == 1) {
         return `${currentChatSession.value.contactName} 已创建好，快来开始群聊吧`;
@@ -111,7 +171,17 @@ const welcomeText = computed(() => {
     return `欢迎和 ${currentChatSession.value.contactName || ''} 开始聊天`;
 });
 
+/**
+ * 点击左侧会话。
+ *
+ * 做的事情：
+ * 1. 把点击的会话设为 currentChatSession。
+ * 2. 清空右侧消息列表，避免显示上一个会话的消息。
+ * 3. 重置分页信息。
+ * 4. 调 loadChatMessage 加载当前会话第一页消息。
+ */
 const chatSessionClickHandler = (item) => {
+    // 点击左侧会话后，切换当前会话，并重置消息分页状态。
     currentChatSession.value = Object.assign({}, item);
     messageList.value = [];
 
@@ -122,11 +192,19 @@ const chatSessionClickHandler = (item) => {
     loadChatMessage();
 };
 
+/**
+ * 加载当前会话的聊天消息。
+ *
+ * 数据来源：客户端本地 SQLite 的 chat_message 表。
+ * 交互方式：渲染进程发送 loadChatMessage 给主进程。
+ * 返回位置：onLoadChatMessage 监听 loadChatMessageCallback。
+ */
 const loadChatMessage = () => {
     if (messageCountInfo.noData) {
         return;
     }
     messageCountInfo.pageNo++;
+    // 通过 IPC 让主进程从本地 chat_message 表中按 sessionId 分页查询消息。
     window.ipcRenderer.send('loadChatMessage', {
         sessionId: currentChatSession.value.sessionId,
         pageNo: messageCountInfo.pageNo,
@@ -134,7 +212,82 @@ const loadChatMessage = () => {
     });
 };
 
+/**
+ * 滚动消息列表到底部。
+ *
+ * 为什么需要 nextTick：
+ * messageList.push 后，DOM 不是立刻更新的。
+ * 需要等 Vue 完成渲染后，再读取 scrollHeight 才准确。
+ */
+const scrollMessageToBottom = async () => {
+    // 等 Vue 把新消息渲染到 DOM 后，再把滚动条拉到底部。
+    await nextTick();
+
+    const messagePanel = document.getElementById('message-panel');
+    if (messagePanel) {
+        messagePanel.scrollTop = messagePanel.scrollHeight;
+    }
+};
+
+/**
+ * 发送聊天消息。
+ *
+ * 调用来源：MessageSend.vue 通过 emit('sendMessage') 抛给父组件。
+ *
+ * 发送方链路：
+ * MessageSend.vue 输入内容
+ * -> Chat.vue sendChatMessage
+ * -> HTTP 调后端 /chat/sendMessage
+ * -> 后端保存消息并返回完整消息对象
+ * -> 当前页面 push 到 messageList，发送方立即看到消息
+ *
+ * 注意：发送消息走 HTTP 接口，不走 WebSocket。
+ * WebSocket 主要负责接收别人发来的消息。
+ */
+const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
+    // 发送方主动发消息走 HTTP 接口；WebSocket 主要负责接收别人发来的消息。
+    if (!messageContent) {
+        return;
+    }
+
+    const result = await proxy.Request({
+        url: proxy.Api.sendMessage,
+        params: {
+            contactId,
+            contactType,
+            messageType: 2,
+            messageContent
+        },
+        showLoading: false
+    });
+
+    if (!result) {
+        return;
+    }
+
+    const message = result.data;
+    if (message) {
+        // 后端返回完整消息对象后，发送方立即追加到当前消息列表，这样自己能马上看到。
+        messageList.value.push(message);
+        scrollMessageToBottom();
+    }
+    //更新左侧聊天消息列表
+    loadChatSession();
+
+};
+
+/**
+ * 注册“加载聊天消息完成”的 IPC 回调。
+ *
+ * 主进程查询完本地 chat_message 表后，会回传：
+ * - dataList：本页消息
+ * - pageTotal：总页数
+ * - pageNo：当前页码
+ *
+ * 这里会把新加载的历史消息拼到 messageList 前面。
+ */
 const onLoadChatMessage = () => {
+    // 主进程查询完本地聊天消息后，会通过 loadChatMessageCallback 回传给渲染进程。
     window.ipcRenderer.on('loadChatMessageCallback', (e, { dataList, pageTotal, pageNo }) => {
         if (pageNo == pageTotal) {
             messageCountInfo.noData = true;
@@ -151,35 +304,91 @@ const onLoadChatMessage = () => {
     });
 };
 
+/**
+ * 注册“收到新消息”的 IPC 回调。
+ *
+ * 真实来源是后端 WebSocket：
+ * 后端 WebSocket 推送
+ * -> 主进程 wsClient.js 收到
+ * -> 主进程保存到本地 SQLite
+ * -> 主进程通过 receiveMessage 通知渲染进程
+ * -> Chat.vue 根据 sessionId 判断是否展示到当前聊天窗口
+ */
 const onReceiveMessage = () => {
+    // 主进程 wsClient 收到后端 WebSocket 推送后，会用 receiveMessage 通知当前页面。
     window.ipcRenderer.on('receiveMessage', (e, message) => {
         console.log('收到消息', message);
-        if (message.messageType == 0) {
-            loadChatSession();
+        if (typeof message === 'string') {
+            message = JSON.parse(message);
         }
+        if (message.messageType == 0) {
+            // messageType=0 是 WebSocket 初始化消息，不是普通聊天内容，只刷新会话列表。
+            loadChatSession();
+            return;
+        }
+        if(message.sessionId==currentChatSession.value.sessionId){
+            // 如果推送消息属于当前打开的会话，直接追加到右侧聊天窗口。
+            messageList.value.push(message);
+            scrollMessageToBottom();
+        }
+        loadChatMessage();
     });
 };
 
+/**
+ * 注册“加载会话列表完成”的 IPC 回调。
+ *
+ * loadChatSession 发出 loadSessionData 后，
+ * 主进程会查询本地 chat_session_user 表，
+ * 再通过 loadSessionDataCallback 把会话列表回传到这里。
+ */
 const onLoadSessionData = () => {
+    // 主进程加载完本地会话列表后，通过 loadSessionDataCallback 回传。
     window.ipcRenderer.on('loadSessionDataCallback', (e, dataList) => {
         sortChatSessionList(dataList);
         chatSessionList.value = dataList || [];
     });
 };
 
+/**
+ * 置顶或取消置顶一个会话。
+ *
+ * 做的事情：
+ * 1. 先在前端切换 data.topType，让界面立即变化。
+ * 2. 重新排序 chatSessionList。
+ * 3. 通过 IPC 通知主进程更新本地数据库。
+ */
 const setTop = (data) => {
+    // 先更新前端显示，再通知主进程写入本地数据库。
     data.topType = data.topType == 0 ? 1 : 0;
     sortChatSessionList(chatSessionList.value);
     window.ipcRenderer.send('topChatSession', { contactId: data.contactId, topType: data.topType });
 };
 
+/**
+ * 删除一个会话。
+ *
+ * 这里的删除不是物理删除，而是软删除：
+ * 主进程会把 chat_session_user.status 改成 0。
+ *
+ * 前端同时清空 currentChatSession，让右侧回到未选中状态。
+ */
 const delChatSession = (contactId) => {
+    // 删除会话是软删除：本地数据库里把 status 改为 0。
     delChatSessionList(contactId);
     currentChatSession.value = {};
     window.ipcRenderer.send('delChatSession', contactId);
 };
 
+/**
+ * 打开左侧会话右键菜单。
+ *
+ * 菜单功能：
+ * - 置顶 / 取消置顶：调用 setTop。
+ * - 删除聊天：弹确认框，确认后调用 delChatSession。
+ */
 const onContextmenu = (data, e) => {
+    // 左侧会话右键菜单：置顶/取消置顶、删除聊天。
     e.preventDefault();
     ContextMenu.showContextMenu({
         x: e.x,
@@ -206,18 +415,35 @@ const onContextmenu = (data, e) => {
     });
 };
 
+/**
+ * 页面挂载时初始化聊天页。
+ *
+ * 必须先注册 IPC 监听，再主动加载会话列表。
+ * 否则可能出现主进程已经返回数据，但页面还没开始监听的情况。
+ */
 onMounted(() => {
+    // 页面进入时注册 IPC 监听，并主动加载左侧会话列表。
     onReceiveMessage();
     onLoadSessionData();
     onLoadChatMessage();
     loadChatSession();
 });
 
+/**
+ * 页面卸载时清理 IPC 监听。
+ *
+ * 如果不清理，反复进入聊天页会重复绑定监听，
+ * 导致一条消息被处理多次。
+ */
 onUnmounted(() => {
+    // 页面卸载时移除监听，避免重复进入页面后绑定多次事件。
     window.ipcRenderer.removeAllListeners('loadSessionDataCallback');
     window.ipcRenderer.removeAllListeners('receiveMessage');
     window.ipcRenderer.removeAllListeners('loadChatMessageCallback');
 });
+
+
+
 </script>
 
 <style lang="scss" scoped>
@@ -275,10 +501,18 @@ onUnmounted(() => {
     padding: 20px 24px;
 }
 
+.message-row {
+    display: flex;
+    margin-bottom: 14px;
+}
+
+.message-row-self {
+    justify-content: flex-end;
+}
+
 .message-item {
     width: fit-content;
     max-width: min(72%, 560px);
-    margin-bottom: 14px;
     padding: 10px 14px;
     border-radius: 4px;
     background: #ffffff;
@@ -286,6 +520,10 @@ onUnmounted(() => {
     line-height: 1.6;
     word-break: break-word;
     box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.message-item-self {
+    background: #95ec69;
 }
 
 .chat-empty {
@@ -336,10 +574,26 @@ onUnmounted(() => {
     color: #666;
 }
 
-:deep(.toolbar .iconfont) {
+:deep(.toolbar .toolbar-icon) {
     font-size: 20px;
     color: #666;
     cursor: pointer;
+}
+
+.title-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    color: #666;
+    cursor: pointer;
+
+    &:hover {
+        background: #e7e7e7;
+        color: #333;
+    }
 }
 
 :deep(.input-area) {

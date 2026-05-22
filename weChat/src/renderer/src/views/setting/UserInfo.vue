@@ -6,7 +6,9 @@
                 <div class="more-op">
                     <el-dropdown placement="bottom-end" trigger="click">
                         <span class="el-dropdown-link">
-                            <div class="iconfont  icon-more"></div>
+                            <el-icon class="more-icon">
+                                <MoreFilled />
+                            </el-icon>
                         </span>
                         <template #dropdown>
                             <el-dropdown-menu>
@@ -102,6 +104,11 @@ const logout=()=>{
 
 .el-dropdown-link:hover {
   background-color: #f0f0f0 !important; /* 悬停背景色 */
+}
+
+.more-icon {
+  font-size: 20px;
+  color: #666;
 }
 
 </style>

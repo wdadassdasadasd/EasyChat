@@ -1,11 +1,26 @@
 <template>
     <div class="win-op-no-drag">
-        <div v-if="showSetTop" :class="['iconfont icon-narrow-up',isTop?'win-top':'']"
+        <div v-if="showSetTop" :class="['win-icon',isTop?'win-top':'']"
         @click="top" :title="isTop?'取消置顶':'置顶'">
+            <el-icon>
+                <Top />
+            </el-icon>
         </div>
-        <div v-if="showMin" class="iconfont icon-min" @click="minmize" title="最小化"></div>
-        <div v-if="showMax" :class="['iconfont',isMax?'icon-maximize':'icon-max']" @click="maximize" :title="isMax?'向下还原':'最大化'"></div>
-        <div v-if="showClose" class="iconfont icon-close" @click="close" title="关闭">
+        <div v-if="showMin" class="win-icon" @click="minmize" title="最小化">
+            <el-icon>
+                <Minus />
+            </el-icon>
+        </div>
+        <div v-if="showMax" class="win-icon" @click="maximize" :title="isMax?'向下还原':'最大化'">
+            <el-icon>
+                <ScaleToOriginal v-if="isMax" />
+                <FullScreen v-else />
+            </el-icon>
+        </div>
+        <div v-if="showClose" class="win-icon win-close" @click="close" title="关闭">
+            <el-icon>
+                <Close />
+            </el-icon>
         </div>
     </div>
 </template>
@@ -87,7 +102,7 @@ const top=()=>{
     display: flex;
     align-items: center;
     z-index: 100;
-    .iconfont {
+    .win-icon {
         width: 32px;
         height: 32px;
         display: flex;
@@ -98,7 +113,7 @@ const top=()=>{
         &:hover {
             background: rgba(0, 0, 0, 0.1);
         }
-        &.icon-close:hover {
+        &.win-close:hover {
             background: #e81123;
             color: #fff;
         }

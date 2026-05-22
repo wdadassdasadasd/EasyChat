@@ -57,28 +57,56 @@ const createWs=()=>{
         },10000);
         maxReConnectTimes=5;
     }
-    //从服务端接受到信息的回调函数
-    ws.onmessage=async function(e){
-        console.log("收到服务消息",e.data)
-        webContentsSender.send("receiveMessage",e.data);
-        const message=JSON.parse(e.data);
-        const messageType=message.messageType;
-        switch(messageType){
-            case 0://ws连接成功
-                //保存会话消息（过滤掉EasyChat系统会话）
-               const chatSessionList=message.extendData.chatSessionList.filter(item=>item.contactName!=='EasyChat');
-               await saveOrUpdateChatSessionBatch4Init(chatSessionList)
-               //保存消息
-               await saveMessageBatch(message.extendData.chatMessageList);
-               //更新联系人数量
-               await updateNoReadCount({useId:store.getUserId(),noReadCount:message.extendData.contact.applyCount});
-               //发送消息
-               webContentsSender.send("receiveMessage",{messageType:message.messageType})
-               break;
+    //客户端 WebSocket 收到服务端推送消息时，处理这条消息
+    ws.onmessage = async function (e) {
+    console.log('收到服务消息', e.data);
+
+    let message = null;
+
+    try {
+        message = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+    } catch (error) {
+        console.error('WebSocket 消息解析失败', error);
+        return;
+    }
+
+    const messageType = message.messageType;
+
+    switch (messageType) {
+        case 0: {
+            // WebSocket 初始化消息
+            const chatSessionList = (message.extendData?.chatSessionList || []).filter((item) => {
+                return item.contactName !== 'EasyChat';
+            });
+
+            await saveOrUpdateChatSessionBatch4Init(chatSessionList);
+
+            const chatMessageList = message.extendData?.chatMessageList || [];
+            await saveMessageBatch(chatMessageList);
+            //更新未读数
+            await updateNoReadCount({
+                useId: store.getUserId(),
+                noReadCount: message.extendData?.contact?.applyCount || 0
+            });
+
+            webContentsSender.send('receiveMessage', {
+                messageType: message.messageType
+            });
+
+            break;
         }
 
+        default: {
+            // 普通聊天消息
+            await saveMessageBatch([message]);
 
+            webContentsSender.send('receiveMessage', message);
+
+            break;
+        }
     }
+};
+
     ws.onclose=function(){
         console.log("关闭客户端连接重连")
         reconnet();

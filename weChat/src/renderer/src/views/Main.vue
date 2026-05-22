@@ -4,14 +4,21 @@
             <div></div>
             <div class="menu-list">
                 <div v-for="item in menuList.filter(i=>i.position=='top')" :key="item.name"
-                     :class="['tab-item iconfont',item.icon,item.path==currentMenu.path?'active':'']"
+                     :class="['tab-item',item.path==currentMenu.path?'active':'']"
                      @click="changeMenu(item)">
+                    <el-icon>
+                        <component :is="item.icon"></component>
+                    </el-icon>
                 </div>
             </div>
             <div class="menu-list menu-bottom">
                 <div v-for="item in menuList.filter(i=>i.position=='bottom')" :key="item.name"
-                     :class="['tab-item iconfont',item.icon,item.path==currentMenu.path?'active':'']"
-                     @click="changeMenu(item)"></div>
+                     :class="['tab-item',item.path==currentMenu.path?'active':'']"
+                     @click="changeMenu(item)">
+                    <el-icon>
+                        <component :is="item.icon"></component>
+                    </el-icon>
+                </div>
             </div>
         </div>
         <div class="right-container">
@@ -34,21 +41,21 @@ const {proxy}=getCurrentInstance();
 //菜单列表
 const menuList=ref([{
     name:"chat",
-    icon:"icon-chat",
+    icon:"ChatDotRound",
     path:"/chat",
     countKey:'chatKey',
     position:"top"
   },
   {
     name:"contact",
-    icon:"icon-contact",
+    icon:"User",
     path:"/contact",
     countKey:'contactApplyKey',
     position:"top"
   },
   {
     name:"setting",
-    icon:"icon-more",
+    icon:"MoreFilled",
     path:"/setting",
     position:"bottom"
 }])

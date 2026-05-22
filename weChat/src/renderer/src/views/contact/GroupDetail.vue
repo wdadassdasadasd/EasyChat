@@ -7,7 +7,9 @@
             </div>
         <el-dropdown placement="bottom-end" trigger="click">
             <span class="el-dropdowm-link">
-                <div class="iconfont icon-more"></div>
+                <el-icon class="more-icon">
+                    <MoreFilled />
+                </el-icon>
             </span>
             
             <template #dropdown>
@@ -165,4 +167,10 @@ watch(()=>route.query.contactId,(newVal,oldVal)=>{
 </script>
 
 <style lang="scss" scoped>
+.more-icon {
+    font-size: 20px;
+    color: #666;
+    cursor: pointer;
+}
+
 </style>

@@ -8,7 +8,9 @@
 
             <template v-else>
                 <el-upload name="file" :show-file-list="false" accept=".png,.PNG,.jpg,.JPG,.jpeg,.JPEG,.gif,.GIF,.bmp,.BMP" :multiple="false" :http-request="uploadImage">
-                    <span class="iconfont icon-add"></span>
+                    <el-icon class="avatar-add-icon">
+                        <Plus />
+                    </el-icon>
                 </el-upload>
             </template>
         </div>
@@ -47,4 +49,8 @@ const preview=computed(()=>{
 </script>
 
 <style lang="scss" scoped>
+.avatar-add-icon {
+    font-size: 24px;
+    color: #999;
+}
 </style>

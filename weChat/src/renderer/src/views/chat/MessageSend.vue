@@ -1,5 +1,6 @@
 <template>
     <div class="send-panel">
+        <!-- 工具栏：表情、文件上传等发送辅助功能。 -->
         <div class="toolbar">
             <el-popover
                 :visible="showEmojiPopover"
@@ -33,7 +34,14 @@
                     </el-tabs>
                 </template>
                 <template #reference>
-                    <div class="iconfont icon-emoji" @click.stop="showEmojiPopoverHandler"></div>
+                    <button
+                        class="toolbar-icon emoji-trigger"
+                        type="button"
+                        title="表情"
+                        @click.stop="showEmojiPopoverHandler"
+                    >
+                        <img src="../../assets/icons/laugh.svg" alt="表情" />
+                    </button>
                 </template>
             </el-popover>
 
@@ -46,14 +54,17 @@
                 :http-request="uploadFile"
                 :on-exceed="uploadExceed"
             >
-                <div class="iconfont icon-folder"></div>
+                <el-icon class="toolbar-icon">
+                    <FolderOpened />
+                </el-icon>
             </el-upload>
         </div>
 
+        <!-- 输入区：msgContent 保存当前输入框内容。 -->
         <div class="input-area" @drop="dropHandler" @dragover="dragoverHandler">
             <el-input
                 v-model="msgContent"
-                row="5"
+                rows="5"
                 type="textarea"
                 resize="none"
                 maxlength="500"
@@ -65,6 +76,7 @@
             />
         </div>
 
+        <!-- 发送按钮：点击后校验输入内容，并把消息抛给父组件 Chat.vue。 -->
         <div class="send-btn-panel">
             <el-popover
                 :visible="showSendMessagePopover"
@@ -80,7 +92,7 @@
                     <span class="empty-msg">不能发送空消息</span>
                 </template>
                 <template #reference>
-                    <span class="send-btn" @click="sendMessage">发送(S)</span>
+                    <span class="send-btn" @click="sendMessage" :class="{ 'send-btn-active': msgContent.trim() }">发送(S)</span>
                 </template>
             </el-popover>
         </div>
@@ -90,8 +102,10 @@
 <script setup>
 import { ref } from 'vue';
 import emojiList from '../../utils/Emoji';
+import { defineProps, defineEmits } from 'vue';
 
-defineProps({
+// 父组件 Chat.vue 传入当前会话信息，发送时需要 contactId/contactType。
+const props=defineProps({
     currentChatSession: {
         type: Object,
         default: () => ({})
@@ -109,6 +123,7 @@ const openPopover = () => {
 };
 
 const closePopover = () => {
+    // 关闭所有浮层，避免表情面板和空消息提示同时残留。
     showEmojiPopover.value = false;
     showSendMessagePopover.value = false;
 };
@@ -118,6 +133,7 @@ const showEmojiPopoverHandler = () => {
 };
 
 const sendEmoji = (item) => {
+    // 选择表情时，把表情追加到当前输入内容末尾。
     msgContent.value = `${msgContent.value || ''}${item}`;
 };
 
@@ -138,14 +154,31 @@ const dragoverHandler = (event) => {
 const pasteHandler = () => {
 };
 
+// 子组件不直接调发送接口，只把发送事件抛给父组件 Chat.vue。
+const emit = defineEmits(['sendMessage']);
+
 const sendMessage = () => {
-    if (!(msgContent.value || '').trim()) {
+    // 发送前先去掉首尾空格，避免发送纯空白消息。
+    const messageContent = (msgContent.value || '').trim();
+
+    if (!messageContent) {
         showSendMessagePopover.value = true;
         return;
     }
+
     showSendMessagePopover.value = false;
+
+    // 把要发送的数据交给父组件，由 Chat.vue 负责调 /chat/sendMessage 接口。
+    emit('sendMessage', {
+        contactId: props.currentChatSession.contactId,
+        contactType: props.currentChatSession.contactType,
+        messageContent
+    });
+
+    // 清空输入框。后续如果要做“失败后恢复输入”，这里可以改成接口成功后再清空。
     msgContent.value = '';
 };
+
 </script>
 
 <style lang="scss" scoped>
@@ -206,5 +239,45 @@ const sendMessage = () => {
 :deep(.emoji-popover) {
     border-radius: 8px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.emoji-trigger {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+
+    img {
+        width: 20px;
+        height: 20px;
+        display: block;
+    }
+
+    &:hover {
+        opacity: 0.82;
+    }
+
+    &:focus-visible {
+        outline: 1px solid #07c160;
+        outline-offset: 2px;
+    }
+}
+
+
+.send-btn {
+    color: #333;
+    background: #e9e9e9;
+    cursor: pointer;
+}
+
+.send-btn.send-btn-active {
+    color: #fff;
+    border-color: #07c160;
+    background: #07c160;
 }
 </style>

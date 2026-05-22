@@ -1,24 +1,39 @@
 <template>
-    <div class="top drag"></div>
-    <span class="iconfont icon-chat"></span>
+    <div class="blank-page">
+        <div class="blank-content">
+            <el-icon class="blank-icon">
+                <ChatDotRound />
+            </el-icon>
+        </div>
+    </div>
 </template>
 
 <script setup>
 </script>
 
 <style lang="scss" scoped>
-.top{
-    height: 60px;
+.blank-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
-.iconfont 
+
+.blank-content {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.blank-icon 
 {
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 100px;
     color: #ddd;
-    height: calc(100vh - 122px);
-    
 }
 
 

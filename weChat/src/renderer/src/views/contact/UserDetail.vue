@@ -5,7 +5,9 @@
                 <div class="more-op">
                     <el-dropdown placement="bottom-end" trigger="click">
                         <span class="el-dropdown-link">
-                            <div class="iconfont icon-more"></div>
+                            <el-icon class="more-icon">
+                                <MoreFilled />
+                            </el-icon>
                         </span>
                         <template #dropdown>
                             <el-dropdown-menu>
@@ -25,7 +27,9 @@
                 {{ userInfo.personalSignature || '暂无个性签名' }}
             </div>
             <div class="send-message" @click="sendMessage">
-                <div class="iconfont icon-chat2"></div>
+                <el-icon class="send-message-icon">
+                    <ChatDotRound />
+                </el-icon>
                 <div class="text">发消息</div>
             </div>
         </div>
@@ -109,4 +113,10 @@ watch(()=>route.query.contactId, (newVal,oldVal) => {
 </script>
 
 <style lang="scss" scoped>
+.more-icon,
+.send-message-icon {
+    font-size: 20px;
+    color: #666;
+}
+
 </style>

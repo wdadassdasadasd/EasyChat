@@ -5,7 +5,9 @@
             <div class="top-search">
                 <el-input clearable placeholder="搜索" size="small" v-model="searchKey" @keyup="search">
                     <template #prefix>
-                        <span class="iconfont icon-search"></span>
+                        <el-icon class="search-icon">
+                            <Search />
+                        </el-icon>
                     </template>
                 </el-input>
             </div>
@@ -20,7 +22,9 @@
                             @click="partJump(sub)"
                         >
                             <div class="part-item-icon" :style="{ backgroundColor: sub.iconBgColor }">
-                                <span :class="['iconfont', sub.icon]"></span>
+                                <el-icon>
+                                    <component :is="sub.icon"></component>
+                                </el-icon>
                             </div>
                             <div class="text">{{ sub.name }}</div>
                         </div>
@@ -73,13 +77,13 @@ const partList = ref([
         children: [
             {
                 name: '搜好友',
-                icon: 'icon-add',
+                icon: 'Plus',
                 iconBgColor: '#fa9d3b',
                 path: '/contact/search',
             },
             {
                 name: '新的朋友',
-                icon: 'icon-plane',
+                icon: 'Promotion',
                 iconBgColor: '#08bf61',
                 path: '/contact/contactNotice',
                 showTitle: true,
@@ -92,7 +96,7 @@ const partList = ref([
         children: [
             {
                 name: '新建群聊',
-                icon: 'icon-add',
+                icon: 'Plus',
                 iconBgColor: '#1485ee',
                 path: '/contact/createGroup',
             },
@@ -232,7 +236,7 @@ watch(()=>
         box-shadow: none;
         border-radius: 4px;
     }
-    .iconfont {
+    .search-icon {
         color: #999;
         font-size: 13px;
     }
@@ -283,7 +287,7 @@ watch(()=>
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            .iconfont {
+            .el-icon {
                 font-size: 20px;
                 color: #fff;
             }
@@ -298,7 +302,7 @@ watch(()=>
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            .iconfont {
+            .el-icon {
                 font-size: 20px;
                 color: #fff;
             }

@@ -5,7 +5,11 @@
             
             <div class="menu-list">
                 <div :class="['menu-item',route.path==item.path?'menu-active':'']" v-for="item in settingMenuList" @click="jump(item)">
-                    <div :class="['iconfont',item.icon]" :style="{background:item.bgColor}"></div>
+                    <div class="menu-item-icon" :style="{background:item.bgColor}">
+                        <el-icon>
+                            <component :is="item.icon"></component>
+                        </el-icon>
+                    </div>
                     <div class="menu-name">{{item.name}}</div>
                 </div>
                               
@@ -37,19 +41,19 @@ const router=useRouter();
 const settingMenuList=ref([
     {
         name:'账号设置',
-        icon:'icon-chat',
+        icon:'User',
         path:'/setting/userinfo',
         bgColor:'white'
     },
     {
         name:'文件管理',
-        icon:'icon-folder',
+        icon:'FolderOpened',
         path:'/setting/fileManage',
         bgColor:'white'
     },
     {
         name:'关于我们',
-        icon:'icon-settings',
+        icon:'Setting',
         path:'/setting/about',
         bgColor:'white'
 
@@ -79,7 +83,7 @@ const jump=(data)=>{
         box-shadow: none;
         border-radius: 4px;
     }
-    .iconfont {
+    .el-icon {
         color: #999;
         font-size: 13px;
     }
@@ -130,9 +134,9 @@ const jump=(data)=>{
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            .iconfont {
+            .el-icon {
                 font-size: 20px;
-                color: #fff;
+                color: #666;
             }
         }
 
@@ -145,7 +149,7 @@ const jump=(data)=>{
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            .iconfont {
+            .el-icon {
                 font-size: 20px;
                 color: #fff;
             }
