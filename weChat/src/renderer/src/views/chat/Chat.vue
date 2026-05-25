@@ -77,7 +77,7 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, onMounted, onUnmounted, ref ,nextTick} from 'vue';
+import { computed, getCurrentInstance, onMounted, onUnmounted, ref ,nextTick, toRaw} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useUserInfoStore } from '../../stores/userInfoStore';
 import ChatSession from './ChatSession.vue';
@@ -266,7 +266,7 @@ const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
 
     const message = result.data;
 
-    if (message) {
+    if (message?.messageContent) {
         const exists = message.messageId
             ? messageList.value.some((item) => {
                 return item.messageId == message.messageId;
@@ -280,7 +280,7 @@ const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
 
         window.ipcRenderer.send('saveSendMessage', {
             message,
-            chatSession: currentChatSession.value
+            chatSession: { ...toRaw(currentChatSession.value) }
         });
     }
 
