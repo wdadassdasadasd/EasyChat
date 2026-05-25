@@ -1,42 +1,82 @@
 <template>
     <div>
-        <el-cascader @click="change" v-model="modelValue.areaCode" :options="AreaData" ref="areaSelectRef" clearable></el-cascader>
+        <el-cascader
+            v-model="selectedAreaCode"
+            :options="AreaData"
+            :props="cascaderProps"
+            placeholder="请选择"
+            clearable
+            filterable
+        ></el-cascader>
     </div>
     
 </template>
 
 <script setup>
-import { useRoute,useRouter } from 'vue-router';
-import { ref, computed, getCurrentInstance } from 'vue';
+import { computed } from 'vue';
 import AreaData from './AreaData'
-const {proxy}=getCurrentInstance();
-const route=useRoute();
-const router=useRouter();
+
 const props=defineProps({
     modelValue:{
         type:Object,
-        default:{}
+        default: () => ({
+            areaCode: [],
+            areaName: []
+        })
     }
 
 })
-const areaSelectRef=ref();
-const emit=defineEmits('update:modelValue');
+const emit=defineEmits(['update:modelValue']);
 
-const change=(e)=>{
+const cascaderProps = {
+    value: 'value',
+    label: 'label',
+    children: 'children'
+}
+
+const selectedAreaCode = computed({
+    get() {
+        return props.modelValue?.areaCode || []
+    },
+    set(value) {
+        change(value)
+    }
+})
+
+const findPathLabels = (options, values) => {
+    if (!values || values.length === 0) {
+        return []
+    }
+
+    let children = options
+    const labels = []
+
+    for (const value of values) {
+        const node = children.find((item) => item.value === value)
+        if (!node) {
+            break
+        }
+        labels.push(node.label)
+        children = node.children || []
+    }
+
+    return labels
+}
+
+const change=(areaCode = [])=>{
     const areaData={
         areaName:[],
         areaCode:[]
     }
-    const checkNodes=areaSelectRef.value.getCheckedNodes()[0];
-       if(!checkNodes){
+
+    if (!areaCode || areaCode.length === 0) {
         emit('update:modelValue',areaData);
         return;
     }
-        const pathLabels=checkNodes.pathLabels;
-        const pathValues=checkNodes.pathValues;
-        areaData.areaName=pathLabels;
-        areaData.areaCode=pathValues;
-        emit('update:modelValue',areaData);
+
+    areaData.areaCode = areaCode;
+    areaData.areaName = findPathLabels(AreaData, areaCode);
+    emit('update:modelValue',areaData);
 }
 
 

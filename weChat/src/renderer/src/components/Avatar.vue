@@ -1,6 +1,7 @@
 <template>
     <div>
         <AvatarBase :userId="userId" :width="width" :border-radius="borderRadius" :showDetail="false" v-if="userId=='Urobot'"></AvatarBase>
+        <AvatarBase v-else-if="isSelf" :userId="userId" :width="width" :border-radius="borderRadius" :showDetail="false"></AvatarBase>
         <el-popover v-else trigger="click" placement="right-start" :width="280" :transition="none" :hide-after="0" ref="popoverRef" @show="getConatactInfo">
            
             <template #reference>
@@ -9,9 +10,9 @@
             <template #default>
                 <div class="popover-user-panel">
                     <UserBaseInfo :userInfo="userInfo"></UserBaseInfo>
-                    <div class="op-btn" v-if="userId!='userInfoStore.getInfo().userId'">   
+                    <div class="op-btn">
                         <el-button v-if="userInfo.contactStatus===1" @click="sendMessage" type="primary">发送消息</el-button>
-                        <el-button v-else="userInfo.contactStatus===0" @click="addContact" type="primary">加为好友</el-button>
+                        <el-button v-else @click="addContact" type="primary">加为好友</el-button>
                     </div>
                 </div>
             </template>
@@ -47,6 +48,8 @@ const props = defineProps({
     }
  
 })
+
+const isSelf = computed(() => userInfoStore.getInfo()?.userId === props.userId);
 
 const userInfo=ref({});
 const getConatactInfo=async()=>{

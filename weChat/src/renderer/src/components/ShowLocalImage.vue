@@ -1,6 +1,6 @@
 <template>
     <div class="image-panel" @click="showImageHandler">
-        <el-image :src="serverUrl" fit="scale-down" :width="width">
+        <el-image :src="imageUrl" fit="scale-down" :width="width">
             <template #error></template>
             <template #placeholder></template>
         </el-image>
@@ -8,47 +8,99 @@
 </template>
 
 <script setup>
-import { ref, computed, getCurrentInstance } from 'vue';
+import { ref, watch, onBeforeUnmount } from 'vue';
+import axios from 'axios';
 
-
-
-const { proxy } = getCurrentInstance();
 const props = defineProps({
     width: {
         type: Number,
         default: 170
     },
     height: {
-        type:  Number,
+        type: Number,
     },
     showPlaye: {
         type: Boolean,
         default: false
     },
-    fileId:{
-        type:[String,Number],
-        default:''
+    fileId: {
+        type: [String, Number],
+        default: ''
     },
-    partType:{
-        type:String,
-        default:'avatar'
+    partType: {
+        type: String,
+        default: 'avatar'
     },
-    fileType:{
-        type:Number,    
-        default:0
+    fileType: {
+        type: Number,
+        default: 0
     },
-    forceGet:{
-        type:Boolean,
-        default:false
+    forceGet: {
+        type: Boolean,
+        default: false
     }
-    
-})
+});
 
-const serverUrl = computed(() => {
-    if (!props.fileId) return '';
-    return `http://localhost:5050/api/file/${props.partType}/${props.fileId}.png`;
-})
+const imageUrl = ref('');
+let currentObjectUrl = '';
 
+const loadImage = async () => {
+    // 释放之前的 blob URL
+    if (currentObjectUrl) {
+        URL.revokeObjectURL(currentObjectUrl);
+        currentObjectUrl = '';
+    }
+    imageUrl.value = '';
+
+    if (!props.fileId) {
+        return;
+    }
+
+    // 使用后端 downloadFile 接口，fileId 为非数字时获取头像，为数字时获取聊天文件
+    const url = `/api/chat/downloadFile`;
+    let userInfoJson = localStorage.getItem('userInfo');
+    let token = userInfoJson ? JSON.parse(userInfoJson).token : '';
+
+    try {
+        const response = await axios.post(url, `fileId=${props.fileId}&showCover=false`, {
+            baseURL: import.meta.env.PROD ? (import.meta.env.VITE_DOMAIN || import.meta.env.VITE_PROD_DOMAIN || 'http://localhost:5050') : '',
+            responseType: 'blob',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                'token': token
+            }
+        });
+
+        const blob = response.data;
+        if (blob.type && (blob.type.includes('json') || blob.type.includes('application/json'))) {
+            const text = await blob.text();
+            console.error('[ShowLocalImage] 后端返回错误:', text);
+            imageUrl.value = '';
+            return;
+        }
+
+        currentObjectUrl = URL.createObjectURL(blob);
+        imageUrl.value = currentObjectUrl;
+    } catch (e) {
+        console.error('[ShowLocalImage] 请求失败:', e.message);
+        imageUrl.value = '';
+    }
+};
+
+watch(
+    () => [props.fileId, props.partType, props.forceGet],
+    () => {
+        loadImage();
+    },
+    { immediate: true }
+);
+
+onBeforeUnmount(() => {
+    if (currentObjectUrl) {
+        URL.revokeObjectURL(currentObjectUrl);
+    }
+});
 </script>
 
 <style lang="scss" scoped>

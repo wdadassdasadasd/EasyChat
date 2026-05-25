@@ -8,6 +8,10 @@ export const useUserInfoStore=defineStore('userInfo',{
     },
     actions:{
         setUserInfo(userInfo){
+            // 保留已有的token，防止getUserInfo等接口返回的数据不含token导致token丢失
+            if (!userInfo.token && this.userInfo?.token) {
+                userInfo.token = this.userInfo.token;
+            }
             this.userInfo=userInfo;
             localStorage.setItem('userInfo',JSON.stringify(userInfo));
         },

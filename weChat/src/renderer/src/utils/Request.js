@@ -42,6 +42,7 @@ instance.interceptors.request.use(
 //请求后拦截器
 instance.interceptors.response.use(
     async (response) => {
+        console.log('[Request调试] 响应URL:', response.config.url, '状态码:', response.status, '数据:', JSON.stringify(response.data));
         const { showLoading, errorCallback, showError = true, responseType } = response.config;
         if (showLoading && loading) {
             loading.close()
@@ -66,6 +67,7 @@ instance.interceptors.response.use(
         }
     },
     (error) => {
+        console.error('[Request调试] 网络错误:', error.message, 'URL:', error.config?.url);
         if (error.config.showLoading && loading) {
             loading.close();
         }
@@ -91,14 +93,17 @@ const request = (config) => {
     }
     let userInfoJson = localStorage.getItem('userInfo');
     let token = userInfoJson ? JSON.parse(userInfoJson).token : "";
+    console.log('[Request调试] 请求URL:', url, 'Token:', token ? token.substring(0, 20) + '...' : '空');
     // 登录/注册/验证码接口不需要鉴权，避免携带脏 token 触发后端异常
     if (url && url.startsWith('/account/')) {
         token = "";
     }
     let headers = {
-        'Content-Type': contentType,
         'X-Requested-With': 'XMLHttpRequest',
         "token": token
+    }
+    if (!shouldUseFormData) {
+        headers['Content-Type'] = contentType;
     }
     return instance.post(url, requestData, {
         onUploadProgress: (event) => {

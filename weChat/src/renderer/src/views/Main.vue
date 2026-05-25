@@ -1,7 +1,14 @@
 <template>
     <div class="main">
         <div class="left-sider">
-            <div></div>
+            <div class="nav-avatar">
+                <Avatar
+                    v-if="loginUserId"
+                    :userId="loginUserId"
+                    :width="36"
+                    :borderRadius="4"
+                />
+    </div>
             <div class="menu-list">
                 <div v-for="item in menuList.filter(i=>i.position=='top')" :key="item.name"
                      :class="['tab-item',item.path==currentMenu.path?'active':'']"
@@ -32,12 +39,29 @@
 </template>
 
 <script setup>
-import{ref,reactive,getCurrentInstance,nextTick, onMounted} from 'vue';
+import{ref,reactive,getCurrentInstance,nextTick, onMounted,computed} from 'vue';
 import { useRouter } from 'vue-router';
 import {useUserInfoStore} from '@/stores/UserInfoStore';
 const userInfoStore = useUserInfoStore();
 const router=useRouter();
 const {proxy}=getCurrentInstance();
+
+const loginUserId=computed(()=>{
+    return userInfoStore.getInfo()?.userId||'';
+});
+
+const getLoginInfo = async () => {
+    let result = await proxy.Request({
+        url: proxy.Api.getUserInfo
+    })
+
+    if (!result) {
+        return
+    }
+
+    userInfoStore.setUserInfo(result.data)
+}
+
 //菜单列表
 const menuList=ref([{
     name:"chat",
@@ -65,15 +89,7 @@ const changeMenu=(item)=>{
     currentMenu.value=item;
     router.push(item.path);
 }
-const getLoginInfo=async()=>{
-    let result=await proxy.Request({
-        url:proxy.Api.getUserInfo
-    });
-    if(!result){
-        return;
-    }
-    useUserInfoStore.setInfo(result.data);
-}
+
 onMounted(()=>{
     getLoginInfo();
 })
@@ -150,5 +166,27 @@ onMounted(()=>{
     flex: 1;
     overflow: hidden;
     display: flex;
+}
+
+.left-sider {
+    width: 56px;
+    background: #2d2d2d;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 58px;
+    flex-shrink: 0;
+    -webkit-app-region: drag;
+}
+
+.nav-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    cursor: pointer;
+    overflow: hidden;
+    background: #555;
+    -webkit-app-region: no-drag;
 }
 </style>
