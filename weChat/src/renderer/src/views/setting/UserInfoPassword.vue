@@ -7,104 +7,71 @@
                 <el-input v-model.trim="formData.rePassword" clearable placeholder="请再次确认密码" type="password" show-password></el-input>
             </el-form-item>
             <el-form-item>
-                <el-button @click="saveUserInfo" type="primary">修改密码</el-button>
+                <el-button @click="savePassword" type="primary">修改密码</el-button>
                 <el-button link @click="cancel">取消</el-button>
-                
             </el-form-item>
-
     </el-form>
-
-
 </template>
 
-
-
-
-
 <script setup>
-import { ref, computed, getCurrentInstance } from 'vue';
-import { useContactStateStore } from '../../stores/ContactStateStore';
-import { useRoute ,useRouter} from 'vue-router';
-import { useUserInfoStore } from '../../stores/userInfoStore';
+import { ref, getCurrentInstance } from 'vue';
+import md5 from 'js-md5';
 
-const {proxy}=getCurrentInstance();
+const { proxy } = getCurrentInstance();
 
-const userInfoStore=useUserInfoStore();
-const route=useRoute();
-const router=useRouter();
+const formDataRef = ref();
+const formData = ref({
+    password: '',
+    rePassword: ''
+});
 
-const validateRePass=()=>{
-    if(value!=formData.value.rePassword){
-        Callback(new Error(rules.message))
+const validateRePass = (rule, value, callback) => {
+    if (value !== formData.value.password) {
+        callback(new Error('两次输入的密码不一致'));
+    } else {
+        callback();
     }
-    else{
-        Callback();
-    }
+};
 
-}
-const rules=rules[{
-    password:[
-    {
-        message:'请输入密码',
-        required:true
-    },
-    {
-        validator:proxy.Varify.password,message:'密码只能是数字，字母，特殊字符，8-18位'
-    }
-],
-    Repassword:[
-    {
-        message:'请再次确认密码',
-        required:true
-    },
-    {
-        validator:proxy.Varify.rePassword,message:'两次输入的密码不一致'
-    }
-],
-}]
+const rules = {
+    password: [
+        { message: '请输入密码', required: true },
+        { pattern: /^(?=.*\d)(?=.*[a-zA-Z])[\\da-zA-Z~!@#$%^&*_]{8,18}$/, message: '密码只能是数字、字母、特殊字符，8-18位' }
+    ],
+    rePassword: [
+        { message: '请再次确认密码', required: true },
+        { validator: validateRePass }
+    ]
+};
 
-const emit=defineEmits('editBack')
-const saveUserInfo=()=>{
-    formDataRef.value.validate(async(valid)=>{
-        if(!valid){
-            return
-        }
-      
+const emit = defineEmits(['editBack']);
+
+const savePassword = () => {
+    formDataRef.value.validate(async (valid) => {
+        if (!valid) return;
+
         proxy.Confirm({
-            message:'修改密码后要重新登录，你确认要修改吗',
-            okfun:async()=>{
-                let params={};
-                Object.assign(params,formData.value);
-                let result= await proxy.Request({
-                        url:proxy.Api.saveUserInfo,
-                        params
-                    })
-                if(!result){
-                    return;
+            message: '修改密码后要重新登录，你确认要修改吗',
+            okfun: async () => {
+                let result = await proxy.Request({
+                    url: proxy.Api.updatePassword,
+                    params: {
+                        password: md5(formData.value.password)
                     }
-                proxy.Message.success('修改成功，请重新登录',()=>{
-                //TODO 重新登录
-                window.ipcRenderer.send('reLogin');
+                });
+                if (!result) return;
+                proxy.Message.success('修改成功，请重新登录', () => {
+                    window.ipcRenderer.send('reLogin');
                 });
             }
-        })
-    })
+        });
+    });
+};
 
-}
-
-const cancel=()=>{
-    emit('editBack')
-}
-
-
-
-
+const cancel = () => {
+    emit('editBack');
+};
 </script>
 
-
-
 <style lang="scss" scoped>
-
-
-
 </style>
