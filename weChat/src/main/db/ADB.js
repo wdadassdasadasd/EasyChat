@@ -119,14 +119,16 @@ const queryOne=(sql,params)=>{
 }
 
 const queryCount=(sql,params)=>{
-      return new  Promise((resolve,reject)=>{
+      return new  Promise((resolve)=>{
         //预处理sql语句防止sql注入
         const stmt=db.prepare(sql)
         stmt.get(params,function (err,row){
-            if(err){
+            if(err||!row){
                 resolve(0)
+                return
             }
-            resolve(Array.from(Object.values(row[0])))
+            const firstValue=Object.values(row)[0]
+            resolve(firstValue||0)
 
             })
         //释放资源

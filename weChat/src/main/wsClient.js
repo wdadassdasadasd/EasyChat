@@ -96,14 +96,29 @@ const createWs=()=>{
             break;
         }
 
-        default: {
-            // 普通聊天消息
-            await saveMessageBatch([message]);
+       default: {
+        await saveMessageBatch([message]);
 
-            webContentsSender.send('receiveMessage', message);
+        const contactId = message.contactType == 1 ? message.contactId : message.sendUserId;
 
-            break;
-        }
+        await saveOrUpdateChatSessionBatch4Init([
+            {
+                contactId,
+                contactType: message.contactType,
+                sessionId: message.sessionId,
+                status: 1,
+                contactName: message.contactName || message.sendUserNickName,
+                lastMessage: message.messageContent,
+                lastReceiveTime: message.sendTime,
+                memberCount: message.memberCount,
+                topType: 0
+            }
+        ]);
+
+        webContentsSender.send('receiveMessage', message);
+
+        break;
+}
     }
 };
 

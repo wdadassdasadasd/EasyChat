@@ -63,37 +63,55 @@ const getPageOffset=(pageNo=1,totalCount)=>{
     }
 
 }
-const selectMesssageList=(query)=>{
-      return new Promise(async(resolve,reject)=>{
-        const {sessionId,pageNo,maxMessageId}=query;
-        let sql='select count(1) from chat_message where user_id=? and session_id=?';
-        const totalCount=await queryCount(sql,[sessionId,store.getUserId()]);
-        const {pageTotal,offset,limit}=getPageOffset(pageNo,totalCount);
 
-        const params=[sessionId,store.getUserId()];
-        sql='select * from chat_message where user_id=? and session_id=?';
-        if(maxMessageId){
-            sql=sql+" and message_id<=?";
+const selectMesssageList = (query = {}) => {
+    return new Promise(async (resolve) => {
+        const { sessionId, pageNo = 1, maxMessageId } = query;
+
+        if (!sessionId) {
+            resolve({
+                dataList: [],
+                pageNo,
+                pageTotal: 0
+            });
+            return;
+        }
+
+        let countSql = 'select count(1) as total from chat_message where user_id=? and session_id=?';
+        const countParams = [store.getUserId(), sessionId];
+
+        if (maxMessageId) {
+            countSql += ' and message_id<?';
+            countParams.push(maxMessageId);
+        }
+
+        const totalCount = await queryCount(countSql, countParams);
+        const { pageTotal, offset, limit } = getPageOffset(pageNo, totalCount);
+
+        let sql = 'select * from chat_message where user_id=? and session_id=?';
+        const params = [store.getUserId(), sessionId];
+
+        if (maxMessageId) {
+            sql += ' and message_id<?';
             params.push(maxMessageId);
         }
-        params.push(offset);
-        params.push(limit);
-        sql=sql=sql+" order by message_id limit ?,?";
-        const dataList=await queryAll(sql,params);
+
+        sql += ' order by message_id desc limit ?,?';
+        params.push(offset, limit);
+
+        let dataList = await queryAll(sql, params);
+        dataList = dataList.sort((a, b) => a.messageId - b.messageId);
+
         resolve({
             dataList,
             pageNo,
             pageTotal
-        })
-
-
-        
-
-    })
-
-}
+        });
+    });
+};
 
 export {
+    saveMessage,
     saveMessageBatch,
     selectMesssageList,
     selectMesssageList as selectMessageList

@@ -245,7 +245,6 @@ const scrollMessageToBottom = async () => {
  * WebSocket 主要负责接收别人发来的消息。
  */
 const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
-    // 发送方主动发消息走 HTTP 接口；WebSocket 主要负责接收别人发来的消息。
     if (!messageContent) {
         return;
     }
@@ -266,14 +265,26 @@ const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
     }
 
     const message = result.data;
-    if (message) {
-        // 后端返回完整消息对象后，发送方立即追加到当前消息列表，这样自己能马上看到。
-        messageList.value.push(message);
-        scrollMessageToBottom();
-    }
-    //更新左侧聊天消息列表
-    loadChatSession();
 
+    if (message) {
+        const exists = message.messageId
+            ? messageList.value.some((item) => {
+                return item.messageId == message.messageId;
+            })
+            : false;
+
+        if (!exists) {
+            messageList.value.push(message);
+            scrollMessageToBottom();
+        }
+
+        window.ipcRenderer.send('saveSendMessage', {
+            message,
+            chatSession: currentChatSession.value
+        });
+    }
+
+    loadChatSession();
 };
 
 /**
@@ -328,10 +339,13 @@ const onReceiveMessage = () => {
         }
         if(message.sessionId==currentChatSession.value.sessionId){
             // 如果推送消息属于当前打开的会话，直接追加到右侧聊天窗口。
-            messageList.value.push(message);
-            scrollMessageToBottom();
+            const exists = messageList.value.some((item) => item.messageId == message.messageId);
+            if (!exists) {
+                messageList.value.push(message);
+                scrollMessageToBottom();
+            }
         }
-        loadChatMessage();
+        loadChatSession();
     });
 };
 
