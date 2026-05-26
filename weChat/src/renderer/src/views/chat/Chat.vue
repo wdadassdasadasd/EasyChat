@@ -85,6 +85,7 @@
                                             :width="220"
                                             partType="chat"
                                             :fileType="data.fileType"
+                                            :forceGet="data.forceGet"
                                             :preview="true"
                                         />
                                     </template>
@@ -363,6 +364,19 @@ const isImageMessage = (message) => {
     return Number(message?.messageType) === 5 && Number(message?.fileType) === 0;
 };
 
+const handleFileUploadDone = (message) => {
+    const targetMessage = messageList.value.find((item) => {
+        return item.messageId == message.messageId;
+    });
+
+    if (targetMessage) {
+        targetMessage.status = message.status ?? 1;
+        targetMessage.forceGet = Date.now();
+    }
+
+    loadChatSession();
+};
+
 const sendImageMessage = async ({ contactId, contactType, file, cover }) => {
     if (!file) {
         return;
@@ -480,6 +494,10 @@ const onReceiveMessage = () => {
         if (message.messageType == 0) {
             // messageType=0 是 WebSocket 初始化消息，不是普通聊天内容，只刷新会话列表。
             loadChatSession();
+            return;
+        }
+        if (message.messageType == 6) {
+            handleFileUploadDone(message);
             return;
         }
         if(message.sessionId==currentChatSession.value.sessionId){

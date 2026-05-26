@@ -2,7 +2,7 @@ import { WebSocket } from "ws";
 import { saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel'
 const NODE_ENV=process.env.NODE_ENV
 import store from "./store.js";
-import { saveMessageBatch} from './db/ChatMessageModel'
+import { saveMessageBatch, updateMessageStatus} from './db/ChatMessageModel'
 import { updateNoReadCount} from './db/UserSettingModel'
 
 let ws=null;
@@ -93,6 +93,12 @@ const createWs=()=>{
                 messageType: message.messageType
             });
 
+            break;
+        }
+
+        case 6: {
+            await updateMessageStatus(message.messageId, message.status ?? 1);
+            webContentsSender.send('receiveMessage', message);
             break;
         }
 

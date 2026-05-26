@@ -51,6 +51,18 @@ const saveMessageBatch=(chatMeassageList)=>{
     })
 }
 
+const updateMessageStatus=(messageId,status=1)=>{
+    if(!messageId){
+        return Promise.resolve();
+    }
+    return update("chat_message",{
+        status
+    },{
+        userId:store.getUserId(),
+        messageId
+    })
+}
+
 
 const getPageOffset=(pageNo=1,totalCount)=>{
     const pageSize=20;
@@ -113,6 +125,7 @@ const selectMesssageList = (query = {}) => {
 export {
     saveMessage,
     saveMessageBatch,
+    updateMessageStatus,
     selectMesssageList,
     selectMesssageList as selectMessageList
 }
