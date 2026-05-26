@@ -78,7 +78,11 @@ const onTopChatSession=()=>{
 const onLoadChatMessage=()=>{
     ipcMain.on("loadChatMessage",async (e,data)=>{
         const result=await selectMessageList(data);
-        e.sender.send("loadChatMessageCallback",result);
+        e.sender.send("loadChatMessageCallback",{
+            ...result,
+            sessionId: data?.sessionId,
+            loadSeq: data?.loadSeq
+        });
     })
 
 }

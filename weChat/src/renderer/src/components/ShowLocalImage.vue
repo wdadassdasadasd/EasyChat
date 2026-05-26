@@ -7,6 +7,7 @@
             :preview-src-list="previewSrcList"
             :preview-teleported="true"
             :hide-on-click-modal="true"
+            @load="emitLoaded"
         >
             <template #error>
                 <div class="image-fallback">
@@ -52,7 +53,7 @@ const props = defineProps({
         default: 0
     },
     forceGet: {
-        type: Boolean,
+        type: [Boolean, Number, String],
         default: false
     },
     preview: {
@@ -61,11 +62,16 @@ const props = defineProps({
     }
 });
 
+const emit = defineEmits(['loaded']);
 const imageUrl = ref('');
 const previewSrcList = computed(() => {
     return props.preview && imageUrl.value ? [imageUrl.value] : [];
 });
 let currentObjectUrl = '';
+
+const emitLoaded = () => {
+    emit('loaded');
+};
 
 const loadImage = async () => {
     // 释放之前的 blob URL

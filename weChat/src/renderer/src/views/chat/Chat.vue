@@ -47,80 +47,95 @@
                 <!-- 消息列表-->
                 <div class="chat-panel">
                     <!-- messageList 是当前会话的消息数组；push 新消息后，页面会自动刷新。 -->
-                    <div class="message-panel" id="message-panel" v-if="messageList.length > 0">
-                        <div
-                            v-for="(data, index) in messageList"
-                            :key="data.messageId || index"
-                            :id="'message' + data.messageId"
-                            :class="['message-row', isSelfMessage(data) ? 'message-row-self' : '']"
-                        >
-                            <!-- 他人消息：头像在左 -->
-                            <AvatarBase
-                                v-if="!isSelfMessage(data)"
-                                :userId="data.sendUserId"
-                                :width="36"
-                                :borderRadius="4"
-                                class="message-avatar"
-                            />
-                            <div :class="['message-body', isSelfMessage(data) ? 'message-body-self' : '']">
-                                <!-- 群聊时显示发送人昵称 -->
+                    <div
+                        :class="['message-panel', 'message-panel-' + messagePanelPhase]"
+                        id="message-panel"
+                        ref="messagePanelRef"
+                        @wheel.passive="clearInitialBottomLock"
+                        @pointerdown="clearInitialBottomLock"
+                    >
+                        <div class="message-panel-content">
+                            <template v-if="messageList.length > 0">
                                 <div
-                                    v-if="currentChatSession.contactType == 1 && !isSelfMessage(data)"
-                                    class="message-nick"
-                                >{{ data.sendUserNickName }}</div>
-                                <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '', isImageMessage(data) ? 'message-item-image' : '', isFileMessage(data) ? 'message-item-file' : '']">
-                                    <template v-if="isImageMessage(data)">
-                                        <el-image
-                                            v-if="data.localPreviewUrl"
-                                            :src="data.localPreviewUrl"
-                                            class="message-image"
-                                            fit="scale-down"
-                                            :preview-src-list="[data.localPreviewUrl]"
-                                            :preview-teleported="true"
-                                            :hide-on-click-modal="true"
-                                        />
-                                        <ShowLocalImage
-                                            v-else
-                                            :fileId="data.messageId"
-                                            :width="220"
-                                            partType="chat"
-                                            :fileType="data.fileType"
-                                            :forceGet="data.forceGet"
-                                            :preview="true"
-                                        />
-                                    </template>
-                                    <template v-else-if="isFileMessage(data)">
-                                        <div
-                                            :class="['file-message-card', isSelfMessage(data) ? 'file-message-card-self' : '']"
-                                            @click="downloadFileMessage(data)"
-                                        >
-                                            <div class="file-message-info">
-                                                <div class="file-message-name">{{ data.fileName || data.messageContent }}</div>
-                                                <div class="file-message-meta">
-                                                    {{ formatFileSize(data.fileSize) }}
-                                                    <span v-if="data.status == 0"> · 上传中</span>
-                                                </div>
+                                    v-for="(data, index) in messageList"
+                                    :key="data.messageId || index"
+                                    :id="'message' + data.messageId"
+                                    :class="['message-row', isSelfMessage(data) ? 'message-row-self' : '']"
+                                >
+                                <!-- 他人消息：头像在左 -->
+                                <AvatarBase
+                                    v-if="!isSelfMessage(data)"
+                                    :userId="data.sendUserId"
+                                    :width="36"
+                                    :borderRadius="4"
+                                    class="message-avatar"
+                                />
+                                <div :class="['message-body', isSelfMessage(data) ? 'message-body-self' : '']">
+                                    <!-- 群聊时显示发送人昵称 -->
+                                    <div
+                                        v-if="currentChatSession.contactType == 1 && !isSelfMessage(data)"
+                                        class="message-nick"
+                                    >{{ data.sendUserNickName }}</div>
+                                    <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '', isImageMessage(data) ? 'message-item-image' : '', isFileMessage(data) ? 'message-item-file' : '']">
+                                        <template v-if="isImageMessage(data)">
+                                            <div class="message-image-frame">
+                                                <el-image
+                                                    v-if="data.localPreviewUrl"
+                                                    :src="data.localPreviewUrl"
+                                                    class="message-image"
+                                                    fit="scale-down"
+                                                    :preview-src-list="[data.localPreviewUrl]"
+                                                    :preview-teleported="true"
+                                                    :hide-on-click-modal="true"
+                                                    @load="settleScrollToBottom"
+                                                />
+                                                <ShowLocalImage
+                                                    v-else
+                                                    :fileId="data.messageId"
+                                                    :width="220"
+                                                    partType="chat"
+                                                    :fileType="data.fileType"
+                                                    :forceGet="data.forceGet"
+                                                    :preview="true"
+                                                    @loaded="settleScrollToBottom"
+                                                />
                                             </div>
-                                            <div class="file-message-icon">FILE</div>
-                                        </div>
-                                    </template>
-                                    <template v-else>
-                                        {{ data.messageContent }}
-                                    </template>
+                                        </template>
+                                        <template v-else-if="isFileMessage(data)">
+                                            <div
+                                                :class="['file-message-card', isSelfMessage(data) ? 'file-message-card-self' : '']"
+                                                @click="downloadFileMessage(data)"
+                                            >
+                                                <div class="file-message-info">
+                                                    <div class="file-message-name">{{ data.fileName || data.messageContent }}</div>
+                                                    <div class="file-message-meta">
+                                                        {{ formatFileSize(data.fileSize) }}
+                                                        <span v-if="data.status == 0"> · 上传中</span>
+                                                    </div>
+                                                </div>
+                                                <div class="file-message-icon">FILE</div>
+                                            </div>
+                                        </template>
+                                        <template v-else>
+                                            {{ data.messageContent }}
+                                        </template>
+                                    </div>
                                 </div>
+                                <!-- 自己的消息：头像在右 -->
+                                <AvatarBase
+                                    v-if="isSelfMessage(data)"
+                                    :userId="data.sendUserId"
+                                    :width="36"
+                                    :borderRadius="4"
+                                    class="message-avatar"
+                                />
+                                </div>
+                                <div ref="messageBottomRef" class="message-bottom-anchor"></div>
+                            </template>
+                            <div class="chat-empty" v-else>
+                                <div class="empty-tip">{{ welcomeText }}</div>
                             </div>
-                            <!-- 自己的消息：头像在右 -->
-                            <AvatarBase
-                                v-if="isSelfMessage(data)"
-                                :userId="data.sendUserId"
-                                :width="36"
-                                :borderRadius="4"
-                                class="message-avatar"
-                            />
                         </div>
-                    </div>
-                    <div class="chat-empty" v-else>
-                        <div class="empty-tip">{{ welcomeText }}</div>
                     </div>
                 </div>
                 <!-- MessageSend 只负责输入；真正调发送接口的是父组件Chat.vue 。 -->
@@ -223,7 +238,17 @@ const messageCountInfo = {
 
 // 当前右侧聊天窗口展示的消息列表。
 const messageList = ref([]);
+const messagePanelRef = ref(null);
+const messageBottomRef = ref(null);
+const messagePanelPhase = ref('ready');
 const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0);
+let shouldScrollToBottomAfterLoad = false;
+let messagePanelRenderSeq = 0;
+let activeMessageLoadSeq = 0;
+let initialBottomLockSeq = 0;
+let initialBottomLockTimer = null;
+let messagePanelEnterTimer = null;
+let pendingBottomSettleFrame = null;
 
 // 判断消息是否由当前登录用户发送，用于控制左右对齐和气泡颜色。
 const isSelfMessage = (message) => {
@@ -248,7 +273,17 @@ const welcomeText = computed(() => {
  * 4. 调 loadChatMessage 加载当前会话第一页消息。
  */
 const chatSessionClickHandler = (item) => {
+    if (currentChatSession.value.contactId == item.contactId) {
+        return;
+    }
+
     // 点击左侧会话后，切换当前会话，并重置消息分页状态。
+    clearInitialBottomLock();
+    clearMessagePanelEnterTimer();
+    clearPendingBottomSettleFrame();
+    messagePanelRenderSeq++;
+    activeMessageLoadSeq = messagePanelRenderSeq;
+    messagePanelPhase.value = 'preparing';
     currentChatSession.value = Object.assign({}, item);
     messageList.value = [];
 
@@ -256,6 +291,7 @@ const chatSessionClickHandler = (item) => {
     messageCountInfo.pageNo = 0;
     messageCountInfo.maxMessageId = 0;
     messageCountInfo.noData = false;
+    shouldScrollToBottomAfterLoad = true;
     loadChatMessage();
 };
 
@@ -275,7 +311,8 @@ const loadChatMessage = () => {
     window.ipcRenderer.send('loadChatMessage', {
         sessionId: currentChatSession.value.sessionId,
         pageNo: messageCountInfo.pageNo,
-        maxMessageId: messageCountInfo.maxMessageId
+        maxMessageId: messageCountInfo.maxMessageId,
+        loadSeq: activeMessageLoadSeq
     });
 };
 
@@ -286,14 +323,123 @@ const loadChatMessage = () => {
  * messageList.push 后，DOM 不是立刻更新的。
  * 需要等 Vue 完成渲染后，再读取 scrollHeight 才准确。
  */
-const scrollMessageToBottom = async () => {
+const getMessagePanel = () => {
+    return messagePanelRef.value || document.getElementById('message-panel');
+};
+
+const setMessagePanelToBottom = () => {
+    const messagePanel = messagePanelRef.value || document.getElementById('message-panel');
+    if (messagePanel) {
+        const bottomScrollTop = Math.max(0, messagePanel.scrollHeight - messagePanel.clientHeight);
+        messagePanel.scrollTo({
+            top: bottomScrollTop,
+            behavior: 'auto'
+        });
+    }
+};
+
+const clearInitialBottomLock = () => {
+    initialBottomLockSeq = 0;
+    if (initialBottomLockTimer) {
+        window.clearTimeout(initialBottomLockTimer);
+        initialBottomLockTimer = null;
+    }
+};
+
+const keepInitialBottomLock = (renderSeq) => {
+    clearInitialBottomLock();
+    initialBottomLockSeq = renderSeq;
+    initialBottomLockTimer = window.setTimeout(() => {
+        if (initialBottomLockSeq === renderSeq) {
+            initialBottomLockSeq = 0;
+        }
+        initialBottomLockTimer = null;
+    }, 5000);
+};
+
+const isInitialBottomLocked = () => {
+    return initialBottomLockSeq !== 0 && initialBottomLockSeq === messagePanelRenderSeq;
+};
+
+const clearMessagePanelEnterTimer = () => {
+    if (messagePanelEnterTimer) {
+        window.clearTimeout(messagePanelEnterTimer);
+        messagePanelEnterTimer = null;
+    }
+};
+
+const clearPendingBottomSettleFrame = () => {
+    if (pendingBottomSettleFrame) {
+        window.cancelAnimationFrame(pendingBottomSettleFrame);
+        pendingBottomSettleFrame = null;
+    }
+};
+
+const scheduleBottomSettle = () => {
+    if (pendingBottomSettleFrame) {
+        return;
+    }
+
+    pendingBottomSettleFrame = window.requestAnimationFrame(() => {
+        pendingBottomSettleFrame = null;
+        setMessagePanelToBottom();
+    });
+};
+
+const scrollMessageToBottom = async ({ force = false } = {}) => {
+    if (!force && !isNearMessageBottom()) {
+        return;
+    }
+
     // 等 Vue 把新消息渲染到 DOM 后，再把滚动条拉到底部。
     await nextTick();
+    setMessagePanelToBottom();
+};
 
-    const messagePanel = document.getElementById('message-panel');
-    if (messagePanel) {
-        messagePanel.scrollTop = messagePanel.scrollHeight;
+const isNearMessageBottom = (threshold = 120) => {
+    const messagePanel = getMessagePanel();
+    if (!messagePanel) {
+        return true;
     }
+    return messagePanel.scrollHeight - messagePanel.scrollTop - messagePanel.clientHeight < threshold;
+};
+
+const settleScrollToBottom = () => {
+    if (isInitialBottomLocked() || isNearMessageBottom(360)) {
+        scheduleBottomSettle();
+    }
+};
+
+const waitForNextFrame = () => {
+    return new Promise((resolve) => {
+        window.requestAnimationFrame(resolve);
+    });
+};
+
+const showMessagePanelAtBottom = async (renderSeq = messagePanelRenderSeq) => {
+    await nextTick();
+    if (renderSeq !== messagePanelRenderSeq) {
+        return;
+    }
+    setMessagePanelToBottom();
+    await waitForNextFrame();
+    if (renderSeq !== messagePanelRenderSeq) {
+        return;
+    }
+    setMessagePanelToBottom();
+    await waitForNextFrame();
+    if (renderSeq !== messagePanelRenderSeq) {
+        return;
+    }
+    messagePanelPhase.value = 'entering';
+    keepInitialBottomLock(renderSeq);
+    clearMessagePanelEnterTimer();
+    messagePanelEnterTimer = window.setTimeout(() => {
+        if (renderSeq === messagePanelRenderSeq) {
+            messagePanelPhase.value = 'ready';
+        }
+        messagePanelEnterTimer = null;
+    }, 120);
 };
 
 let sendTaskQueue = Promise.resolve();
@@ -366,8 +512,9 @@ const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
             : false;
 
         if (!exists) {
+            const shouldStickToBottom = isNearMessageBottom();
             messageList.value.push(message);
-            scrollMessageToBottom();
+            scrollMessageToBottom({ force: shouldStickToBottom });
         }
 
         window.ipcRenderer.send('saveSendMessage', {
@@ -445,8 +592,9 @@ const sendImageMessage = async ({ contactId, contactType, file, cover }) => {
     message.localPreviewUrl = URL.createObjectURL(file);
     message.uploading = true;
 
+    const shouldStickToBottom = isNearMessageBottom();
     messageList.value.push(message);
-    scrollMessageToBottom();
+    scrollMessageToBottom({ force: shouldStickToBottom });
 
     uploadImageMessageFile(message, file, cover);
 };
@@ -480,8 +628,9 @@ const sendFileMessage = async ({ contactId, contactType, file, cover }) => {
     }
 
     message.uploading = true;
+    const shouldStickToBottom = isNearMessageBottom();
     messageList.value.push(message);
-    scrollMessageToBottom();
+    scrollMessageToBottom({ force: shouldStickToBottom });
 
     uploadImageMessageFile(message, file, cover);
 };
@@ -561,7 +710,12 @@ const downloadFileMessage = async (message) => {
  */
 const onLoadChatMessage = () => {
     // 主进程查询完本地聊天消息后，会通过 loadChatMessageCallback 回传给渲染进程。
-    window.ipcRenderer.on('loadChatMessageCallback', (e, { dataList, pageTotal, pageNo }) => {
+    window.ipcRenderer.on('loadChatMessageCallback', (e, { dataList, pageTotal, pageNo, sessionId, loadSeq }) => {
+        const isExpiredLoad = loadSeq != null && loadSeq !== activeMessageLoadSeq;
+        const isWrongSession = sessionId != null && sessionId !== currentChatSession.value.sessionId;
+        if (isExpiredLoad || isWrongSession) {
+            return;
+        }
         if (pageNo == pageTotal) {
             messageCountInfo.noData = true;
         }
@@ -573,6 +727,10 @@ const onLoadChatMessage = () => {
         messageCountInfo.totalPage = pageTotal;
         if (pageNo == 1) {
             messageCountInfo.maxMessageId = dataList.length > 0 ? dataList[dataList.length - 1].maxMessageId : null;
+        }
+        if (shouldScrollToBottomAfterLoad && pageNo == 1) {
+            shouldScrollToBottomAfterLoad = false;
+            showMessagePanelAtBottom(messagePanelRenderSeq);
         }
     });
 };
@@ -607,8 +765,9 @@ const onReceiveMessage = () => {
             // 如果推送消息属于当前打开的会话，直接追加到右侧聊天窗口。
             const exists = messageList.value.some((item) => item.messageId == message.messageId);
             if (!exists) {
+                const shouldStickToBottom = isNearMessageBottom();
                 messageList.value.push(message);
-                scrollMessageToBottom();
+                scrollMessageToBottom({ force: shouldStickToBottom });
             }
         }
         loadChatSession();
@@ -720,11 +879,14 @@ onUnmounted(() => {
     window.ipcRenderer.removeAllListeners('loadSessionDataCallback');
     window.ipcRenderer.removeAllListeners('receiveMessage');
     window.ipcRenderer.removeAllListeners('loadChatMessageCallback');
+    clearInitialBottomLock();
+    clearMessagePanelEnterTimer();
+    clearPendingBottomSettleFrame();
     messageList.value.forEach((message) => {
-    if (message.localPreviewUrl) {
-        URL.revokeObjectURL(message.localPreviewUrl);
-    }
-});
+        if (message.localPreviewUrl) {
+            URL.revokeObjectURL(message.localPreviewUrl);
+        }
+    });
 });
 
 
@@ -782,14 +944,54 @@ onUnmounted(() => {
 
 .message-panel {
     flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
     padding: 20px 24px;
+    scroll-behavior: auto;
+    overscroll-behavior: contain;
+    overflow-anchor: none;
+}
+
+.message-panel-preparing {
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.message-panel-content {
+    flex: 0 0 auto;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+}
+
+.message-panel-entering .message-panel-content {
+    animation: message-panel-enter 100ms cubic-bezier(0.2, 0, 0, 1) both;
+    will-change: opacity;
+}
+
+@keyframes message-panel-enter {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
 }
 
 .message-row {
+    flex-shrink: 0;
     display: flex;
     margin-bottom: 16px;
     align-items: flex-start;
+}
+
+.message-bottom-anchor {
+    flex-shrink: 0;
+    height: 1px;
 }
 
 .message-row-self {
@@ -957,7 +1159,7 @@ onUnmounted(() => {
 }
 
 .message-item-image {
-    padding: 4px;
+    padding: 0;
     background: transparent;
     box-shadow: none;
 }
@@ -968,12 +1170,35 @@ onUnmounted(() => {
     box-shadow: none;
 }
 
+.message-image-frame {
+    width: min(520px, 62vw);
+    aspect-ratio: 16 / 10;
+    min-height: 156px;
+    max-height: 260px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 4px;
+    background: transparent;
+}
+
 .message-image {
     display: block;
-    max-width: 220px;
+    max-width: 100%;
     max-height: 260px;
     border-radius: 4px;
     object-fit: contain;
+}
+
+.message-image-frame :deep(.image-panel) {
+    width: 100%;
+    height: 100%;
+}
+
+.message-image-frame :deep(.el-image) {
+    max-width: 100%;
+    max-height: 260px;
 }
 
 .file-message-card {
