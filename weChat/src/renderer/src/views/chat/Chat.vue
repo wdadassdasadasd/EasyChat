@@ -28,6 +28,7 @@
         <!-- 右侧：当前聊天窗口。选中会话后展示标题、消息列表和发送框。 -->
         <template #right-content>
             <template v-if="hasCurrentChat">
+                <!-- 标题栏-->
                 <div class="title-panel drag">
                     <div class="title">
                         <span>{{ currentChatSession.contactName }}</span>
@@ -43,6 +44,7 @@
                         </el-icon>
                     </div>
                 </div>
+                <!-- 消息列表-->
                 <div class="chat-panel">
                     <!-- messageList 是当前会话的消息数组；push 新消息后，页面会自动刷新。 -->
                     <div class="message-panel" id="message-panel" v-if="messageList.length > 0">
@@ -52,17 +54,39 @@
                             :id="'message' + data.messageId"
                             :class="['message-row', isSelfMessage(data) ? 'message-row-self' : '']"
                         >
-                            <!-- 自己发送的消息靠右并显示绿色；别人发送的消息保持默认靠左白色。 -->
-                            <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '']">
-                                {{ data.messageContent }}
+                            <!-- 他人消息：头像在左 -->
+                            <AvatarBase
+                                v-if="!isSelfMessage(data)"
+                                :userId="data.sendUserId"
+                                :width="36"
+                                :borderRadius="4"
+                                class="message-avatar"
+                            />
+                            <div :class="['message-body', isSelfMessage(data) ? 'message-body-self' : '']">
+                                <!-- 群聊时显示发送人昵称 -->
+                                <div
+                                    v-if="currentChatSession.contactType == 1 && !isSelfMessage(data)"
+                                    class="message-nick"
+                                >{{ data.sendUserNickName }}</div>
+                                <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '']">
+                                    {{ data.messageContent }}
+                                </div>
                             </div>
+                            <!-- 自己的消息：头像在右 -->
+                            <AvatarBase
+                                v-if="isSelfMessage(data)"
+                                :userId="data.sendUserId"
+                                :width="36"
+                                :borderRadius="4"
+                                class="message-avatar"
+                            />
                         </div>
                     </div>
                     <div class="chat-empty" v-else>
                         <div class="empty-tip">{{ welcomeText }}</div>
                     </div>
                 </div>
-                <!-- MessageSend 只负责输入；真正调发送接口的是父组件 sendChatMessage。 -->
+                <!-- MessageSend 只负责输入；真正调发送接口的是父组件Chat.vue 。 -->
                 <MessageSend :currentChatSession="currentChatSession" @sendMessage="sendChatMessage"></MessageSend>
             </template>
             <!-- 没有选中会话时，右侧显示默认空状态。 -->
@@ -517,16 +541,37 @@ onUnmounted(() => {
 
 .message-row {
     display: flex;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
+    align-items: flex-start;
 }
 
 .message-row-self {
     justify-content: flex-end;
 }
 
-.message-item {
-    width: fit-content;
+.message-avatar {
+    flex-shrink: 0;
+}
+
+.message-body {
     max-width: min(72%, 560px);
+    margin: 0 10px;
+}
+
+.message-body-self {
+    text-align: right;
+}
+
+.message-nick {
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 4px;
+    padding-left: 2px;
+    line-height: 1.4;
+}
+
+.message-item {
+    display: inline-block;
     padding: 10px 14px;
     border-radius: 4px;
     background: #ffffff;
@@ -534,6 +579,7 @@ onUnmounted(() => {
     line-height: 1.6;
     word-break: break-word;
     box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+    text-align: left;
 }
 
 .message-item-self {

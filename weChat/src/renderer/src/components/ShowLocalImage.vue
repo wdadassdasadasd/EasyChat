@@ -1,8 +1,16 @@
 <template>
     <div class="image-panel" @click="showImageHandler">
         <el-image :src="imageUrl" fit="scale-down" :width="width">
-            <template #error></template>
-            <template #placeholder></template>
+            <template #error>
+                <div class="image-fallback">
+                    <el-icon :size="width * 0.5"><User /></el-icon>
+                </div>
+            </template>
+            <template #placeholder>
+                <div class="image-loading">
+                    <el-icon class="is-loading" :size="width * 0.3"><Loading /></el-icon>
+                </div>
+            </template>
         </el-image>
     </div>
 </template>
@@ -10,6 +18,7 @@
 <script setup>
 import { ref, watch, onBeforeUnmount } from 'vue';
 import axios from 'axios';
+import { User, Loading } from '@element-plus/icons-vue';
 
 const props = defineProps({
     width: {
@@ -80,7 +89,10 @@ const loadImage = async () => {
             return;
         }
 
-        currentObjectUrl = URL.createObjectURL(blob);
+        // 后端 downloadFile 返回 Content-Type 为 application/x-msdownload，不是图片类型，
+        // 需要修正为 image/png，否则 el-image 可能无法正确渲染。
+        const imageBlob = new Blob([blob], { type: 'image/png' });
+        currentObjectUrl = URL.createObjectURL(imageBlob);
         imageUrl.value = currentObjectUrl;
     } catch (e) {
         console.error('[ShowLocalImage] 请求失败:', e.message);
@@ -111,5 +123,25 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.image-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #e0e0e0;
+    color: #999;
+    border-radius: inherit;
+}
+
+.image-loading {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ccc;
 }
 </style>

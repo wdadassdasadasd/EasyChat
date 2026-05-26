@@ -38,6 +38,7 @@ import ShowLocalImage from './components/ShowLocalImage.vue'
 import UserBaseInfo from './components/UserBaseInfo.vue'
 import Dialog from './components/Dialog.vue'
 import Avatar from './components/Avatar.vue'
+import AvatarBase from './components/AvatarBase.vue'
 import AvatarUpload from './components/AvatarUpload.vue'
 import { Confirm } from './utils/Confirm.js'
 const app = createApp(App)
@@ -74,6 +75,7 @@ app.component('ShowLocalImage', ShowLocalImage);
 app.component('UserBaseInfo', UserBaseInfo);
 app.component('Dialog', Dialog);
 app.component('Avatar', Avatar);
+app.component('AvatarBase', AvatarBase);
 app.component('AvatarUpload', AvatarUpload);
 
 app.config.globalProperties.Utils=Utils;

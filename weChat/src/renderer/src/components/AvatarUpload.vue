@@ -61,6 +61,7 @@ watch(
     { immediate: true }
 );
 
+//组件卸载前释放URL
 onBeforeUnmount(() => {
     if (previewUrl.value) {
         URL.revokeObjectURL(previewUrl.value);
