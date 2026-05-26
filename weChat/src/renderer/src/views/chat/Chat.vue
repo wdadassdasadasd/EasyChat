@@ -70,10 +70,14 @@
                                 >{{ data.sendUserNickName }}</div>
                                 <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '', isImageMessage(data) ? 'message-item-image' : '']">
                                     <template v-if="isImageMessage(data)">
-                                        <img
+                                        <el-image
                                             v-if="data.localPreviewUrl"
                                             :src="data.localPreviewUrl"
                                             class="message-image"
+                                            fit="scale-down"
+                                            :preview-src-list="[data.localPreviewUrl]"
+                                            :preview-teleported="true"
+                                            :hide-on-click-modal="true"
                                         />
                                         <ShowLocalImage
                                             v-else
@@ -81,6 +85,7 @@
                                             :width="220"
                                             partType="chat"
                                             :fileType="data.fileType"
+                                            :preview="true"
                                         />
                                     </template>
                                     <template v-else>

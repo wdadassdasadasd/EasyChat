@@ -1,6 +1,13 @@
 <template>
-    <div class="image-panel" @click="showImageHandler">
-        <el-image :src="imageUrl" fit="scale-down" :width="width">
+    <div :class="['image-panel', preview && imageUrl ? 'image-panel-preview' : '']">
+        <el-image
+            :src="imageUrl"
+            fit="scale-down"
+            :width="width"
+            :preview-src-list="previewSrcList"
+            :preview-teleported="true"
+            :hide-on-click-modal="true"
+        >
             <template #error>
                 <div class="image-fallback">
                     <el-icon :size="width * 0.5"><User /></el-icon>
@@ -16,7 +23,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import axios from 'axios';
 import { User, Loading } from '@element-plus/icons-vue';
 
@@ -47,10 +54,17 @@ const props = defineProps({
     forceGet: {
         type: Boolean,
         default: false
+    },
+    preview: {
+        type: Boolean,
+        default: false
     }
 });
 
 const imageUrl = ref('');
+const previewSrcList = computed(() => {
+    return props.preview && imageUrl.value ? [imageUrl.value] : [];
+});
 let currentObjectUrl = '';
 
 const loadImage = async () => {
@@ -123,6 +137,10 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.image-panel-preview {
+    cursor: zoom-in;
 }
 
 .image-fallback {
