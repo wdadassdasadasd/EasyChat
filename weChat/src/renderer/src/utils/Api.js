@@ -30,6 +30,7 @@ const api={
     logout:"/userInfo/logout",
     sendMessage:"/chat/sendMessage",
     uploadFile:"/chat/uploadFile",
+    downloadFile:"/chat/downloadFile",
     loadAdminContact:"/admin/loadUser",
     updateUserStatus:"/admin/updateUserStatus",
     forceOffline:"/admin/forceOffLine",

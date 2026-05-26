@@ -68,7 +68,7 @@
                                     v-if="currentChatSession.contactType == 1 && !isSelfMessage(data)"
                                     class="message-nick"
                                 >{{ data.sendUserNickName }}</div>
-                                <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '', isImageMessage(data) ? 'message-item-image' : '']">
+                                <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '', isImageMessage(data) ? 'message-item-image' : '', isFileMessage(data) ? 'message-item-file' : '']">
                                     <template v-if="isImageMessage(data)">
                                         <el-image
                                             v-if="data.localPreviewUrl"
@@ -88,6 +88,21 @@
                                             :forceGet="data.forceGet"
                                             :preview="true"
                                         />
+                                    </template>
+                                    <template v-else-if="isFileMessage(data)">
+                                        <div
+                                            :class="['file-message-card', isSelfMessage(data) ? 'file-message-card-self' : '']"
+                                            @click="downloadFileMessage(data)"
+                                        >
+                                            <div class="file-message-info">
+                                                <div class="file-message-name">{{ data.fileName || data.messageContent }}</div>
+                                                <div class="file-message-meta">
+                                                    {{ formatFileSize(data.fileSize) }}
+                                                    <span v-if="data.status == 0"> · 上传中</span>
+                                                </div>
+                                            </div>
+                                            <div class="file-message-icon">FILE</div>
+                                        </div>
                                     </template>
                                     <template v-else>
                                         {{ data.messageContent }}
@@ -113,6 +128,7 @@
                     :currentChatSession="currentChatSession"
                     @sendMessage="onSendChatMessage"
                     @sendImageMessage="onSendImageMessage"
+                    @sendFileMessage="onSendFileMessage"
                 />
             </template>
             <!-- 没有选中会话时，右侧显示默认空状态。 --> 
@@ -301,6 +317,10 @@ const onSendImageMessage = (payload) => {
     enqueueSendTask(() => sendImageMessage(payload));
 };
 
+const onSendFileMessage = (payload) => {
+    enqueueSendTask(() => sendFileMessage(payload));
+};
+
 /**
  * 发送聊天消息。
  *
@@ -364,6 +384,23 @@ const isImageMessage = (message) => {
     return Number(message?.messageType) === 5 && Number(message?.fileType) === 0;
 };
 
+const isFileMessage = (message) => {
+    return Number(message?.messageType) === 5 && Number(message?.fileType) === 2;
+};
+
+const formatFileSize = (size = 0) => {
+    if (!size) {
+        return '';
+    }
+    if (size < 1024) {
+        return `${size} B`;
+    }
+    if (size < 1024 * 1024) {
+        return `${(size / 1024).toFixed(1)} KB`;
+    }
+    return `${(size / 1024 / 1024).toFixed(1)} MB`;
+};
+
 const handleFileUploadDone = (message) => {
     const targetMessage = messageList.value.find((item) => {
         return item.messageId == message.messageId;
@@ -414,6 +451,41 @@ const sendImageMessage = async ({ contactId, contactType, file, cover }) => {
     uploadImageMessageFile(message, file, cover);
 };
 
+const sendFileMessage = async ({ contactId, contactType, file, cover }) => {
+    if (!file) {
+        return;
+    }
+
+    const result = await proxy.Request({
+        url: proxy.Api.sendMessage,
+        params: {
+            contactId,
+            contactType,
+            messageType: 5,
+            messageContent: file.name,
+            fileSize: file.size,
+            fileName: file.name,
+            fileType: 2
+        },
+        showLoading: false
+    });
+
+    if (!result) {
+        return;
+    }
+
+    const message = result.data;
+    if (!message?.messageId) {
+        return;
+    }
+
+    message.uploading = true;
+    messageList.value.push(message);
+    scrollMessageToBottom();
+
+    uploadImageMessageFile(message, file, cover);
+};
+
 const uploadImageMessageFile = async (message, file, cover) => {
     const uploadResult = await proxy.Request({
         url: proxy.Api.uploadFile,
@@ -444,6 +516,37 @@ const uploadImageMessageFile = async (message, file, cover) => {
     });
 
     loadChatSession();
+};
+
+const downloadFileMessage = async (message) => {
+    if (!isFileMessage(message) || message.status == 0) {
+        return;
+    }
+
+    const blob = await proxy.Request({
+        url: proxy.Api.downloadFile,
+        params: {
+            fileId: message.messageId,
+            showCover: false
+        },
+        responseType: 'blob',
+        showLoading: false
+    });
+
+    if (!blob) {
+        return;
+    }
+
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = message.fileName || message.messageContent || `file-${message.messageId}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+    }, 1000);
 };
 
 /**
@@ -859,11 +962,72 @@ onUnmounted(() => {
     box-shadow: none;
 }
 
+.message-item-file {
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
 .message-image {
     display: block;
     max-width: 220px;
     max-height: 260px;
     border-radius: 4px;
     object-fit: contain;
+}
+
+.file-message-card {
+    width: 260px;
+    min-height: 74px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px;
+    border-radius: 4px;
+    background: #fff;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+    cursor: pointer;
+    box-sizing: border-box;
+}
+
+.file-message-card-self {
+    background: #95ec69;
+}
+
+.file-message-info {
+    min-width: 0;
+    flex: 1;
+    margin-right: 12px;
+}
+
+.file-message-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #222;
+    font-size: 14px;
+    line-height: 20px;
+}
+
+.file-message-meta {
+    margin-top: 6px;
+    color: #8a8a8a;
+    font-size: 12px;
+    line-height: 16px;
+}
+
+.file-message-icon {
+    width: 42px;
+    height: 48px;
+    flex: 0 0 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    border: 1px solid #dedede;
+    background: #f7f7f7;
+    color: #666;
+    font-size: 10px;
+    font-weight: 600;
 }
 </style>

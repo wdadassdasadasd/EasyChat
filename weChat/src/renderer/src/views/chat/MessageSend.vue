@@ -47,7 +47,6 @@
             <el-upload
                 ref="uploadRef"
                 name="file"
-                accept="image/*"
                 :show-file-list="false"
                 :multiple="true"
                 :limit="fileLimit"
@@ -72,6 +71,27 @@
                         class="pending-image-remove"
                         type="button"
                         @click="removePendingImage(image.id)"
+                    >
+                        x
+                    </button>
+                </div>
+            </div>
+
+            <div v-if="pendingFileList.length" class="pending-file-list">
+                <div
+                    v-for="fileItem in pendingFileList"
+                    :key="fileItem.id"
+                    class="pending-file-item"
+                >
+                    <div class="pending-file-icon">FILE</div>
+                    <div class="pending-file-info">
+                        <div class="pending-file-name">{{ fileItem.name }}</div>
+                        <div class="pending-file-size">{{ formatFileSize(fileItem.size) }}</div>
+                    </div>
+                    <button
+                        class="pending-file-remove"
+                        type="button"
+                        @click="removePendingFile(fileItem.id)"
                     >
                         x
                     </button>
@@ -130,7 +150,7 @@ const props = defineProps({
     }
 });
 
-const emit = defineEmits(['sendMessage', 'sendImageMessage']);
+const emit = defineEmits(['sendMessage', 'sendImageMessage', 'sendFileMessage']);
 
 const activeEmoji = ref(emojiList[0]?.name || '');
 const msgContent = ref('');
@@ -139,9 +159,10 @@ const showSendMessagePopover = ref(false);
 const uploadRef = ref();
 const fileLimit = 9;
 const pendingImageList = ref([]);
+const pendingFileList = ref([]);
 
 const canSend = computed(() => {
-    return Boolean((msgContent.value || '').trim()) || pendingImageList.value.length > 0;
+    return Boolean((msgContent.value || '').trim()) || pendingImageList.value.length > 0 || pendingFileList.value.length > 0;
 });
 
 const openPopover = () => {
@@ -162,6 +183,16 @@ const sendEmoji = (item) => {
 
 const isImageFile = (file) => {
     return file?.type?.startsWith('image/');
+};
+
+const formatFileSize = (size = 0) => {
+    if (size < 1024) {
+        return `${size} B`;
+    }
+    if (size < 1024 * 1024) {
+        return `${(size / 1024).toFixed(1)} KB`;
+    }
+    return `${(size / 1024 / 1024).toFixed(1)} MB`;
 };
 
 const createImageCover = (file) => {
@@ -201,8 +232,8 @@ const addPendingImage = async (file) => {
         return;
     }
 
-    if (pendingImageList.value.length >= fileLimit) {
-        ElMessage.warning(`一次最多选择 ${fileLimit} 张图片`);
+    if (pendingImageList.value.length + pendingFileList.value.length >= fileLimit) {
+        ElMessage.warning(`一次最多选择 ${fileLimit} 个文件`);
         return;
     }
 
@@ -217,6 +248,48 @@ const addPendingImage = async (file) => {
         name: file.name,
         size: file.size
     });
+};
+
+const createFileCover = () => {
+    return new Promise((resolve) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1;
+        canvas.height = 1;
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, 1, 1);
+        canvas.toBlob((blob) => {
+            resolve(blob || new Blob(['cover'], { type: 'text/plain' }));
+        }, 'image/png');
+    });
+};
+
+const addPendingFile = async (file) => {
+    if (!file) {
+        return;
+    }
+
+    if (pendingImageList.value.length + pendingFileList.value.length >= fileLimit) {
+        ElMessage.warning(`一次最多选择 ${fileLimit} 个文件`);
+        return;
+    }
+
+    pendingFileList.value.push({
+        id: `${Date.now()}_${Math.random()}`,
+        file,
+        cover: await createFileCover(),
+        name: file.name,
+        size: file.size
+    });
+};
+
+const addPendingMedia = async (file) => {
+    if (isImageFile(file)) {
+        await addPendingImage(file);
+        return;
+    }
+
+    await addPendingFile(file);
 };
 
 const removePendingImage = (id) => {
@@ -237,14 +310,22 @@ const clearPendingImages = () => {
     pendingImageList.value = [];
 };
 
+const removePendingFile = (id) => {
+    pendingFileList.value = pendingFileList.value.filter((item) => item.id !== id);
+};
+
+const clearPendingFiles = () => {
+    pendingFileList.value = [];
+};
+
 const uploadFile = async (uploadRequest) => {
-    await addPendingImage(uploadRequest.file);
+    await addPendingMedia(uploadRequest.file);
     uploadRequest.onSuccess?.();
     uploadRef.value?.clearFiles();
 };
 
 const uploadExceed = () => {
-    ElMessage.warning(`一次最多选择 ${fileLimit} 张图片`);
+    ElMessage.warning(`一次最多选择 ${fileLimit} 个文件`);
 };
 
 const dropHandler = async (event) => {
@@ -252,7 +333,7 @@ const dropHandler = async (event) => {
 
     const files = Array.from(event.dataTransfer?.files || []);
     for (const file of files) {
-        await addPendingImage(file);
+        await addPendingMedia(file);
     }
 };
 
@@ -280,7 +361,7 @@ const pasteHandler = async (event) => {
 const sendMessage = () => {
     const messageContent = (msgContent.value || '').trim();
 
-    if (!messageContent && pendingImageList.value.length === 0) {
+    if (!messageContent && pendingImageList.value.length === 0 && pendingFileList.value.length === 0) {
         showSendMessagePopover.value = true;
         return;
     }
@@ -297,6 +378,17 @@ const sendMessage = () => {
     });
 
     clearPendingImages();
+
+    pendingFileList.value.forEach((fileItem) => {
+        emit('sendFileMessage', {
+            contactId: props.currentChatSession.contactId,
+            contactType: props.currentChatSession.contactType,
+            file: fileItem.file,
+            cover: fileItem.cover
+        });
+    });
+
+    clearPendingFiles();
 
     if (messageContent) {
         emit('sendMessage', {
@@ -445,6 +537,81 @@ onBeforeUnmount(() => {
     border: none;
     border-radius: 50%;
     background: rgba(0, 0, 0, 0.56);
+    color: #fff;
+    font-size: 12px;
+    line-height: 17px;
+    cursor: pointer;
+}
+
+.pending-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+    max-height: 74px;
+    padding: 2px 0 8px;
+    overflow-y: auto;
+}
+
+.pending-file-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: min(340px, 100%);
+    min-height: 48px;
+    padding: 7px 32px 7px 8px;
+    border: 1px solid #e5e5e5;
+    border-radius: 4px;
+    background: #f7f7f7;
+    box-sizing: border-box;
+}
+
+.pending-file-icon {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    background: #fff;
+    color: #666;
+    font-size: 10px;
+    border: 1px solid #dedede;
+}
+
+.pending-file-info {
+    min-width: 0;
+    margin-left: 8px;
+}
+
+.pending-file-name {
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #222;
+    font-size: 13px;
+    line-height: 18px;
+}
+
+.pending-file-size {
+    margin-top: 2px;
+    color: #999;
+    font-size: 12px;
+    line-height: 16px;
+}
+
+.pending-file-remove {
+    position: absolute;
+    top: 15px;
+    right: 8px;
+    width: 17px;
+    height: 17px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.48);
     color: #fff;
     font-size: 12px;
     line-height: 17px;
