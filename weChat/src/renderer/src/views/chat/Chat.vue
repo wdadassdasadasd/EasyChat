@@ -68,8 +68,24 @@
                                     v-if="currentChatSession.contactType == 1 && !isSelfMessage(data)"
                                     class="message-nick"
                                 >{{ data.sendUserNickName }}</div>
-                                <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '']">
-                                    {{ data.messageContent }}
+                                <div :class="['message-item', isSelfMessage(data) ? 'message-item-self' : '', isImageMessage(data) ? 'message-item-image' : '']">
+                                    <template v-if="isImageMessage(data)">
+                                        <img
+                                            v-if="data.localPreviewUrl"
+                                            :src="data.localPreviewUrl"
+                                            class="message-image"
+                                        />
+                                        <ShowLocalImage
+                                            v-else
+                                            :fileId="data.messageId"
+                                            :width="220"
+                                            partType="chat"
+                                            :fileType="data.fileType"
+                                        />
+                                    </template>
+                                    <template v-else>
+                                        {{ data.messageContent }}
+                                    </template>
                                 </div>
                             </div>
                             <!-- 自己的消息：头像在右 -->
@@ -87,9 +103,13 @@
                     </div>
                 </div>
                 <!-- MessageSend 只负责输入；真正调发送接口的是父组件Chat.vue 。 -->
-                <MessageSend :currentChatSession="currentChatSession" @sendMessage="sendChatMessage"></MessageSend>
+                <MessageSend
+                    :currentChatSession="currentChatSession"
+                    @sendMessage="onSendChatMessage"
+                    @sendImageMessage="onSendImageMessage"
+                />
             </template>
-            <!-- 没有选中会话时，右侧显示默认空状态。 -->
+            <!-- 没有选中会话时，右侧显示默认空状态。 --> 
             <div class="chat-empty chat-empty-default" v-else>
                 <el-icon class="wechat-empty-icon">
                     <ChatDotRound />
@@ -107,6 +127,7 @@ import { useUserInfoStore } from '../../stores/userInfoStore';
 import ChatSession from './ChatSession.vue';
 import ContextMenu from '@imengyu/vue3-context-menu';
 import MessageSend from './MessageSend.vue';
+import ShowLocalImage from '../../components/ShowLocalImage.vue';
 
 const { proxy } = getCurrentInstance();
 const userInfoStore = useUserInfoStore();
@@ -253,6 +274,27 @@ const scrollMessageToBottom = async () => {
     }
 };
 
+let sendTaskQueue = Promise.resolve();
+
+const enqueueSendTask = (task) => {
+    sendTaskQueue = sendTaskQueue
+        .catch(() => {})
+        .then(task)
+        .catch((error) => {
+            console.error('send message failed', error);
+        });
+
+    return sendTaskQueue;
+};
+
+const onSendChatMessage = (payload) => {
+    enqueueSendTask(() => sendChatMessage(payload));
+};
+
+const onSendImageMessage = (payload) => {
+    enqueueSendTask(() => sendImageMessage(payload));
+};
+
 /**
  * 发送聊天消息。
  *
@@ -307,6 +349,80 @@ const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
             chatSession: { ...toRaw(currentChatSession.value) }
         });
     }
+
+    loadChatSession();
+};
+
+
+const isImageMessage = (message) => {
+    return Number(message?.messageType) === 5 && Number(message?.fileType) === 0;
+};
+
+const sendImageMessage = async ({ contactId, contactType, file, cover }) => {
+    if (!file) {
+        return;
+    }
+
+    const result = await proxy.Request({
+        url: proxy.Api.sendMessage,
+        params: {
+            contactId,
+            contactType,
+            messageType: 5,
+            messageContent: file.name,
+            fileSize: file.size,
+            fileName: file.name,
+            fileType: 0
+        },
+        showLoading: false
+    });
+
+    if (!result) {
+        return;
+    }
+
+    const message = result.data;
+    if (!message?.messageId) {
+        return;
+    }
+
+    message.localPreviewUrl = URL.createObjectURL(file);
+    message.uploading = true;
+
+    messageList.value.push(message);
+    scrollMessageToBottom();
+
+    uploadImageMessageFile(message, file, cover);
+};
+
+const uploadImageMessageFile = async (message, file, cover) => {
+    const uploadResult = await proxy.Request({
+        url: proxy.Api.uploadFile,
+        params: {
+            messageId: message.messageId,
+            file,
+            cover
+        },
+        showLoading: false
+    });
+
+    if (!uploadResult) {
+        message.uploading = false;
+        message.status = 0;
+        return;
+    }
+
+    message.uploading = false;
+    message.status = 1;
+
+    window.ipcRenderer.send('saveSendMessage', {
+        message: {
+            ...message,
+            localPreviewUrl: undefined,
+            uploading: undefined
+        },
+        chatSession: { ...toRaw(currentChatSession.value) }
+    });
 
     loadChatSession();
 };
@@ -478,6 +594,11 @@ onUnmounted(() => {
     window.ipcRenderer.removeAllListeners('loadSessionDataCallback');
     window.ipcRenderer.removeAllListeners('receiveMessage');
     window.ipcRenderer.removeAllListeners('loadChatMessageCallback');
+    messageList.value.forEach((message) => {
+    if (message.localPreviewUrl) {
+        URL.revokeObjectURL(message.localPreviewUrl);
+    }
+});
 });
 
 
@@ -617,11 +738,14 @@ onUnmounted(() => {
 }
 
 :deep(.send-panel) {
-    min-height: 190px;
+    height: 220px;
+    min-height: 220px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
     padding: 10px 18px 14px;
+    box-sizing: border-box;
+    overflow: hidden;
     background: #fff;
     border-top: 1px solid #e7e7e7;
 }
@@ -631,6 +755,7 @@ onUnmounted(() => {
     align-items: center;
     gap: 16px;
     height: 30px;
+    flex-shrink: 0;
     color: #666;
 }
 
@@ -660,14 +785,20 @@ onUnmounted(() => {
     flex: 1;
     min-height: 0;
     padding-top: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 :deep(.input-area .el-textarea) {
-    height: 100%;
+    flex: 1;
+    height: auto;
+    min-height: 44px;
 }
 
 :deep(.input-area .el-textarea__inner) {
     height: 100%;
+    min-height: 44px;
     padding: 0;
     border: none;
     border-radius: 0;
@@ -682,6 +813,7 @@ onUnmounted(() => {
     display: flex;
     justify-content: flex-end;
     align-items: center;
+    flex-shrink: 0;
     padding-top: 8px;
 }
 
@@ -696,5 +828,19 @@ onUnmounted(() => {
     border: 1px solid #d9d9d9;
     background: #f5f5f5;
     cursor: pointer;
+}
+
+.message-item-image {
+    padding: 4px;
+    background: transparent;
+    box-shadow: none;
+}
+
+.message-image {
+    display: block;
+    max-width: 220px;
+    max-height: 260px;
+    border-radius: 4px;
+    object-fit: contain;
 }
 </style>

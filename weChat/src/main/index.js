@@ -102,7 +102,7 @@ function createWindow() {
     })
     tray.setContextMenu(Menu.buildFromTemplate(contextMenu));
   });
-
+  //在主进程注册 IPC 监听
   onSetLocalStore();
   onGetLocalStore();
   onLoadSessionData();

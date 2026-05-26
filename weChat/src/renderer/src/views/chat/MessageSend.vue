@@ -1,6 +1,5 @@
 <template>
     <div class="send-panel">
-        <!-- 工具栏：表情、文件上传等发送辅助功能。 -->
         <div class="toolbar">
             <el-popover
                 :visible="showEmojiPopover"
@@ -48,6 +47,7 @@
             <el-upload
                 ref="uploadRef"
                 name="file"
+                accept="image/*"
                 :show-file-list="false"
                 :multiple="true"
                 :limit="fileLimit"
@@ -60,8 +60,24 @@
             </el-upload>
         </div>
 
-        <!-- 输入区：msgContent 保存当前输入框内容。 -->
         <div class="input-area" @drop="dropHandler" @dragover="dragoverHandler">
+            <div v-if="pendingImageList.length" class="pending-image-list">
+                <div
+                    v-for="image in pendingImageList"
+                    :key="image.id"
+                    class="pending-image-item"
+                >
+                    <img :src="image.previewUrl" :alt="image.name" />
+                    <button
+                        class="pending-image-remove"
+                        type="button"
+                        @click="removePendingImage(image.id)"
+                    >
+                        x
+                    </button>
+                </div>
+            </div>
+
             <el-input
                 v-model="msgContent"
                 rows="5"
@@ -70,13 +86,12 @@
                 maxlength="500"
                 show-word-limit
                 spellcheck="false"
-                input-style="background:#f5f5f5:border:none"
+                input-style="background:#f5f5f5;border:none"
                 @paste="pasteHandler"
                 @keydown.enter="sendMessage"
             />
         </div>
 
-        <!-- 发送按钮：点击后校验输入内容，并把消息抛给父组件 Chat.vue。 -->
         <div class="send-btn-panel">
             <el-popover
                 :visible="showSendMessagePopover"
@@ -92,7 +107,11 @@
                     <span class="empty-msg">不能发送空消息</span>
                 </template>
                 <template #reference>
-                    <span class="send-btn" @click="sendMessage" :class="{ 'send-btn-active': msgContent.trim() }">发送(S)</span>
+                    <span
+                        class="send-btn"
+                        :class="{ 'send-btn-active': canSend }"
+                        @click="sendMessage"
+                    >发送(S)</span>
                 </template>
             </el-popover>
         </div>
@@ -100,17 +119,18 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import emojiList from '../../utils/Emoji';
-import { defineProps, defineEmits } from 'vue';
 
-// 父组件 Chat.vue 传入当前会话信息，发送时需要 contactId/contactType。
-const props=defineProps({
+const props = defineProps({
     currentChatSession: {
         type: Object,
         default: () => ({})
     }
 });
+
+const emit = defineEmits(['sendMessage', 'sendImageMessage']);
 
 const activeEmoji = ref(emojiList[0]?.name || '');
 const msgContent = ref('');
@@ -118,12 +138,16 @@ const showEmojiPopover = ref(false);
 const showSendMessagePopover = ref(false);
 const uploadRef = ref();
 const fileLimit = 9;
+const pendingImageList = ref([]);
+
+const canSend = computed(() => {
+    return Boolean((msgContent.value || '').trim()) || pendingImageList.value.length > 0;
+});
 
 const openPopover = () => {
 };
 
 const closePopover = () => {
-    // 关闭所有浮层，避免表情面板和空消息提示同时残留。
     showEmojiPopover.value = false;
     showSendMessagePopover.value = false;
 };
@@ -133,52 +157,165 @@ const showEmojiPopoverHandler = () => {
 };
 
 const sendEmoji = (item) => {
-    // 选择表情时，把表情追加到当前输入内容末尾。
     msgContent.value = `${msgContent.value || ''}${item}`;
 };
 
-const uploadFile = () => {
+const isImageFile = (file) => {
+    return file?.type?.startsWith('image/');
+};
+
+const createImageCover = (file) => {
+    return new Promise((resolve) => {
+        const image = new Image();
+        const objectUrl = URL.createObjectURL(file);
+
+        image.onload = () => {
+            const maxSize = 240;
+            const ratio = Math.min(maxSize / image.width, maxSize / image.height, 1);
+            const canvas = document.createElement('canvas');
+
+            canvas.width = Math.round(image.width * ratio);
+            canvas.height = Math.round(image.height * ratio);
+
+            const context = canvas.getContext('2d');
+            context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+            canvas.toBlob((blob) => {
+                URL.revokeObjectURL(objectUrl);
+                resolve(blob || file);
+            }, 'image/jpeg', 0.8);
+        };
+
+        image.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve(file);
+        };
+
+        image.src = objectUrl;
+    });
+};
+
+const addPendingImage = async (file) => {
+    if (!isImageFile(file)) {
+        ElMessage.warning('请选择图片文件');
+        return;
+    }
+
+    if (pendingImageList.value.length >= fileLimit) {
+        ElMessage.warning(`一次最多选择 ${fileLimit} 张图片`);
+        return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    const cover = await createImageCover(file);
+
+    pendingImageList.value.push({
+        id: `${Date.now()}_${Math.random()}`,
+        file,
+        cover,
+        previewUrl,
+        name: file.name,
+        size: file.size
+    });
+};
+
+const removePendingImage = (id) => {
+    const image = pendingImageList.value.find((item) => item.id === id);
+    if (image?.previewUrl) {
+        URL.revokeObjectURL(image.previewUrl);
+    }
+
+    pendingImageList.value = pendingImageList.value.filter((item) => item.id !== id);
+};
+
+const clearPendingImages = () => {
+    pendingImageList.value.forEach((image) => {
+        if (image.previewUrl) {
+            URL.revokeObjectURL(image.previewUrl);
+        }
+    });
+    pendingImageList.value = [];
+};
+
+const uploadFile = async (uploadRequest) => {
+    await addPendingImage(uploadRequest.file);
+    uploadRequest.onSuccess?.();
+    uploadRef.value?.clearFiles();
 };
 
 const uploadExceed = () => {
+    ElMessage.warning(`一次最多选择 ${fileLimit} 张图片`);
 };
 
-const dropHandler = (event) => {
+const dropHandler = async (event) => {
     event.preventDefault();
+
+    const files = Array.from(event.dataTransfer?.files || []);
+    for (const file of files) {
+        await addPendingImage(file);
+    }
 };
 
 const dragoverHandler = (event) => {
     event.preventDefault();
 };
 
-const pasteHandler = () => {
+const pasteHandler = async (event) => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const imageItems = items.filter((item) => item.type.startsWith('image/'));
+
+    if (!imageItems.length) {
+        return;
+    }
+
+    event.preventDefault();
+    for (const item of imageItems) {
+        const file = item.getAsFile();
+        if (file) {
+            await addPendingImage(file);
+        }
+    }
 };
 
-// 子组件不直接调发送接口，只把发送事件抛给父组件 Chat.vue。
-const emit = defineEmits(['sendMessage']);
-
 const sendMessage = () => {
-    // 发送前先去掉首尾空格，避免发送纯空白消息。
     const messageContent = (msgContent.value || '').trim();
 
-    if (!messageContent) {
+    if (!messageContent && pendingImageList.value.length === 0) {
         showSendMessagePopover.value = true;
         return;
     }
 
     showSendMessagePopover.value = false;
 
-    // 把要发送的数据交给父组件，由 Chat.vue 负责调 /chat/sendMessage 接口。
-    emit('sendMessage', {
-        contactId: props.currentChatSession.contactId,
-        contactType: props.currentChatSession.contactType,
-        messageContent
+    pendingImageList.value.forEach((image) => {
+        emit('sendImageMessage', {
+            contactId: props.currentChatSession.contactId,
+            contactType: props.currentChatSession.contactType,
+            file: image.file,
+            cover: image.cover
+        });
     });
 
-    // 清空输入框。后续如果要做“失败后恢复输入”，这里可以改成接口成功后再清空。
-    msgContent.value = '';
+    clearPendingImages();
+
+    if (messageContent) {
+        emit('sendMessage', {
+            contactId: props.currentChatSession.contactId,
+            contactType: props.currentChatSession.contactType,
+            messageContent
+        });
+
+        msgContent.value = '';
+    }
 };
 
+onBeforeUnmount(() => {
+    pendingImageList.value.forEach((image) => {
+        if (image.previewUrl) {
+            URL.revokeObjectURL(image.previewUrl);
+        }
+    });
+});
 </script>
 
 <style lang="scss" scoped>
@@ -268,6 +405,51 @@ const sendMessage = () => {
     }
 }
 
+.pending-image-list {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    flex-shrink: 0;
+    max-width: 100%;
+    max-height: 76px;
+    padding: 2px 0 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.pending-image-item {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    flex: 0 0 64px;
+    border: 1px solid #e5e5e5;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #f7f7f7;
+
+    img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+    }
+}
+
+.pending-image-remove {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 17px;
+    height: 17px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.56);
+    color: #fff;
+    font-size: 12px;
+    line-height: 17px;
+    cursor: pointer;
+}
 
 .send-btn {
     color: #333;

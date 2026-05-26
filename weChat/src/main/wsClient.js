@@ -97,6 +97,7 @@ const createWs=()=>{
         }
 
        default: {
+        //把收到的消息存入本地 SQLite chat_message表 
         await saveMessageBatch([message]);
 
         const contactId = message.contactType == 1 ? message.contactId : message.sendUserId;

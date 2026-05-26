@@ -5,12 +5,14 @@ import { addUserSetting } from './db/UserSettingModel.js';
 import { selectUserSessionList,delChatSession,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
 import { selectMessageList, saveMessage } from './db/ChatMessageModel.js';
 const Node_ENV=process.env.NODE_ENV;
+//通知主进程切换登录/注册窗口
 const onLoginOnRegister=(mainWindow, callback)=>{
       ipcMain.on("loginOrRegister",(e,isLogin)=>{
         callback(isLogin);
       });
 }
 
+//初始化用户数据，并启动ws
 const onLoginSuccess=(mainWindow, callback)=>{
     ipcMain.on("openChat",(e,config)=>{
         store.initUserId(config.userId);
@@ -27,6 +29,7 @@ const winTitleOp=(callback)=>{
     })
 }
 
+//存数据到主进程store
 const onSetLocalStore=()=>{
     ipcMain.on("SetLocalStore",(e,{key,value})=>{
         store.setData(key,value)
@@ -47,6 +50,8 @@ const onGetLocalStore=()=>{
 
 }
 
+
+//查询本地会话列表
 const onLoadSessionData=()=>{
     ipcMain.on("loadSessionData",async (e)=>{
         const result=await selectUserSessionList();
@@ -69,6 +74,7 @@ const onTopChatSession=()=>{
     })
 }
 
+//分页查询聊天消息
 const onLoadChatMessage=()=>{
     ipcMain.on("loadChatMessage",async (e,data)=>{
         const result=await selectMessageList(data);
@@ -78,12 +84,14 @@ const onLoadChatMessage=()=>{
 }
 
 
+
+//保存发送的消息到本地，并更新会话
 const onSaveSendMessage = () => {
     ipcMain.on('saveSendMessage', async (e, { message, chatSession }) => {
         if (!message) {
             return;
         }
-
+        //保存发送的消息到chat_message 表
         await saveMessage(message);
 
         const sessionInfo = {
