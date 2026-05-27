@@ -33,9 +33,8 @@
                         <span class="title-count" v-if="currentChatSession.contactType == 1">{{ currentChatSession.memberCount }}</span>
                     </div>
                     <div
-                        v-if="currentChatSession.contactType == 1"
                         class="title-more no-drag"
-                        @click="shwGroupDetail"
+                        @click="showChatDetail"
                     >
                         <el-icon>
                             <MoreFilled />
@@ -71,6 +70,12 @@
                         @toggleTop="handleToggleTop"
                         @clearMessages="handleClearMessages"
                     />
+                    <UserChatDrawer
+                        v-model="userDetailVisible"
+                        :currentChatSession="currentChatSession"
+                        @toggleTop="handleToggleTop"
+                        @clearMessages="handleClearMessages"
+                    />
                 </div>
             </template>
 
@@ -100,6 +105,7 @@ import ChatSession from '@/components/chat/ChatSession.vue';
 import FilePreviewDialog from '@/components/chat/FilePreviewDialog.vue';
 import GroupChatDrawer from '@/components/chat/GroupChatDrawer.vue';
 import MessageSend from '@/components/chat/MessageSend.vue';
+import UserChatDrawer from '@/components/chat/UserChatDrawer.vue';
 import { useUserInfoStore } from '@/stores/userInfoStore';
 import { useChatMessages } from './composables/useChatMessages';
 import { useChatSessions } from './composables/useChatSessions';
@@ -110,6 +116,7 @@ const route = useRoute();
 const userInfoStore = useUserInfoStore();
 const searchKey = ref();
 const groupDetailVisible = ref(false);
+const userDetailVisible = ref(false);
 const showGroupMemberNick = ref(true);
 
 const search = () => {};
@@ -160,12 +167,21 @@ const currentUserId = computed(() => {
     return userInfoStore.getInfo()?.userId;
 });
 
-const shwGroupDetail = () => {
-    if (currentChatSession.value.contactType != 1) {
-        groupDetailVisible.value = false;
+const showChatDetail = () => {
+    if (currentChatSession.value.contactType == 1) {
+        userDetailVisible.value = false;
+        groupDetailVisible.value = !groupDetailVisible.value;
         return;
     }
-    groupDetailVisible.value = !groupDetailVisible.value;
+
+    if (currentChatSession.value.contactType == 0) {
+        groupDetailVisible.value = false;
+        userDetailVisible.value = !userDetailVisible.value;
+        return;
+    }
+
+    groupDetailVisible.value = false;
+    userDetailVisible.value = false;
 };
 
 const handleToggleTop = (isTop) => {
@@ -216,11 +232,13 @@ watch(
     () => `${currentChatSession.value.contactId || ''}_${currentChatSession.value.contactType || ''}`,
     () => {
         groupDetailVisible.value = false;
+        userDetailVisible.value = false;
     }
 );
 
 onUnmounted(() => {
     groupDetailVisible.value = false;
+    userDetailVisible.value = false;
     removeSessionListener();
     cleanupChatMessages();
 });
