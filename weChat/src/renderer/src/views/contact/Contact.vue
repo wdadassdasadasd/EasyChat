@@ -28,8 +28,11 @@
                             </div>
                             <div class="text">{{ sub.name }}</div>
                         </div>
-                        <template v-for="contact in item.contactData">
-                            <div :class="['part-item', contact[item.contactId] == Route.path ? 'active' : '']" @click="contactDetail(contact,item)">
+                        <template v-for="contact in item.contactData" :key="`${item.partName}-${contact[item.contactId]}`">
+                            <div
+                                :class="['part-item', isCurrentContact(contact, item) ? 'active' : '']"
+                                @click="contactDetail(contact,item)"
+                            >
                                 <Avatar :userId="contact[item.contactId]" :width="35"></Avatar>
                                 <div class="text">{{ contact[item.contactName] }}</div>
                             </div>
@@ -46,7 +49,7 @@
         <template #right-content>
             <div class="title-panel drag">{{ rightTitle }}</div>
             <RouterView v-slot="{Component}">
-                <component :is="Component"></component>
+                <component :is="Component" :key="Route.fullPath"></component>
             </RouterView>
             <WinOp :showSetTop="true" :showMin="true" :showMax="true" :closeType="1" showSetTop="1"></WinOp>
         </template>
@@ -56,7 +59,7 @@
 
 <script setup>
 
-import { ref, reactive, nextTick, getCurrentInstance,watch } from 'vue';
+import { ref, getCurrentInstance,watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import {useContactStateStore} from '@/stores/ContactStateStore';
 
@@ -105,7 +108,7 @@ const partList = ref([
         contactName: 'groupName',
         showTitle: true,
         contactData: [],
-        path: '/contact/groupDetail',
+        contactPath: '/contact/groupDetail',
     },
     {
         partName: '我加入的群聊',
@@ -129,11 +132,20 @@ const partList = ref([
 ]);
 
 const rightTitle = ref();
+const isSameRoute = (path, query = {}) => {
+    const currentQuery = Route.query || {};
+    const queryKeys = Object.keys(query);
+    return Route.path === path && queryKeys.every((key) => String(currentQuery[key] || '') === String(query[key] || ''));
+};
+
 const partJump = (data) => {
     if (data.showTitle) {
         rightTitle.value = data.name;
     } else {
         rightTitle.value = null;
+    }
+    if (isSameRoute(data.path)) {
+        return;
     }
     Router.push(data.path);
   
@@ -172,18 +184,27 @@ const loadMyGroup=async()=>{
 loadMyGroup();
 
 const contactDetail=(contact,part)=>{
+    const contactId = contact[part.contactId];
+    const contactPath = part.contactPath;
     if(part.showTitle){
     rightTitle.value=contact[part.contactName];
     }else{
         rightTitle.value=null;
     }
+    if (isSameRoute(contactPath, { contactId })) {
+        return;
+    }
 Router.push({
-    path:part.contactPath,
+    path:contactPath,
     query:{
-        contactId:contact[part.contactId]
+        contactId
     }
 });
 }
+
+const isCurrentContact = (contact, part) => {
+    return isSameRoute(part.contactPath, { contactId: contact[part.contactId] });
+};
 
 //监听 Pinia Store 的状态变化，自动刷新联系人列表
 watch(()=>
@@ -202,17 +223,17 @@ watch(()=>
             break;
         case 'REMOVE_USER':
             loadContact('USER');
-            Route.push('/contact/blank');
+            Router.push('/contact/Blank');
             rightTitle.value=null;
             break;
-        case 'DISOLUTION_GROUP':
+        case 'DISSOLUTION_GROUP':
             loadContact('GROUP');
-            Route.push('/contact/blank');
+            Router.push('/contact/Blank');
             rightTitle.value=null;
             break;
         case 'LEAVE_GROUP':
             loadContact('GROUP');
-            Route.push('/contact/blank');
+            Router.push('/contact/Blank');
             rightTitle.value=null;
             break;
      }
@@ -226,6 +247,17 @@ watch(()=>
 .drag-panel {
     height: 25px;
     background: #f7f7f7;
+}
+
+.title-panel {
+    height: 48px;
+    line-height: 48px;
+    flex-shrink: 0;
+    padding: 0 24px;
+    border-bottom: 1px solid #d8d8d8;
+    color: #111;
+    font-size: 16px;
+    background: #ededed;
 }
 
 .top-search {

@@ -31,7 +31,7 @@
                 <!-- 标题栏-->
                 <div class="title-panel drag">
                     <div class="title">
-                        <span>{{ currentChatSession.contactName }}</span>
+                        <span>{{ currentChatSessionTitle }}</span>
                         <span class="title-count" v-if="currentChatSession.contactType == 1">{{ currentChatSession.memberCount }}</span>
                     </div>
                     <div
@@ -104,16 +104,24 @@
                                         <template v-else-if="isFileMessage(data)">
                                             <div
                                                 :class="['file-message-card', isSelfMessage(data) ? 'file-message-card-self' : '']"
-                                                @click="downloadFileMessage(data)"
+                                                @click="openFilePreviewDialog(data)"
                                             >
-                                                <div class="file-message-info">
-                                                    <div class="file-message-name">{{ data.fileName || data.messageContent }}</div>
+                                                <div class="file-message-main">
+                                                    <div class="file-message-info">
+                                                        <div class="file-message-name">{{ getFileMessageName(data) }}</div>
                                                     <div class="file-message-meta">
                                                         {{ formatFileSize(data.fileSize) }}
-                                                        <span v-if="data.status == 0"> · 上传中</span>
+                                                        <span class="file-message-status">{{ getFileMessageStatusText(data) }}</span>
                                                     </div>
                                                 </div>
-                                                <div class="file-message-icon">FILE</div>
+                                                <div class="file-message-icon">
+                                                    <span>?</span>
+                                                </div>
+                                            </div>
+                                                <div class="file-message-source">
+                                                    <span class="file-message-source-icon"></span>
+                                                    <span>&#24494;&#20449;&#30005;&#33041;&#29256;</span>
+                                                </div>
                                             </div>
                                         </template>
                                         <template v-else>
@@ -153,12 +161,39 @@
                 </el-icon>
             </div>
             <WinOp :showSetTop="true" :showMin="true" :showMax="true" :closeType="1" showSetTop="1" />
+            <el-dialog
+                v-model="showFilePreviewDialog"
+                width="690px"
+                top="60px"
+                class="file-preview-dialog"
+                :show-close="true"
+                :close-on-click-modal="true"
+                :append-to-body="true"
+                @closed="closeFilePreviewDialog"
+            >
+                <div class="file-preview-panel" v-if="selectedFileMessage">
+                    <div class="file-preview-icon">
+                        <span>?</span>
+                    </div>
+                    <div class="file-preview-name">{{ getFileMessageName(selectedFileMessage) }}</div>
+                    <div class="file-preview-size">&#25991;&#20214;&#22823;&#23567;&#65306;{{ formatFileSize(selectedFileMessage.fileSize) }}</div>
+                    <button
+                        class="file-preview-action"
+                        type="button"
+                        :disabled="isFileReceiveDisabled(selectedFileMessage) || isReceivingFile"
+                        @click="receiveSelectedFileMessage"
+                    >
+                        {{ isReceivingFile ? '\u63a5\u6536\u4e2d' : '\u63a5\u6536\u6587\u4ef6' }}
+                    </button>
+                    <div class="file-preview-expire">&#23558;&#22312;13&#22825;&#21518;&#26080;&#27861;&#19979;&#36733;</div>
+                </div>
+            </el-dialog>
         </template>
     </Layout>
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, onMounted, onUnmounted, ref ,nextTick, toRaw} from 'vue';
+import { computed, getCurrentInstance, onMounted, onUnmounted, ref ,nextTick, toRaw, watch} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useUserInfoStore } from '../../stores/userInfoStore';
 import ChatSession from './ChatSession.vue';
@@ -241,7 +276,13 @@ const messageList = ref([]);
 const messagePanelRef = ref(null);
 const messageBottomRef = ref(null);
 const messagePanelPhase = ref('ready');
+const selectedFileMessage = ref(null);
+const showFilePreviewDialog = ref(false);
+const isReceivingFile = ref(false);
 const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0);
+const currentChatSessionTitle = computed(() => {
+    return getSessionName(currentChatSession.value);
+});
 let shouldScrollToBottomAfterLoad = false;
 let messagePanelRenderSeq = 0;
 let activeMessageLoadSeq = 0;
@@ -255,12 +296,138 @@ const isSelfMessage = (message) => {
     return message?.sendUserId == userInfoStore.getInfo()?.userId;
 };
 
+const getSessionName = (session = {}) => {
+    return getRealSessionName(session) || session.contactId || '';
+};
+
+const getRealSessionName = (session = {}) => {
+    const realName = session.contactName || session.groupName || session.nickName || '';
+    if (realName && realName != session.contactId) {
+        return realName;
+    }
+    return '';
+};
+
+const getContactTypeValue = (type) => {
+    if (type === 'GROUP' || type == 1) {
+        return 1;
+    }
+    return 0;
+};
+
+const getSessionInfoFromServer = async (contactId, contactType) => {
+    if (!contactId) {
+        return {};
+    }
+
+    if (contactType == 1) {
+        const result = await proxy.Request({
+            url: proxy.Api.getGroupInfo,
+            params: {
+                groupId: contactId
+            },
+            showLoading: false,
+            showError: false
+        });
+
+        const groupInfo = result?.data?.groupInfo || result?.data?.group || result?.data || {};
+        const groupName = groupInfo.groupName || result?.data?.groupName;
+        return {
+            contactId,
+            contactType,
+            contactName: groupName,
+            memberCount: groupInfo.memberCount,
+            groupName
+        };
+    }
+
+    const result = await proxy.Request({
+        url: proxy.Api.getContactUserInfo,
+        params: {
+            contactId
+        },
+        showLoading: false,
+        showError: false
+    });
+
+    const userInfo = result?.data || {};
+    return {
+        contactId,
+        contactType,
+        contactName: userInfo.contactName || userInfo.nickName,
+        nickName: userInfo.nickName
+    };
+};
+
+const fillSessionName = async (session) => {
+    if (!session?.contactId) {
+        return session;
+    }
+    if (session.contactType != 1 && getRealSessionName(session)) {
+        return session;
+    }
+    const serverInfo = await getSessionInfoFromServer(session.contactId, session.contactType);
+    return Object.assign({}, session, serverInfo, {
+        contactName: serverInfo.contactName || session.contactName
+    });
+};
+
+const syncCurrentSession = (session) => {
+    if (currentChatSession.value.contactId == session.contactId) {
+        currentChatSession.value = Object.assign({}, currentChatSession.value, session);
+    }
+};
+
+const hydrateSessionList = async (dataList = []) => {
+    const hydratedList = await Promise.all(dataList.map(fillSessionName));
+    hydratedList.forEach(syncCurrentSession);
+    return hydratedList;
+};
+
+const openChatFromRoute = async () => {
+    const chatId = route.query.chatId;
+    if (!chatId) {
+        return;
+    }
+
+    const contactType = getContactTypeValue(route.query.type);
+    let session = chatSessionList.value.find((item) => item.contactId == chatId);
+    if (session) {
+        if (route.query.contactName && (session.contactType == 1 || !getRealSessionName(session))) {
+            session = Object.assign({}, session, {
+                contactName: route.query.contactName,
+                memberCount: route.query.memberCount || session.memberCount
+            });
+        }
+        session = await fillSessionName(session);
+        const index = chatSessionList.value.findIndex((item) => item.contactId == chatId);
+        if (index !== -1) {
+            chatSessionList.value[index] = session;
+        }
+        chatSessionClickHandler(session);
+        return;
+    }
+
+    const serverInfo = await getSessionInfoFromServer(chatId, contactType);
+    session = {
+        contactId: chatId,
+        contactType,
+        contactName: serverInfo.contactName || route.query.contactName || chatId,
+        memberCount: serverInfo.memberCount,
+        status: 1,
+        topType: 0,
+        noReadCount: 0
+    };
+    chatSessionList.value.unshift(session);
+    chatSessionClickHandler(session);
+};
+
 // 没有消息时显示的欢迎文案，群聊和单聊文案不同。
 const welcomeText = computed(() => {
     if (currentChatSession.value.contactType == 1) {
-        return `${currentChatSession.value.contactName} 已创建好，快来开始群聊吧`;
+        return `${currentChatSessionTitle.value} 已创建好，快来开始群聊吧`;
     }
-    return `欢迎和 ${currentChatSession.value.contactName || ''} 开始聊天`;
+    return `欢迎和 ${currentChatSessionTitle.value || ''} 开始聊天`;
 });
 
 /**
@@ -274,6 +441,17 @@ const welcomeText = computed(() => {
  */
 const chatSessionClickHandler = (item) => {
     if (currentChatSession.value.contactId == item.contactId) {
+        const shouldLoadMessages = !currentChatSession.value.sessionId && item.sessionId;
+        currentChatSession.value = Object.assign({}, currentChatSession.value, item);
+        if (shouldLoadMessages) {
+            messageList.value = [];
+            messageCountInfo.totalPage = 1;
+            messageCountInfo.pageNo = 0;
+            messageCountInfo.maxMessageId = 0;
+            messageCountInfo.noData = false;
+            shouldScrollToBottomAfterLoad = true;
+            loadChatMessage();
+        }
         return;
     }
 
@@ -303,6 +481,11 @@ const chatSessionClickHandler = (item) => {
  * 返回位置：onLoadChatMessage 监听 loadChatMessageCallback。
  */
 const loadChatMessage = () => {
+    if (!currentChatSession.value.sessionId) {
+        messageCountInfo.noData = true;
+        messagePanelPhase.value = 'ready';
+        return;
+    }
     if (messageCountInfo.noData) {
         return;
     }
@@ -535,6 +718,21 @@ const isFileMessage = (message) => {
     return Number(message?.messageType) === 5 && Number(message?.fileType) === 2;
 };
 
+const getFileMessageName = (message) => {
+    return message?.fileName || message?.messageContent || `file-${message?.messageId || ''}`;
+};
+
+const isFileReceiveDisabled = (message) => {
+    return !isFileMessage(message) || message?.status == 0 || message?.uploading;
+};
+
+const getFileMessageStatusText = (message) => {
+    if (message?.uploading || message?.status == 0) {
+        return '\u4e0a\u4f20\u4e2d';
+    }
+    return '\u672a\u4e0b\u8f7d';
+};
+
 const formatFileSize = (size = 0) => {
     if (!size) {
         return '';
@@ -667,9 +865,35 @@ const uploadImageMessageFile = async (message, file, cover) => {
     loadChatSession();
 };
 
+const openFilePreviewDialog = (message) => {
+    if (!isFileMessage(message)) {
+        return;
+    }
+    selectedFileMessage.value = message;
+    showFilePreviewDialog.value = true;
+};
+
+const closeFilePreviewDialog = () => {
+    selectedFileMessage.value = null;
+    isReceivingFile.value = false;
+};
+
+const receiveSelectedFileMessage = async () => {
+    if (!selectedFileMessage.value || isFileReceiveDisabled(selectedFileMessage.value)) {
+        return;
+    }
+
+    isReceivingFile.value = true;
+    const isDownloaded = await downloadFileMessage(selectedFileMessage.value);
+    isReceivingFile.value = false;
+    if (isDownloaded) {
+        showFilePreviewDialog.value = false;
+    }
+};
+
 const downloadFileMessage = async (message) => {
     if (!isFileMessage(message) || message.status == 0) {
-        return;
+        return false;
     }
 
     const blob = await proxy.Request({
@@ -683,7 +907,7 @@ const downloadFileMessage = async (message) => {
     });
 
     if (!blob) {
-        return;
+        return false;
     }
 
     const objectUrl = URL.createObjectURL(blob);
@@ -696,6 +920,7 @@ const downloadFileMessage = async (message) => {
     setTimeout(() => {
         URL.revokeObjectURL(objectUrl);
     }, 1000);
+    return true;
 };
 
 /**
@@ -783,9 +1008,11 @@ const onReceiveMessage = () => {
  */
 const onLoadSessionData = () => {
     // 主进程加载完本地会话列表后，通过 loadSessionDataCallback 回传。
-    window.ipcRenderer.on('loadSessionDataCallback', (e, dataList) => {
-        sortChatSessionList(dataList);
-        chatSessionList.value = dataList || [];
+    window.ipcRenderer.on('loadSessionDataCallback', async (e, dataList) => {
+        const hydratedList = await hydrateSessionList(dataList || []);
+        sortChatSessionList(hydratedList);
+        chatSessionList.value = hydratedList;
+        openChatFromRoute();
     });
 };
 
@@ -866,7 +1093,15 @@ onMounted(() => {
     onLoadSessionData();
     onLoadChatMessage();
     loadChatSession();
+    openChatFromRoute();
 });
+
+watch(
+    () => [route.query.type, route.query.chatId],
+    () => {
+        openChatFromRoute();
+    }
+);
 
 /**
  * 页面卸载时清理 IPC 监听。
@@ -894,6 +1129,12 @@ onUnmounted(() => {
 </script>
 
 <style lang="scss" scoped>
+:deep(.right-content) {
+    padding-top: 0;
+    padding-right: 0;
+    background: #f5f5f5;
+}
+
 .chat-list-header {
     padding: 16px;
     font-size: 18px;
@@ -910,7 +1151,7 @@ onUnmounted(() => {
 
 .title-panel {
     height: 60px;
-    padding: 0 72px 0 24px;
+    padding: 0 58px 0 24px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -948,7 +1189,7 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-    padding: 20px 24px;
+    padding: 20px 28px 16px;
     scroll-behavior: auto;
     overscroll-behavior: contain;
     overflow-anchor: none;
@@ -964,7 +1205,7 @@ onUnmounted(() => {
     min-height: 100%;
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
+    justify-content: flex-start;
 }
 
 .message-panel-entering .message-panel-content {
@@ -985,7 +1226,7 @@ onUnmounted(() => {
 .message-row {
     flex-shrink: 0;
     display: flex;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
     align-items: flex-start;
 }
 
@@ -1003,7 +1244,7 @@ onUnmounted(() => {
 }
 
 .message-body {
-    max-width: min(72%, 560px);
+    max-width: min(68%, 560px);
     margin: 0 10px;
 }
 
@@ -1014,14 +1255,14 @@ onUnmounted(() => {
 .message-nick {
     font-size: 12px;
     color: #999;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
     padding-left: 2px;
     line-height: 1.4;
 }
 
 .message-item {
     display: inline-block;
-    padding: 10px 14px;
+    padding: 9px 13px;
     border-radius: 4px;
     background: #ffffff;
     color: #333;
@@ -1066,12 +1307,12 @@ onUnmounted(() => {
 }
 
 :deep(.send-panel) {
-    height: 220px;
-    min-height: 220px;
+    height: 180px;
+    min-height: 180px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    padding: 10px 18px 14px;
+    padding: 10px 18px 10px;
     box-sizing: border-box;
     overflow: hidden;
     background: #fff;
@@ -1082,7 +1323,7 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
     gap: 16px;
-    height: 30px;
+    height: 28px;
     flex-shrink: 0;
     color: #666;
 }
@@ -1112,7 +1353,7 @@ onUnmounted(() => {
 :deep(.input-area) {
     flex: 1;
     min-height: 0;
-    padding-top: 8px;
+    padding-top: 6px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1121,12 +1362,12 @@ onUnmounted(() => {
 :deep(.input-area .el-textarea) {
     flex: 1;
     height: auto;
-    min-height: 44px;
+    min-height: 42px;
 }
 
 :deep(.input-area .el-textarea__inner) {
     height: 100%;
-    min-height: 44px;
+    min-height: 42px;
     padding: 0;
     border: none;
     border-radius: 0;
@@ -1142,7 +1383,7 @@ onUnmounted(() => {
     justify-content: flex-end;
     align-items: center;
     flex-shrink: 0;
-    padding-top: 8px;
+    padding-top: 6px;
 }
 
 :deep(.send-btn) {
@@ -1202,21 +1443,34 @@ onUnmounted(() => {
 }
 
 .file-message-card {
-    width: 260px;
-    min-height: 74px;
+    width: 264px;
+    min-height: 114px;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px;
+    flex-direction: column;
     border-radius: 4px;
     background: #fff;
-    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03);
     cursor: pointer;
     box-sizing: border-box;
+    overflow: hidden;
+    text-align: left;
+    transition: background 0.12s ease;
+
+    &:hover {
+        background: #fbfbfb;
+    }
 }
 
 .file-message-card-self {
-    background: #95ec69;
+    background: #fff;
+}
+
+.file-message-main {
+    min-height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 12px 10px;
 }
 
 .file-message-info {
@@ -1229,30 +1483,195 @@ onUnmounted(() => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #222;
+    color: #111;
     font-size: 14px;
-    line-height: 20px;
+    line-height: 22px;
 }
 
 .file-message-meta {
-    margin-top: 6px;
-    color: #8a8a8a;
+    margin-top: 4px;
+    color: #999;
     font-size: 12px;
     line-height: 16px;
+
+    span {
+        margin-left: 6px;
+    }
 }
 
 .file-message-icon {
-    width: 42px;
+    position: relative;
+    width: 40px;
     height: 48px;
-    flex: 0 0 42px;
+    flex: 0 0 40px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 3px;
-    border: 1px solid #dedede;
-    background: #f7f7f7;
-    color: #666;
-    font-size: 10px;
-    font-weight: 600;
+    border-radius: 4px;
+    background: #d9dee8;
+    color: #7688aa;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.file-message-icon::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 0 4px 0 3px;
+    background: linear-gradient(135deg, #eef2f8 0 50%, #c8cfdb 50% 100%);
+}
+
+.file-message-icon span {
+    position: relative;
+    z-index: 1;
+}
+
+.file-message-source {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 12px;
+    border-top: 1px solid #ededed;
+    color: #9a9a9a;
+    font-size: 12px;
+}
+
+.file-message-source-icon {
+    position: relative;
+    width: 14px;
+    height: 12px;
+    border-radius: 7px;
+    background: #1aad19;
+    flex: 0 0 14px;
+}
+
+.file-message-source-icon::after {
+    content: '';
+    position: absolute;
+    right: -3px;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #8bd85f;
+    border: 1px solid #fff;
+}
+
+:deep(.file-preview-dialog) {
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 18px 56px rgba(0, 0, 0, 0.24);
+    -webkit-app-region: no-drag;
+}
+
+:deep(.file-preview-dialog .el-dialog__header) {
+    height: 44px;
+    padding: 0;
+    margin: 0;
+}
+
+:deep(.file-preview-dialog .el-dialog__headerbtn) {
+    top: 12px;
+    right: 18px;
+    width: 24px;
+    height: 24px;
+    font-size: 18px;
+}
+
+:deep(.file-preview-dialog .el-dialog__body) {
+    padding: 0;
+}
+
+.file-preview-panel {
+    min-height: 455px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 34px 48px 56px;
+    background: #fff;
+    color: #111;
+    text-align: center;
+}
+
+.file-preview-icon {
+    position: relative;
+    width: 60px;
+    height: 74px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: #d9dee8;
+    color: #7688aa;
+    font-size: 28px;
+    font-weight: 700;
+}
+
+.file-preview-icon::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 0 6px 0 4px;
+    background: linear-gradient(135deg, #eef2f8 0 50%, #c8cfdb 50% 100%);
+}
+
+.file-preview-icon span {
+    position: relative;
+    z-index: 1;
+}
+
+.file-preview-name {
+    max-width: 520px;
+    margin-top: 28px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 18px;
+    line-height: 28px;
+    color: #111;
+}
+
+.file-preview-size {
+    margin-top: 66px;
+    font-size: 14px;
+    line-height: 20px;
+    color: #222;
+}
+
+.file-preview-action {
+    width: 142px;
+    height: 38px;
+    margin-top: 40px;
+    border: none;
+    border-radius: 4px;
+    background: #07c160;
+    color: #fff;
+    font-size: 16px;
+    line-height: 38px;
+    cursor: pointer;
+}
+
+.file-preview-action:hover {
+    background: #06ad56;
+}
+
+.file-preview-action:disabled {
+    background: #b8e8ca;
+    cursor: not-allowed;
+}
+
+.file-preview-expire {
+    margin-top: 12px;
+    font-size: 13px;
+    line-height: 18px;
+    color: #8a8a8a;
 }
 </style>

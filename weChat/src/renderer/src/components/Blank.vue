@@ -4,11 +4,18 @@
             <el-icon class="blank-icon">
                 <ChatDotRound />
             </el-icon>
+            <div class="blank-text" v-if="text">{{ text }}</div>
         </div>
     </div>
 </template>
 
 <script setup>
+defineProps({
+    text: {
+        type: String,
+        default: ''
+    }
+});
 </script>
 
 <style lang="scss" scoped>
@@ -23,6 +30,7 @@
     flex: 1;
     min-height: 0;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
 }
@@ -36,5 +44,10 @@
     color: #ddd;
 }
 
+.blank-text {
+    margin-top: 12px;
+    font-size: 14px;
+    color: #aaa;
+}
 
 </style>

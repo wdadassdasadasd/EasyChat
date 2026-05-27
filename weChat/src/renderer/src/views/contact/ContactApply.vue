@@ -1,37 +1,39 @@
 <template>
-    <ContactPanel :showTopBorder="true" :infinite-scroll-immediate="false" v-infinite-scroll="loadApply">
-        <div>
+    <ContactPanel class="apply-panel" :showTopBorder="true" :infinite-scroll-immediate="false" v-infinite-scroll="loadApply">
+        <div class="apply-list" v-if="applyList.length > 0">
             <div class="apply-item" v-for="item in applyList" :key="item.applyId">
-                <div :class="['contactType',item.contactType==0?'user-contact':'']">
-                    {{ item.contactType==0?'好友':'群' }}
-                </div>
-                <Avatar :width="50" :userId="item.userId"></Avatar>
+                <Avatar :width="48" :borderRadius="4" :userId="getApplyAvatarId(item)"></Avatar>
                 <div class="contact-info">
-                    <div class="nick-name">{{ item.contactName }}</div>
-                    <div class="apply-info">{{ item.applyInfo }}</div>
-                 </div>
-                <div class="op-btn">
-                    <div v-if="item.status==0">
-                        <el-dropdown placement="bottom" trigger="hover">
-                        <span class="el-dropdown-link">
-                            <el-button type="primary" size="small">接受</el-button>
+                    <div class="name-row">
+                        <span class="nick-name">{{ item.contactName }}</span>
+                        <span :class="['contact-type', item.contactType==0?'user-contact':'group-contact']">
+                            {{ item.contactType==0?'好友':'群聊' }}
                         </span>
-                        <template #dropdown>
-                            <el-dropdown-menu>
-                                <el-dropdown-item @click="dealWithApply(item.applyId,item.contactType,1)">同意</el-dropdown-item>
-                                <el-dropdown-item @click="dealWithApply(item.applyId,item.contactType,2)">拒绝</el-dropdown-item>
-                                <el-dropdown-item @click="dealWithApply(item.applyId,item.contactType,3)">拉黑</el-dropdown-item>
-                            </el-dropdown-menu>
-                        </template>
+                    </div>
+                    <div class="apply-info">{{ item.applyInfo || '请求添加你为好友' }}</div>
+                </div>
+                <div class="op-btn">
+                    <template v-if="item.status==0">
+                        <el-dropdown placement="bottom" trigger="hover">
+                            <span class="el-dropdown-link">
+                                <el-button type="primary" size="small">接受</el-button>
+                            </span>
+                            <template #dropdown>
+                                <el-dropdown-menu>
+                                    <el-dropdown-item @click="dealWithApply(item.applyId,item.contactType,1)">同意</el-dropdown-item>
+                                    <el-dropdown-item @click="dealWithApply(item.applyId,item.contactType,2)">拒绝</el-dropdown-item>
+                                    <el-dropdown-item @click="dealWithApply(item.applyId,item.contactType,3)">拉黑</el-dropdown-item>
+                                </el-dropdown-menu>
+                            </template>
                         </el-dropdown>
-                    </div>
-                    <div v-else class="result-name">
-                        {{ item.statusName }}
-                    </div>
+                    </template>
+                    <template v-else>
+                        <span class="result-name">{{ item.statusName }}</span>
+                    </template>
                 </div>
             </div>
         </div>
-        <div v-if="applyList.length==0" class="no-data">暂无申请</div>
+        <Blank v-else text="暂无申请"></Blank>
     </ContactPanel>
 </template>
 
@@ -39,6 +41,7 @@
 
 import { ref, getCurrentInstance } from 'vue';
 import {useContactStateStore} from '../../stores/ContactStateStore';
+import Blank from '../../components/Blank.vue';
 
 const { proxy } = getCurrentInstance();
 const contactStateStore = useContactStateStore();
@@ -61,6 +64,7 @@ const loadFriendContactIds = async () => {
 }
 
 const getApplyUserId = (item) => item.applyUserId || item.userId || item.contactId;
+const getApplyAvatarId = (item) => item.contactType == 0 ? getApplyUserId(item) : item.contactId;
 
 const filterHandledFriendApply = (list = []) => {
     return list.filter((item) => {
@@ -137,4 +141,87 @@ const dealWithApply = async (applyId,contactType,status) => {
 </script>
 
 <style lang="scss" scoped>
+.apply-panel {
+    :deep(.content-inner) {
+        width: min(680px, calc(100% - 48px));
+        padding-top: 18px;
+    }
+
+    :deep(.blank-page) {
+        height: calc(100vh - 130px);
+    }
+}
+
+.apply-list {
+    color: #1f2329;
+}
+
+.apply-item {
+    display: flex;
+    align-items: center;
+    min-height: 78px;
+    gap: 14px;
+    border-bottom: 1px solid #dedede;
+}
+
+.contact-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.nick-name {
+    font-size: 16px;
+    line-height: 22px;
+    color: #111;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.contact-type {
+    flex-shrink: 0;
+    height: 18px;
+    line-height: 18px;
+    padding: 0 6px;
+    border-radius: 3px;
+    font-size: 12px;
+    color: #fff;
+    background: #4c9aff;
+
+    &.user-contact {
+        background: #07c160;
+    }
+
+    &.group-contact {
+        background: #4c9aff;
+    }
+}
+
+.apply-info {
+    margin-top: 5px;
+    font-size: 13px;
+    line-height: 18px;
+    color: #8c8c8c;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.op-btn {
+    flex-shrink: 0;
+    min-width: 86px;
+    text-align: right;
+}
+
+.result-name {
+    font-size: 14px;
+    color: #8c8c8c;
+}
 </style>

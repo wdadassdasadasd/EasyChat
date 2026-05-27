@@ -13,10 +13,8 @@
 
 
 <script setup>
-import { ref, computed, getCurrentInstance } from 'vue';
+import { ref, nextTick } from 'vue';
 import GroupEditForm from './GroupEditForm.vue';
-import { de } from 'element-plus/es/locales.mjs';
-const {proxy} = getCurrentInstance();
 const groupEditRef=ref();
 const dialogConfig=ref({
     show:false,
@@ -33,7 +31,7 @@ const show=(data)=>{
     })
 }
 const emit=defineEmits(['reloadGroupInfo']);
-const emitback=()=>{
+const editBack=()=>{
     dialogConfig.value.show=false;
     emit('reloadGroupInfo');
 }

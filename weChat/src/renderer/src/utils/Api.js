@@ -12,7 +12,7 @@ const api={
     saveGroup:"/group/saveGroup",
     getGroupInfo:"/group/getGroupInfo",
     getGroupInfo4Chat:"/group/getGroupInfo4Chat",
-    dissoulutionGroup:"/group/dissolutionGroup",
+    dissolutionGroup:"/group/dissolutionGroup",
     leaveGroup:"/group/leaveGroup",
     addOrRemoveGroupUser:"/group/addOrRemoveGroupUser",
     search:"/contact/search",
