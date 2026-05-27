@@ -47,6 +47,13 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
         messageCountInfo.noData = false;
     };
 
+    const clearCurrentMessages = () => {
+        messageList.value = [];
+        resetMessageCountInfo();
+        messageCountInfo.noData = true;
+        markMessagePanelReady();
+    };
+
     const loadChatMessage = () => {
         if (!currentChatSession.value.sessionId) {
             messageCountInfo.noData = true;
@@ -161,6 +168,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
     return {
         chatSessionClickHandler,
         cleanupChatMessages,
+        clearCurrentMessages,
         clearInitialBottomLock,
         loadChatMessage,
         messageList,

@@ -3,7 +3,7 @@ import {initWs} from './wsClient.js'
 import store from './store.js'
 import { addUserSetting } from './db/UserSettingModel.js';
 import { selectUserSessionList,delChatSession,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
-import { selectMessageList, saveMessage } from './db/ChatMessageModel.js';
+import { clearMessageBySessionId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
 const Node_ENV=process.env.NODE_ENV;
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister=(mainWindow, callback)=>{
@@ -118,6 +118,16 @@ const onSaveSendMessage = () => {
         });
     });
 };
+
+const onClearChatMessage = () => {
+    ipcMain.on('clearChatMessage', async (e, { sessionId } = {}) => {
+        await clearMessageBySessionId(sessionId);
+        e.sender.send('clearChatMessageCallback', {
+            success: true,
+            sessionId
+        });
+    });
+};
 export {
     onLoginOnRegister,
     onLoginSuccess,
@@ -128,5 +138,6 @@ export {
     onDelChatSession,
     onTopChatSession,
     onLoadChatMessage,
-    onSaveSendMessage
+    onSaveSendMessage,
+    onClearChatMessage
 };

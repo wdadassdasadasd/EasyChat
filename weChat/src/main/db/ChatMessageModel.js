@@ -122,10 +122,20 @@ const selectMesssageList = (query = {}) => {
     });
 };
 
+const clearMessageBySessionId = (sessionId) => {
+    if (!sessionId) {
+        return Promise.resolve(0);
+    }
+
+    const sql = 'delete from chat_message where user_id=? and session_id=?';
+    return run(sql, [store.getUserId(), sessionId]);
+};
+
 export {
     saveMessage,
     saveMessageBatch,
     updateMessageStatus,
     selectMesssageList,
-    selectMesssageList as selectMessageList
+    selectMesssageList as selectMessageList,
+    clearMessageBySessionId
 }

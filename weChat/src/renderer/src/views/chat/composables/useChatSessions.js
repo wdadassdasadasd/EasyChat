@@ -182,10 +182,22 @@ export const useChatSessions = ({ proxy, route }) => {
         window.ipcRenderer.removeAllListeners('loadSessionDataCallback');
     };
 
-    const setTop = (data) => {
-        data.topType = data.topType == 0 ? 1 : 0;
+    const setChatSessionTop = (contactId, topType) => {
+        const session = chatSessionList.value.find((item) => item.contactId == contactId);
+        if (session) {
+            session.topType = topType;
+        }
+        if (currentChatSession.value.contactId == contactId) {
+            currentChatSession.value = Object.assign({}, currentChatSession.value, {
+                topType
+            });
+        }
         sortChatSessionList(chatSessionList.value);
-        window.ipcRenderer.send('topChatSession', { contactId: data.contactId, topType: data.topType });
+        window.ipcRenderer.send('topChatSession', { contactId, topType });
+    };
+
+    const setTop = (data) => {
+        setChatSessionTop(data.contactId, data.topType == 0 ? 1 : 0);
     };
 
     const delChatSession = (contactId) => {
@@ -231,6 +243,7 @@ export const useChatSessions = ({ proxy, route }) => {
         openChatFromRoute,
         registerSessionListener,
         removeSessionListener,
+        setChatSessionTop,
         setSessionSelector,
         welcomeText
     };

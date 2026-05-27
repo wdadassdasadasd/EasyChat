@@ -15,6 +15,7 @@
                         :message="data"
                         :currentChatSession="currentChatSession"
                         :currentUserId="currentUserId"
+                        :showGroupMemberNick="showGroupMemberNick"
                         @imageLoaded="$emit('imageLoaded')"
                         @openFilePreview="$emit('openFilePreview', $event)"
                     />
@@ -48,6 +49,10 @@ defineProps({
     messagePanelPhase: {
         type: String,
         default: 'ready'
+    },
+    showGroupMemberNick: {
+        type: Boolean,
+        default: true
     },
     welcomeText: {
         type: String,

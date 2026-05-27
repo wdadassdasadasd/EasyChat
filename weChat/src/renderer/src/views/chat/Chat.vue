@@ -43,23 +43,35 @@
                     </div>
                 </div>
 
-                <ChatMessageList
-                    :messageList="messageList"
-                    :currentChatSession="currentChatSession"
-                    :currentUserId="currentUserId"
-                    :messagePanelPhase="messagePanelPhase"
-                    :welcomeText="welcomeText"
-                    @imageLoaded="settleScrollToBottom"
-                    @openFilePreview="openFilePreviewDialog"
-                    @userScroll="clearInitialBottomLock"
-                />
+                <div class="chat-workspace">
+                    <div class="chat-content">
+                        <ChatMessageList
+                            :messageList="messageList"
+                            :currentChatSession="currentChatSession"
+                            :currentUserId="currentUserId"
+                            :messagePanelPhase="messagePanelPhase"
+                            :showGroupMemberNick="showGroupMemberNick"
+                            :welcomeText="welcomeText"
+                            @imageLoaded="settleScrollToBottom"
+                            @openFilePreview="openFilePreviewDialog"
+                            @userScroll="clearInitialBottomLock"
+                        />
 
-                <MessageSend
-                    :currentChatSession="currentChatSession"
-                    @sendMessage="onSendChatMessage"
-                    @sendImageMessage="onSendImageMessage"
-                    @sendFileMessage="onSendFileMessage"
-                />
+                        <MessageSend
+                            :currentChatSession="currentChatSession"
+                            @sendMessage="onSendChatMessage"
+                            @sendImageMessage="onSendImageMessage"
+                            @sendFileMessage="onSendFileMessage"
+                        />
+                    </div>
+                    <GroupChatDrawer
+                        v-model="groupDetailVisible"
+                        :currentChatSession="currentChatSession"
+                        v-model:showGroupMemberNick="showGroupMemberNick"
+                        @toggleTop="handleToggleTop"
+                        @clearMessages="handleClearMessages"
+                    />
+                </div>
             </template>
 
             <div class="chat-empty chat-empty-default" v-else>
@@ -86,6 +98,7 @@ import { useRoute } from 'vue-router';
 import ChatMessageList from '@/components/chat/ChatMessageList.vue';
 import ChatSession from '@/components/chat/ChatSession.vue';
 import FilePreviewDialog from '@/components/chat/FilePreviewDialog.vue';
+import GroupChatDrawer from '@/components/chat/GroupChatDrawer.vue';
 import MessageSend from '@/components/chat/MessageSend.vue';
 import { useUserInfoStore } from '@/stores/userInfoStore';
 import { useChatMessages } from './composables/useChatMessages';
@@ -96,6 +109,8 @@ const { proxy } = getCurrentInstance();
 const route = useRoute();
 const userInfoStore = useUserInfoStore();
 const searchKey = ref();
+const groupDetailVisible = ref(false);
+const showGroupMemberNick = ref(true);
 
 const search = () => {};
 
@@ -109,6 +124,7 @@ const {
     openChatFromRoute,
     registerSessionListener,
     removeSessionListener,
+    setChatSessionTop,
     setSessionSelector,
     welcomeText
 } = useChatSessions({ proxy, route });
@@ -116,6 +132,7 @@ const {
 const {
     chatSessionClickHandler,
     cleanupChatMessages,
+    clearCurrentMessages,
     clearInitialBottomLock,
     messageList,
     messagePanelPhase,
@@ -143,7 +160,41 @@ const currentUserId = computed(() => {
     return userInfoStore.getInfo()?.userId;
 });
 
-const shwGroupDetail = () => {};
+const shwGroupDetail = () => {
+    if (currentChatSession.value.contactType != 1) {
+        groupDetailVisible.value = false;
+        return;
+    }
+    groupDetailVisible.value = !groupDetailVisible.value;
+};
+
+const handleToggleTop = (isTop) => {
+    if (!currentChatSession.value.contactId) {
+        return;
+    }
+    setChatSessionTop(currentChatSession.value.contactId, isTop ? 1 : 0);
+};
+
+const handleClearMessages = () => {
+    if (!currentChatSession.value.sessionId) {
+        clearCurrentMessages();
+        return;
+    }
+
+    proxy.Confirm({
+        message: '确认清空聊天记录吗？',
+        okfun: () => {
+            const sessionId = currentChatSession.value.sessionId;
+            window.ipcRenderer.once('clearChatMessageCallback', (e, data) => {
+                if (data?.success && data.sessionId === sessionId) {
+                    clearCurrentMessages();
+                    proxy.Message.success('聊天记录已清空');
+                }
+            });
+            window.ipcRenderer.send('clearChatMessage', { sessionId });
+        }
+    });
+};
 
 setSessionSelector(chatSessionClickHandler);
 
@@ -161,7 +212,15 @@ watch(
     }
 );
 
+watch(
+    () => `${currentChatSession.value.contactId || ''}_${currentChatSession.value.contactType || ''}`,
+    () => {
+        groupDetailVisible.value = false;
+    }
+);
+
 onUnmounted(() => {
+    groupDetailVisible.value = false;
     removeSessionListener();
     cleanupChatMessages();
 });
@@ -229,6 +288,21 @@ onUnmounted(() => {
         background: #e7e7e7;
         color: #333;
     }
+}
+
+.chat-workspace {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    background: #f5f5f5;
+}
+
+.chat-content {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .chat-empty {

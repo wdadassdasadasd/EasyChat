@@ -9,7 +9,7 @@
         />
         <div :class="['message-body', isSelf ? 'message-body-self' : '']">
             <div
-                v-if="currentChatSession.contactType == 1 && !isSelf"
+                v-if="currentChatSession.contactType == 1 && !isSelf && showGroupMemberNick"
                 class="message-nick"
             >{{ message.sendUserNickName }}</div>
             <div :class="['message-item', isSelf ? 'message-item-self' : '', Utils.isImageMessage(message) ? 'message-item-image' : '', Utils.isFileMessage(message) ? 'message-item-file' : '']">
@@ -58,6 +58,10 @@ const props = defineProps({
     message: {
         type: Object,
         default: () => ({})
+    },
+    showGroupMemberNick: {
+        type: Boolean,
+        default: true
     }
 });
 
