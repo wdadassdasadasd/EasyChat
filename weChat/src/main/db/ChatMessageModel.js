@@ -131,11 +131,37 @@ const clearMessageBySessionId = (sessionId) => {
     return run(sql, [store.getUserId(), sessionId]);
 };
 
+const escapeLikeKeyword = (keyword = '') => {
+    return String(keyword).replace(/[\\%_]/g, (match) => `\\${match}`);
+};
+
+const searchMessageBySessionId = ({ sessionId, keyword } = {}) => {
+    return new Promise(async (resolve) => {
+        const searchKey = String(keyword || '').trim();
+        if (!sessionId || !searchKey) {
+            resolve([]);
+            return;
+        }
+
+        const likeKeyword = `%${escapeLikeKeyword(searchKey)}%`;
+        const sql = [
+            'select * from chat_message',
+            'where user_id=? and session_id=?',
+            'and (message_content like ? escape \'\\\' or file_name like ? escape \'\\\')',
+            'order by message_id desc limit 50'
+        ].join(' ');
+
+        const dataList = await queryAll(sql, [store.getUserId(), sessionId, likeKeyword, likeKeyword]);
+        resolve(dataList || []);
+    });
+};
+
 export {
     saveMessage,
     saveMessageBatch,
     updateMessageStatus,
     selectMesssageList,
     selectMesssageList as selectMessageList,
-    clearMessageBySessionId
+    clearMessageBySessionId,
+    searchMessageBySessionId
 }

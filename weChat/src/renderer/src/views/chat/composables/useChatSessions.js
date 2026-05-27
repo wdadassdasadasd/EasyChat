@@ -196,6 +196,21 @@ export const useChatSessions = ({ proxy, route }) => {
         window.ipcRenderer.send('topChatSession', { contactId, topType });
     };
 
+    const updateCurrentChatSession = (sessionInfo = {}) => {
+        if (!sessionInfo.contactId) {
+            return;
+        }
+
+        const session = chatSessionList.value.find((item) => item.contactId == sessionInfo.contactId);
+        if (session) {
+            Object.assign(session, sessionInfo);
+        }
+        if (currentChatSession.value.contactId == sessionInfo.contactId) {
+            currentChatSession.value = Object.assign({}, currentChatSession.value, sessionInfo);
+        }
+        sortChatSessionList(chatSessionList.value);
+    };
+
     const setTop = (data) => {
         setChatSessionTop(data.contactId, data.topType == 0 ? 1 : 0);
     };
@@ -245,6 +260,7 @@ export const useChatSessions = ({ proxy, route }) => {
         removeSessionListener,
         setChatSessionTop,
         setSessionSelector,
+        updateCurrentChatSession,
         welcomeText
     };
 };

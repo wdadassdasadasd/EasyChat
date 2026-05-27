@@ -48,6 +48,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
     };
 
     const clearCurrentMessages = () => {
+        startMessagePanelRender();
         messageList.value = [];
         resetMessageCountInfo();
         messageCountInfo.noData = true;

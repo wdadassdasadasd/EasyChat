@@ -3,7 +3,7 @@ import {initWs} from './wsClient.js'
 import store from './store.js'
 import { addUserSetting } from './db/UserSettingModel.js';
 import { selectUserSessionList,delChatSession,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
-import { clearMessageBySessionId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
+import { clearMessageBySessionId, searchMessageBySessionId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
 const Node_ENV=process.env.NODE_ENV;
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister=(mainWindow, callback)=>{
@@ -121,10 +121,30 @@ const onSaveSendMessage = () => {
 
 const onClearChatMessage = () => {
     ipcMain.on('clearChatMessage', async (e, { sessionId } = {}) => {
-        await clearMessageBySessionId(sessionId);
-        e.sender.send('clearChatMessageCallback', {
-            success: true,
-            sessionId
+        try {
+            await clearMessageBySessionId(sessionId);
+            e.sender.send('clearChatMessageCallback', {
+                success: true,
+                sessionId
+            });
+        } catch (error) {
+            e.sender.send('clearChatMessageCallback', {
+                success: false,
+                sessionId,
+                error: error?.message || String(error)
+            });
+        }
+    });
+};
+
+const onSearchChatMessage = () => {
+    ipcMain.on('searchChatMessage', async (e, data = {}) => {
+        const dataList = await searchMessageBySessionId(data);
+        e.sender.send('searchChatMessageCallback', {
+            sessionId: data.sessionId,
+            keyword: data.keyword,
+            searchSeq: data.searchSeq,
+            dataList
         });
     });
 };
@@ -139,5 +159,6 @@ export {
     onTopChatSession,
     onLoadChatMessage,
     onSaveSendMessage,
-    onClearChatMessage
+    onClearChatMessage,
+    onSearchChatMessage
 };

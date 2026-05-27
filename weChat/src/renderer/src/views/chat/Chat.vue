@@ -69,6 +69,7 @@
                         v-model:showGroupMemberNick="showGroupMemberNick"
                         @toggleTop="handleToggleTop"
                         @clearMessages="handleClearMessages"
+                        @groupUpdated="handleGroupUpdated"
                     />
                     <UserChatDrawer
                         v-model="userDetailVisible"
@@ -133,6 +134,7 @@ const {
     removeSessionListener,
     setChatSessionTop,
     setSessionSelector,
+    updateCurrentChatSession,
     welcomeText
 } = useChatSessions({ proxy, route });
 
@@ -191,6 +193,10 @@ const handleToggleTop = (isTop) => {
     setChatSessionTop(currentChatSession.value.contactId, isTop ? 1 : 0);
 };
 
+const handleGroupUpdated = (sessionInfo) => {
+    updateCurrentChatSession(sessionInfo);
+};
+
 const handleClearMessages = () => {
     if (!currentChatSession.value.sessionId) {
         clearCurrentMessages();
@@ -205,6 +211,10 @@ const handleClearMessages = () => {
                 if (data?.success && data.sessionId === sessionId) {
                     clearCurrentMessages();
                     proxy.Message.success('聊天记录已清空');
+                    return;
+                }
+                if (data?.sessionId === sessionId) {
+                    proxy.Message.error('清空聊天记录失败');
                 }
             });
             window.ipcRenderer.send('clearChatMessage', { sessionId });
