@@ -28,10 +28,59 @@ const formData=(timestamp)=>{
 
 }
 
+const formatFileSize = (size = 0, options = {}) => {
+    const { emptyForZero = false } = options;
+
+    if (!size) {
+        return emptyForZero ? '' : '0 B';
+    }
+    if (size < 1024) {
+        return `${size} B`;
+    }
+    if (size < 1024 * 1024) {
+        return `${(size / 1024).toFixed(1)} KB`;
+    }
+    return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const isImageMessage = (message) => {
+    return Number(message?.messageType) === 5 && Number(message?.fileType) === 0;
+}
+
+const isFileMessage = (message) => {
+    return Number(message?.messageType) === 5 && Number(message?.fileType) === 2;
+}
+
+const isSelfMessage = (message, currentUserId) => {
+    return message?.sendUserId == currentUserId;
+}
+
+const getFileMessageName = (message) => {
+    return message?.fileName || message?.messageContent || `file-${message?.messageId || ''}`;
+}
+
+const isFileReceiveDisabled = (message) => {
+    return !isFileMessage(message) || message?.status == 0 || message?.uploading;
+}
+
+const getFileMessageStatusText = (message) => {
+    if (message?.uploading || message?.status == 0) {
+        return '上传中';
+    }
+    return '未下载';
+}
+
 
 
 export  default{
     isEmpty,
     getAreaInfo,
-    formData
+    formData,
+    formatFileSize,
+    getFileMessageName,
+    getFileMessageStatusText,
+    isFileMessage,
+    isFileReceiveDisabled,
+    isImageMessage,
+    isSelfMessage
 }

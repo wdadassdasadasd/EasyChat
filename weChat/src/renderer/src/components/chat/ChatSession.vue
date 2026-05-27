@@ -1,21 +1,14 @@
 <template>
-    <!-- 左侧会话列表的一项：头像、会话名、最后消息、时间、群/置顶标记。 -->
     <div :class="['chat-session-item', currentSession ? 'active' : '']">
-        <!-- contactId 可以是好友 ID，也可以是群 ID，用它加载头像。 -->
         <AvatarBase :userId="data.contactId" :width="45" :borderRadius="4"></AvatarBase>
         <div class="user-info">
             <div class="user-panel">
-                <!-- contactName 是会话名称：单聊显示好友名，群聊显示群名。 -->
                 <div class="user-name">{{ data.contactName }}</div>
-                <!-- lastReceiveTime 是最后一条消息时间，用工具方法格式化展示。 -->
                 <div class="message-time">{{ proxy.Utils.formData(data.lastReceiveTime) }}</div>
             </div>
-            <!-- lastMessage 是左侧会话预览内容；这里用 v-html 是为了兼容表情/富文本片段。 -->
             <div class="last-message" v-html="data.lastMessage"></div>
         </div>
-        <!-- contactType == 1 表示群聊。 -->
         <div class="contact-tag" v-if="data.contactType==1">群</div>
-        <!-- topType == 1 表示这个会话已置顶。 -->
         <el-icon class="chat-top" v-if="data.topType==1">
             <Top />
         </el-icon>
@@ -23,13 +16,12 @@
 </template>
 
 <script setup>
-import { ref, getCurrentInstance } from 'vue';
+import { getCurrentInstance } from 'vue';
 import AvatarBase from '@/components/AvatarBase.vue';
 
 const { proxy } = getCurrentInstance();
 
-// data 是一条会话记录；currentSession 表示它是否是当前选中的会话。
-const props = defineProps({
+defineProps({
     data: {
         type: Object,
         default: () => ({})

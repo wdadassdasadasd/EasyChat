@@ -39,7 +39,7 @@
                         title="表情"
                         @click.stop="showEmojiPopoverHandler"
                     >
-                        <img src="../../assets/icons/laugh.svg" alt="表情" />
+                        <img src="@/assets/icons/laugh.svg" alt="表情" />
                     </button>
                 </template>
             </el-popover>
@@ -139,9 +139,9 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue';
-import { ElMessage } from 'element-plus';
-import emojiList from '../../utils/Emoji';
+import { ref, toRef } from 'vue';
+import emojiList from '@/utils/Emoji';
+import { useMessageComposer } from '@/views/chat/composables/useMessageSender';
 
 const props = defineProps({
     currentChatSession: {
@@ -153,260 +153,31 @@ const props = defineProps({
 const emit = defineEmits(['sendMessage', 'sendImageMessage', 'sendFileMessage']);
 
 const activeEmoji = ref(emojiList[0]?.name || '');
-const msgContent = ref('');
-const showEmojiPopover = ref(false);
-const showSendMessagePopover = ref(false);
-const uploadRef = ref();
-const fileLimit = 9;
-const pendingImageList = ref([]);
-const pendingFileList = ref([]);
-
-const canSend = computed(() => {
-    return Boolean((msgContent.value || '').trim()) || pendingImageList.value.length > 0 || pendingFileList.value.length > 0;
-});
-
-const openPopover = () => {
-};
-
-const closePopover = () => {
-    showEmojiPopover.value = false;
-    showSendMessagePopover.value = false;
-};
-
-const showEmojiPopoverHandler = () => {
-    showEmojiPopover.value = !showEmojiPopover.value;
-};
-
-const sendEmoji = (item) => {
-    msgContent.value = `${msgContent.value || ''}${item}`;
-};
-
-const isImageFile = (file) => {
-    return file?.type?.startsWith('image/');
-};
-
-const formatFileSize = (size = 0) => {
-    if (size < 1024) {
-        return `${size} B`;
-    }
-    if (size < 1024 * 1024) {
-        return `${(size / 1024).toFixed(1)} KB`;
-    }
-    return `${(size / 1024 / 1024).toFixed(1)} MB`;
-};
-
-const createImageCover = (file) => {
-    return new Promise((resolve) => {
-        const image = new Image();
-        const objectUrl = URL.createObjectURL(file);
-
-        image.onload = () => {
-            const maxSize = 240;
-            const ratio = Math.min(maxSize / image.width, maxSize / image.height, 1);
-            const canvas = document.createElement('canvas');
-
-            canvas.width = Math.round(image.width * ratio);
-            canvas.height = Math.round(image.height * ratio);
-
-            const context = canvas.getContext('2d');
-            context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-            canvas.toBlob((blob) => {
-                URL.revokeObjectURL(objectUrl);
-                resolve(blob || file);
-            }, 'image/jpeg', 0.8);
-        };
-
-        image.onerror = () => {
-            URL.revokeObjectURL(objectUrl);
-            resolve(file);
-        };
-
-        image.src = objectUrl;
-    });
-};
-
-const addPendingImage = async (file) => {
-    if (!isImageFile(file)) {
-        ElMessage.warning('请选择图片文件');
-        return;
-    }
-
-    if (pendingImageList.value.length + pendingFileList.value.length >= fileLimit) {
-        ElMessage.warning(`一次最多选择 ${fileLimit} 个文件`);
-        return;
-    }
-
-    const previewUrl = URL.createObjectURL(file);
-    const cover = await createImageCover(file);
-
-    pendingImageList.value.push({
-        id: `${Date.now()}_${Math.random()}`,
-        file,
-        cover,
-        previewUrl,
-        name: file.name,
-        size: file.size
-    });
-};
-
-const createFileCover = () => {
-    return new Promise((resolve) => {
-        const canvas = document.createElement('canvas');
-        canvas.width = 1;
-        canvas.height = 1;
-        const context = canvas.getContext('2d');
-        context.fillStyle = '#ffffff';
-        context.fillRect(0, 0, 1, 1);
-        canvas.toBlob((blob) => {
-            resolve(blob || new Blob(['cover'], { type: 'text/plain' }));
-        }, 'image/png');
-    });
-};
-
-const addPendingFile = async (file) => {
-    if (!file) {
-        return;
-    }
-
-    if (pendingImageList.value.length + pendingFileList.value.length >= fileLimit) {
-        ElMessage.warning(`一次最多选择 ${fileLimit} 个文件`);
-        return;
-    }
-
-    pendingFileList.value.push({
-        id: `${Date.now()}_${Math.random()}`,
-        file,
-        cover: await createFileCover(),
-        name: file.name,
-        size: file.size
-    });
-};
-
-const addPendingMedia = async (file) => {
-    if (isImageFile(file)) {
-        await addPendingImage(file);
-        return;
-    }
-
-    await addPendingFile(file);
-};
-
-const removePendingImage = (id) => {
-    const image = pendingImageList.value.find((item) => item.id === id);
-    if (image?.previewUrl) {
-        URL.revokeObjectURL(image.previewUrl);
-    }
-
-    pendingImageList.value = pendingImageList.value.filter((item) => item.id !== id);
-};
-
-const clearPendingImages = () => {
-    pendingImageList.value.forEach((image) => {
-        if (image.previewUrl) {
-            URL.revokeObjectURL(image.previewUrl);
-        }
-    });
-    pendingImageList.value = [];
-};
-
-const removePendingFile = (id) => {
-    pendingFileList.value = pendingFileList.value.filter((item) => item.id !== id);
-};
-
-const clearPendingFiles = () => {
-    pendingFileList.value = [];
-};
-
-const uploadFile = async (uploadRequest) => {
-    await addPendingMedia(uploadRequest.file);
-    uploadRequest.onSuccess?.();
-    uploadRef.value?.clearFiles();
-};
-
-const uploadExceed = () => {
-    ElMessage.warning(`一次最多选择 ${fileLimit} 个文件`);
-};
-
-const dropHandler = async (event) => {
-    event.preventDefault();
-
-    const files = Array.from(event.dataTransfer?.files || []);
-    for (const file of files) {
-        await addPendingMedia(file);
-    }
-};
-
-const dragoverHandler = (event) => {
-    event.preventDefault();
-};
-
-const pasteHandler = async (event) => {
-    const items = Array.from(event.clipboardData?.items || []);
-    const imageItems = items.filter((item) => item.type.startsWith('image/'));
-
-    if (!imageItems.length) {
-        return;
-    }
-
-    event.preventDefault();
-    for (const item of imageItems) {
-        const file = item.getAsFile();
-        if (file) {
-            await addPendingImage(file);
-        }
-    }
-};
-
-const sendMessage = () => {
-    const messageContent = (msgContent.value || '').trim();
-
-    if (!messageContent && pendingImageList.value.length === 0 && pendingFileList.value.length === 0) {
-        showSendMessagePopover.value = true;
-        return;
-    }
-
-    showSendMessagePopover.value = false;
-
-    pendingImageList.value.forEach((image) => {
-        emit('sendImageMessage', {
-            contactId: props.currentChatSession.contactId,
-            contactType: props.currentChatSession.contactType,
-            file: image.file,
-            cover: image.cover
-        });
-    });
-
-    clearPendingImages();
-
-    pendingFileList.value.forEach((fileItem) => {
-        emit('sendFileMessage', {
-            contactId: props.currentChatSession.contactId,
-            contactType: props.currentChatSession.contactType,
-            file: fileItem.file,
-            cover: fileItem.cover
-        });
-    });
-
-    clearPendingFiles();
-
-    if (messageContent) {
-        emit('sendMessage', {
-            contactId: props.currentChatSession.contactId,
-            contactType: props.currentChatSession.contactType,
-            messageContent
-        });
-
-        msgContent.value = '';
-    }
-};
-
-onBeforeUnmount(() => {
-    pendingImageList.value.forEach((image) => {
-        if (image.previewUrl) {
-            URL.revokeObjectURL(image.previewUrl);
-        }
-    });
+const {
+    canSend,
+    closePopover,
+    dragoverHandler,
+    dropHandler,
+    fileLimit,
+    formatFileSize,
+    msgContent,
+    openPopover,
+    pasteHandler,
+    pendingFileList,
+    pendingImageList,
+    removePendingFile,
+    removePendingImage,
+    sendEmoji,
+    sendMessage,
+    showEmojiPopover,
+    showEmojiPopoverHandler,
+    showSendMessagePopover,
+    uploadExceed,
+    uploadFile,
+    uploadRef
+} = useMessageComposer({
+    currentChatSession: toRef(props, 'currentChatSession'),
+    emit
 });
 </script>
 
