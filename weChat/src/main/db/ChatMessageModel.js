@@ -13,7 +13,84 @@ import {
 import { updateNoReadCount } from './ChatSessionUserModel';
 
 
-const saveMessage=(data)=>{
+const getClearInfoBySessionId = (sessionId) => {
+    if (!sessionId) {
+        return Promise.resolve(null);
+    }
+
+    const sql = 'select clear_message_id, clear_time from chat_session_clear where user_id=? and session_id=?';
+    return queryOne(sql, [store.getUserId(), sessionId]);
+};
+
+const getMaxMessageIdBySessionId = async (sessionId) => {
+    if (!sessionId) {
+        return 0;
+    }
+
+    const sql = 'select max(message_id) as max_message_id from chat_message where user_id=? and session_id=?';
+    const result = await queryOne(sql, [store.getUserId(), sessionId]);
+    return Number(result?.maxMessageId || 0);
+};
+
+const saveClearInfoBySessionId = async (sessionId, clearMessageId) => {
+    if (!sessionId) {
+        return 0;
+    }
+
+    const previousClearInfo = await getClearInfoBySessionId(sessionId);
+    const nextClearMessageId = Math.max(Number(previousClearInfo?.clearMessageId || 0), Number(clearMessageId || 0));
+    const nextClearTime = Math.max(Number(previousClearInfo?.clearTime || 0), Date.now());
+    const sql = [
+        'insert or replace into chat_session_clear',
+        '(user_id, session_id, clear_message_id, clear_time)',
+        'values (?, ?, ?, ?)'
+    ].join(' ');
+
+    return run(sql, [store.getUserId(), sessionId, nextClearMessageId, nextClearTime]);
+};
+
+const isMessageBeforeClear = async (message = {}) => {
+    const sessionId = message.sessionId;
+    if (!sessionId) {
+        return false;
+    }
+
+    const clearInfo = await getClearInfoBySessionId(sessionId);
+    if (!clearInfo) {
+        return false;
+    }
+
+    const clearMessageId = Number(clearInfo.clearMessageId || 0);
+    const messageId = Number(message.messageId || 0);
+    if (clearMessageId > 0 && messageId > 0) {
+        return messageId <= clearMessageId;
+    }
+
+    const clearTime = Number(clearInfo.clearTime || 0);
+    const sendTime = Number(message.sendTime || 0);
+    return clearTime > 0 && sendTime > 0 && sendTime <= clearTime;
+};
+
+const appendClearFilter = (sqlParts, params, clearInfo) => {
+    const clearMessageId = Number(clearInfo?.clearMessageId || 0);
+    const clearTime = Number(clearInfo?.clearTime || 0);
+
+    if (clearMessageId > 0) {
+        sqlParts.push('and message_id>?');
+        params.push(clearMessageId);
+        return;
+    }
+
+    if (clearTime > 0) {
+        sqlParts.push('and (send_time is null or send_time>?)');
+        params.push(clearTime);
+    }
+};
+
+const saveMessage=async (data)=>{
+    if (await isMessageBeforeClear(data)) {
+        return 0;
+    }
     // 获取当前用户 ID，绑定到消息数据
     data.userId=store.getUserId();
     // 插入或替换消息到数据库
@@ -24,8 +101,15 @@ const saveMessage=(data)=>{
 
 const saveMessageBatch=(chatMeassageList)=>{
      return new Promise(async(resolve,reject)=>{
+        const visibleMessageList = [];
+        for (let item of chatMeassageList) {
+            if (!(await isMessageBeforeClear(item))) {
+                visibleMessageList.push(item);
+            }
+        }
+
         const chatSessionCountMap={}
-        chatMeassageList.forEach((item)=>{
+        visibleMessageList.forEach((item)=>{
             let contactId=item.contactType==1?item.contactId:item.sendUserId;
             let noReadCount=chatSessionCountMap[contactId];
             if(!noReadCount){
@@ -42,7 +126,7 @@ const saveMessageBatch=(chatMeassageList)=>{
         }
 
         //批量插入
-        for(let item of chatMeassageList){
+        for(let item of visibleMessageList){
             await saveMessage(item);
 
         }
@@ -89,29 +173,32 @@ const selectMesssageList = (query = {}) => {
             return;
         }
 
-        let countSql = 'select count(1) as total from chat_message where user_id=? and session_id=?';
+        const clearInfo = await getClearInfoBySessionId(sessionId);
+        const countSqlParts = ['select count(1) as total from chat_message where user_id=? and session_id=?'];
         const countParams = [store.getUserId(), sessionId];
+        appendClearFilter(countSqlParts, countParams, clearInfo);
 
         if (maxMessageId) {
-            countSql += ' and message_id<?';
+            countSqlParts.push('and message_id<?');
             countParams.push(maxMessageId);
         }
 
-        const totalCount = await queryCount(countSql, countParams);
+        const totalCount = await queryCount(countSqlParts.join(' '), countParams);
         const { pageTotal, offset, limit } = getPageOffset(pageNo, totalCount);
 
-        let sql = 'select * from chat_message where user_id=? and session_id=?';
+        const sqlParts = ['select * from chat_message where user_id=? and session_id=?'];
         const params = [store.getUserId(), sessionId];
+        appendClearFilter(sqlParts, params, clearInfo);
 
         if (maxMessageId) {
-            sql += ' and message_id<?';
+            sqlParts.push('and message_id<?');
             params.push(maxMessageId);
         }
 
-        sql += ' order by message_id desc limit ?,?';
+        sqlParts.push('order by message_id desc limit ?,?');
         params.push(offset, limit);
 
-        let dataList = await queryAll(sql, params);
+        let dataList = await queryAll(sqlParts.join(' '), params);
         dataList = dataList.sort((a, b) => a.messageId - b.messageId);
 
         resolve({
@@ -122,10 +209,13 @@ const selectMesssageList = (query = {}) => {
     });
 };
 
-const clearMessageBySessionId = (sessionId) => {
+const clearMessageBySessionId = async (sessionId) => {
     if (!sessionId) {
         return Promise.resolve(0);
     }
+
+    const maxMessageId = await getMaxMessageIdBySessionId(sessionId);
+    await saveClearInfoBySessionId(sessionId, maxMessageId);
 
     const sql = 'delete from chat_message where user_id=? and session_id=?';
     return run(sql, [store.getUserId(), sessionId]);
@@ -143,15 +233,18 @@ const searchMessageBySessionId = ({ sessionId, keyword } = {}) => {
             return;
         }
 
+        const clearInfo = await getClearInfoBySessionId(sessionId);
         const likeKeyword = `%${escapeLikeKeyword(searchKey)}%`;
-        const sql = [
+        const sqlParts = [
             'select * from chat_message',
             'where user_id=? and session_id=?',
-            'and (message_content like ? escape \'\\\' or file_name like ? escape \'\\\')',
-            'order by message_id desc limit 50'
-        ].join(' ');
+            'and (message_content like ? escape \'\\\' or file_name like ? escape \'\\\')'
+        ];
+        const params = [store.getUserId(), sessionId, likeKeyword, likeKeyword];
+        appendClearFilter(sqlParts, params, clearInfo);
+        sqlParts.push('order by message_id desc limit 50');
 
-        const dataList = await queryAll(sql, [store.getUserId(), sessionId, likeKeyword, likeKeyword]);
+        const dataList = await queryAll(sqlParts.join(' '), params);
         resolve(dataList || []);
     });
 };

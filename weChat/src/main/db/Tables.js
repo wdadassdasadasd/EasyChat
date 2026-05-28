@@ -37,6 +37,13 @@ const add_tables=[
     "contact_no_read integer," +
     "server_port integer," +
     "primary key (user_id)" +
+");",
+"create table if not exists chat_session_clear (" +
+    "user_id varchar not null," +
+    "session_id varchar not null," +
+    "clear_message_id bigint default 0," +
+    "clear_time bigint default 0," +
+    "primary key (user_id, session_id)" +
 ");"
 ]
 
