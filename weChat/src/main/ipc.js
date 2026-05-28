@@ -1,7 +1,7 @@
-import { app, BrowserWindow,ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import {initWs, closeWs} from './wsClient.js'
 import store from './store.js'
-import { addUserSetting } from './db/UserSettingModel.js';
+import { addUserSetting, getLocalFileFolder, resetLocalFileFolder, updateLocalFileFolder } from './db/UserSettingModel.js';
 import { selectUserSessionList,delChatSession,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
 import { clearMessageBySessionId, searchMessageBySessionId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
 const Node_ENV=process.env.NODE_ENV;
@@ -164,6 +164,39 @@ const onSearchChatMessage = () => {
         });
     });
 };
+
+const onLocalFileFolder = () => {
+    ipcMain.handle('getLocalFileFolder', async () => {
+        return await getLocalFileFolder();
+    });
+
+    ipcMain.handle('changeLocalFileFolder', async () => {
+        const result = await dialog.showOpenDialog({
+            title: '选择文件保存位置',
+            properties: ['openDirectory', 'createDirectory']
+        });
+
+        if (result.canceled || !result.filePaths?.length) {
+            return await getLocalFileFolder();
+        }
+
+        return await updateLocalFileFolder(result.filePaths[0]);
+    });
+
+    ipcMain.handle('resetLocalFileFolder', async () => {
+        return await resetLocalFileFolder();
+    });
+
+    ipcMain.handle('openLocalFileFolder', async () => {
+        const folderInfo = await getLocalFileFolder();
+        const error = await shell.openPath(folderInfo.localFileFolder);
+        return {
+            ...folderInfo,
+            success: !error,
+            error
+        };
+    });
+};
 export {
     onLoginOnRegister,
     onLoginSuccess,
@@ -177,5 +210,6 @@ export {
     onLoadChatMessage,
     onSaveSendMessage,
     onClearChatMessage,
-    onSearchChatMessage
+    onSearchChatMessage,
+    onLocalFileFolder
 };
