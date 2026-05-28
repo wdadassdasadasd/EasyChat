@@ -22,7 +22,8 @@ function createWindow() {
     titleBarStyle: 'hidden',
     resizable: false,
     frame: false,
-    transparent: true,
+    transparent: false,
+    backgroundColor: '#ffffff',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

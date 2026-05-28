@@ -216,6 +216,9 @@ onMounted(()=>{
 <style lang="scss" scoped>
 .login-panel {
   position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #fff;
 }
 .email-select {
   width: 250px;
@@ -238,7 +241,7 @@ onMounted(()=>{
   height: calc(100vh - 32px);
   :deep(.el-input__wrapper) {
     box-shadow: none;
-    border-radius: none;
+    border-radius: 0;
   }
   .el-form-item {
     border-bottom: 1px solid #ddd;
