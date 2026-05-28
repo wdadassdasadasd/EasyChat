@@ -2,6 +2,7 @@ import axios from 'axios'
 import { ElLoading } from 'element-plus'
 import Message from '../utils/Message'
 import router from '@/router'
+import { useUserInfoStore } from '@/stores/userInfoStore'
 const contentTypeForm = 'application/x-www-form-urlencoded;charset=UTF-8'
 const contentTypeJson = 'application/json'
 const responseTypeJson = 'json'
@@ -14,6 +15,22 @@ const instance = axios.create({
     baseURL: `${baseDomain}/api`,  //统一前缀
     timeout: 10 * 1000,
 });
+
+const resetLoginState = async () => {
+    try {
+        useUserInfoStore().clearUserInfo();
+    } catch (e) {
+        localStorage.removeItem('userInfo');
+    }
+
+    if (window.electron?.ipcRenderer?.invoke) {
+        await window.electron.ipcRenderer.invoke('logout').catch(() => false);
+    } else {
+        window.ipcRenderer?.send('reLogin');
+    }
+
+    router.push('/login');
+};
 
 const isFileLike = (value) => {
     return value instanceof Blob || value instanceof File;
@@ -55,8 +72,7 @@ instance.interceptors.response.use(
         if (responseData.code == 200) {
             return responseData;
         } else if (responseData.code == 901) {
-            await window.electron.ipcRenderer.invoke('logout')
-            router.push('/')
+            await resetLoginState()
             return Promise.reject({ showError: false });
         } else {
             //其他错误

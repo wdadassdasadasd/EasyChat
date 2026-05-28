@@ -1,5 +1,5 @@
 import { app, BrowserWindow,ipcMain } from 'electron'
-import {initWs} from './wsClient.js'
+import {initWs, closeWs} from './wsClient.js'
 import store from './store.js'
 import { addUserSetting } from './db/UserSettingModel.js';
 import { selectUserSessionList,delChatSession,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
@@ -87,6 +87,22 @@ const onLoadChatMessage=()=>{
 
 }
 
+const onResetToLogin=(_mainWindow, callback)=>{
+    const reset = () => {
+        closeWs();
+        callback();
+        return true;
+    };
+
+    ipcMain.handle("logout", () => {
+        return reset();
+    });
+
+    ipcMain.on("reLogin", () => {
+        reset();
+    });
+}
+
 
 
 //保存发送的消息到本地，并更新会话
@@ -151,6 +167,7 @@ const onSearchChatMessage = () => {
 export {
     onLoginOnRegister,
     onLoginSuccess,
+    onResetToLogin,
     winTitleOp,
     onSetLocalStore,
     onGetLocalStore,

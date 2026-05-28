@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow,Menu,Tray} from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { onGetLocalStore, onLoadSessionData, onLoginOnRegister, onLoginSuccess, onSetLocalStore, winTitleOp ,onDelChatSession,onTopChatSession,onLoadChatMessage,onSaveSendMessage,onClearChatMessage,onSearchChatMessage} from './ipc.js';
+import { onGetLocalStore, onLoadSessionData, onLoginOnRegister, onLoginSuccess, onResetToLogin, onSetLocalStore, winTitleOp ,onDelChatSession,onTopChatSession,onLoadChatMessage,onSaveSendMessage,onClearChatMessage,onSearchChatMessage} from './ipc.js';
 import { createTable } from './db/ADB.js';
 
 const NODE_ENV=process.env.EODE_ENV;
@@ -65,6 +65,7 @@ function createWindow() {
     }
   ]
 
+  let hasUserTrayMenu=false;
   const menu=Menu.buildFromTemplate(contextMenu);
   tray.setToolTip('EasyChat');
   tray.setContextMenu(menu);
@@ -77,6 +78,7 @@ function createWindow() {
 
   //监听登录注册
   onLoginOnRegister(mainWindow, (isLogin)=>{
+     mainWindow.setMinimumSize(login_width, login_height);
      if(isLogin){
           mainWindow.setSize(login_width, login_height);
         } else {
@@ -87,22 +89,45 @@ function createWindow() {
 
   onLoginSuccess(mainWindow, (config)=>{
     mainWindow.setResizable(true);
+    mainWindow.setMinimumSize(800, 600);
     mainWindow.setSize(850, 800);
     mainWindow.center();
     mainWindow.setMaximizable(true);
-    mainWindow.setMinimumSize(800, 600);
     //管理后台的窗口操作
     if(config.admin){
 
+    }
+    if(hasUserTrayMenu){
+      contextMenu.shift();
     }
     contextMenu.unshift({
       label:"用户："+config.nickName,click:function(){
 
       }
     })
+    hasUserTrayMenu=true;
     tray.setContextMenu(Menu.buildFromTemplate(contextMenu));
   });
   //在主进程注册 IPC 监听
+  onResetToLogin(mainWindow, ()=>{
+    mainWindow.setSkipTaskbar(false);
+    mainWindow.show();
+    if(mainWindow.isMaximized()){
+      mainWindow.unmaximize();
+    }
+    mainWindow.setResizable(false);
+    mainWindow.setMaximizable(false);
+    mainWindow.setMinimumSize(login_width, login_height);
+    mainWindow.setSize(login_width, login_height);
+    mainWindow.center();
+    if(hasUserTrayMenu){
+      contextMenu.shift();
+      hasUserTrayMenu=false;
+      tray.setContextMenu(Menu.buildFromTemplate(contextMenu));
+    }
+    mainWindow.webContents.executeJavaScript("localStorage.removeItem('userInfo'); window.location.hash = '#/login';").catch(()=>{});
+  });
+
   onSetLocalStore();
   onGetLocalStore();
   onLoadSessionData();
