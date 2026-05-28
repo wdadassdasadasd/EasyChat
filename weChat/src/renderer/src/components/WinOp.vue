@@ -1,5 +1,5 @@
 <template>
-    <div class="win-op-no-drag">
+    <div :class="['win-op-no-drag', `win-op-${mode}`]">
         <div v-if="showSetTop" :class="['win-icon',isTop?'win-top':'']"
         @click="top" :title="isTop?'取消置顶':'置顶'">
             <el-icon>
@@ -26,9 +26,12 @@
 </template>
 
 <script setup>
-import {ref,reactive,nextTick,getCurrentInstance, onMounted} from 'vue';
-const proxy=getCurrentInstance();
+import {ref, onMounted} from 'vue';
 const props=defineProps({
+    mode:{
+        type:String,
+        default:'float',
+    },
     showSetTop:{
         type:Boolean,
         default:true,
@@ -82,9 +85,11 @@ const minmize=()=>{
 const maximize=()=>{
     if(isMax.value){
         winOp('unmaximize')
+        isMax.value=false;
     }
     else{
         winOp('maximize')
+        isMax.value=true;
     }
 }
 
@@ -102,14 +107,24 @@ const top=()=>{
     display: flex;
     align-items: center;
     z-index: 100;
+    -webkit-app-region: no-drag;
+
+    &.win-op-inline {
+        position: static;
+        top: auto;
+        right: auto;
+        z-index: auto;
+    }
+
     .win-icon {
-        width: 32px;
-        height: 32px;
+        width: 36px;
+        height: 34px;
         display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
         font-size: 14px;
+        -webkit-app-region: no-drag;
         &:hover {
             background: rgba(0, 0, 0, 0.1);
         }

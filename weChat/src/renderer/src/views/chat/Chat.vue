@@ -32,13 +32,24 @@
                         <span>{{ currentChatSessionTitle }}</span>
                         <span class="title-count" v-if="currentChatSession.contactType == 1">{{ currentChatSession.memberCount }}</span>
                     </div>
-                    <div
-                        class="title-more no-drag"
-                        @click="showChatDetail"
-                    >
-                        <el-icon>
-                            <MoreFilled />
-                        </el-icon>
+                    <div class="title-actions no-drag">
+                        <WinOp
+                            mode="inline"
+                            :showSetTop="true"
+                            :showMin="true"
+                            :showMax="true"
+                            :closeType="1"
+                        />
+                        <div class="chat-header-actions">
+                            <div
+                                class="title-more"
+                                @click="showChatDetail"
+                            >
+                                <el-icon>
+                                    <MoreFilled />
+                                </el-icon>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -80,13 +91,27 @@
                 </div>
             </template>
 
-            <div class="chat-empty chat-empty-default" v-else>
-                <el-icon class="wechat-empty-icon">
-                    <ChatDotRound />
-                </el-icon>
-            </div>
+            <template v-else>
+                <div class="title-panel title-panel-empty drag">
+                    <div class="title"></div>
+                    <div class="title-actions no-drag">
+                        <WinOp
+                            mode="inline"
+                            :showSetTop="true"
+                            :showMin="true"
+                            :showMax="true"
+                            :closeType="1"
+                        />
+                    </div>
+                </div>
 
-            <WinOp :showSetTop="true" :showMin="true" :showMax="true" :closeType="1" showSetTop="1" />
+                <div class="chat-empty chat-empty-default">
+                    <el-icon class="wechat-empty-icon">
+                        <ChatDotRound />
+                    </el-icon>
+                </div>
+            </template>
+
             <FilePreviewDialog
                 v-model="showFilePreviewDialog"
                 :message="selectedFileMessage"
@@ -276,11 +301,13 @@ onUnmounted(() => {
 }
 
 .title-panel {
-    height: 60px;
-    padding: 0 58px 0 24px;
+    position: relative;
+    height: 74px;
+    padding: 26px 160px 0 24px;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 16px;
     flex-shrink: 0;
     background: #f5f5f5;
     border-bottom: 1px solid #e7e7e7;
@@ -292,8 +319,16 @@ onUnmounted(() => {
     align-items: center;
     gap: 8px;
     min-width: 0;
+    flex: 1;
     font-size: 16px;
     font-weight: 500;
+
+    span:first-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 }
 
 .title-count {
@@ -302,15 +337,37 @@ onUnmounted(() => {
     font-weight: 400;
 }
 
+.title-actions {
+    height: 100%;
+    position: absolute;
+    top: 0;
+    right: 8px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    -webkit-app-region: no-drag;
+}
+
+.chat-header-actions {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    align-self: flex-end;
+}
+
 .title-more {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 36px;
+    height: 34px;
     border-radius: 4px;
     color: #666;
     cursor: pointer;
+    font-size: 18px;
+    -webkit-app-region: no-drag;
 
     &:hover {
         background: #e7e7e7;
