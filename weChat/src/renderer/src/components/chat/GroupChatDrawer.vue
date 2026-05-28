@@ -25,8 +25,12 @@
                     <AvatarBase :userId="getMemberId(member)" :width="42" :borderRadius="4" />
                     <div class="member-name">{{ getMemberName(member) }}</div>
                 </div>
-                <button v-if="isGroupOwner" class="member-add" type="button" @click="openAddMemberDialog">
-                    <span></span>
+                <button v-if="canManageGroup" class="member-add" type="button" @click="openAddMemberDialog">
+                    <span class="member-add-icon">
+                        <el-icon>
+                            <Plus />
+                        </el-icon>
+                    </span>
                     <div>添加</div>
                 </button>
             </div>
@@ -34,12 +38,12 @@
             <div class="drawer-section group-profile">
                 <div class="section-title">群聊名称</div>
                 <button
-                    :class="['section-value', 'group-name', isGroupOwner ? 'editable-row' : '']"
+                    :class="['section-value', 'group-name', canManageGroup ? 'editable-row' : '']"
                     type="button"
                     @click="openEditGroupDialog"
                 >
                     <span>{{ displayGroupName }}</span>
-                    <el-icon v-if="isGroupOwner" class="edit-icon">
+                    <el-icon v-if="canManageGroup" class="edit-icon">
                         <EditPen />
                     </el-icon>
                 </button>
@@ -48,12 +52,12 @@
             <div class="drawer-section">
                 <div class="section-title">群公告</div>
                 <button
-                    :class="['section-muted', 'notice-value', isGroupOwner ? 'editable-row' : '']"
+                    :class="['section-muted', 'notice-value', canManageGroup ? 'editable-row' : '']"
                     type="button"
                     @click="openEditGroupDialog"
                 >
                     <span>{{ displayGroupNotice }}</span>
-                    <el-icon v-if="isGroupOwner" class="edit-icon">
+                    <el-icon v-if="canManageGroup" class="edit-icon">
                         <EditPen />
                     </el-icon>
                 </button>
@@ -192,7 +196,7 @@
 
 <script setup>
 import { computed, getCurrentInstance, nextTick, onUnmounted, ref, toRef, watch } from 'vue';
-import { ArrowRight, EditPen, Search } from '@element-plus/icons-vue';
+import { ArrowRight, EditPen, Plus, Search } from '@element-plus/icons-vue';
 import AvatarBase from '@/components/AvatarBase.vue';
 import { useContactStateStore } from '@/stores/ContactStateStore';
 import { useUserInfoStore } from '@/stores/userInfoStore';
@@ -274,8 +278,18 @@ const currentUserId = computed(() => {
     return String(userInfoStore.getInfo()?.userId || '');
 });
 
-const isGroupOwner = computed(() => {
-    return String(groupInfo.value.groupOwnerId || '') === currentUserId.value;
+const groupOwnerId = computed(() => {
+    return String(
+        groupInfo.value.groupOwnerId ||
+        groupInfo.value.group_owner_id ||
+        props.currentChatSession.groupOwnerId ||
+        props.currentChatSession.group_owner_id ||
+        ''
+    );
+});
+
+const canManageGroup = computed(() => {
+    return groupOwnerId.value && groupOwnerId.value === currentUserId.value;
 });
 
 const displayGroupName = computed(() => {
@@ -364,7 +378,7 @@ const reloadGroupInfo = async () => {
 };
 
 const openEditGroupDialog = () => {
-    if (!isGroupOwner.value) {
+    if (!canManageGroup.value) {
         return;
     }
     editForm.value = {
@@ -417,7 +431,7 @@ const submitGroupProfile = async () => {
 };
 
 const openAddMemberDialog = async () => {
-    if (!isGroupOwner.value) {
+    if (!canManageGroup.value) {
         return;
     }
     addMemberDialogVisible.value = true;
@@ -659,29 +673,17 @@ onUnmounted(() => {
     background: transparent;
     cursor: pointer;
 
-    span {
-        position: relative;
+    .member-add-icon {
         width: 42px;
         height: 42px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         border: 1px dashed #b8b8b8;
         border-radius: 4px;
         box-sizing: border-box;
-    }
-
-    span::before,
-    span::after {
-        content: '';
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        width: 18px;
-        height: 1px;
-        background: #9b9b9b;
-        transform: translate(-50%, -50%);
-    }
-
-    span::after {
-        transform: translate(-50%, -50%) rotate(90deg);
+        color: #9b9b9b;
+        font-size: 20px;
     }
 }
 

@@ -31,11 +31,18 @@ export const useGroupChatDrawer = ({ currentChatSession, proxy }) => {
     });
 
     const normalizeGroupInfo = (data = {}) => {
-        return data.groupInfo || data.group || data || {};
+        return data.groupInfo || data.groupInfoVO?.groupInfo || data.groupInfoVo?.groupInfo || data.group || data || {};
     };
 
     const normalizeMemberList = (data = {}) => {
-        return data.userContactList || data.memberList || data.contactList || [];
+        return (
+            data.userContactList ||
+            data.groupInfoVO?.userContactList ||
+            data.groupInfoVo?.userContactList ||
+            data.memberList ||
+            data.contactList ||
+            []
+        );
     };
 
     const loadGroupInfo = async () => {
