@@ -3,8 +3,88 @@ import Utils from '@/utils/Utils';
 
 export const useFileTransfer = ({ proxy }) => {
     const selectedFileMessage = ref(null);
+    const selectedVideoMessage = ref(null);
     const showFilePreviewDialog = ref(false);
+    const showVideoPreviewDialog = ref(false);
     const isReceivingFile = ref(false);
+    const isLoadingVideo = ref(false);
+    const videoDownloadProgress = ref(0);
+    const videoPlaybackError = ref('');
+    const videoPreviewUrl = ref('');
+    let videoPreviewBlob = null;
+    let ownsVideoPreviewUrl = false;
+
+    const getVideoMimeType = (fileName = '') => {
+        const suffix = String(fileName).split('.').pop()?.toLowerCase();
+        const mimeMap = {
+            mp4: 'video/mp4',
+            mov: 'video/quicktime',
+            mkv: 'video/x-matroska',
+            avi: 'video/x-msvideo',
+            rmvb: 'application/vnd.rn-realmedia-vbr'
+        };
+        return mimeMap[suffix] || 'video/mp4';
+    };
+
+    const revokeVideoPreviewUrl = () => {
+        if (videoPreviewUrl.value && ownsVideoPreviewUrl) {
+            URL.revokeObjectURL(videoPreviewUrl.value);
+        }
+        videoPreviewUrl.value = '';
+        videoPreviewBlob = null;
+        videoDownloadProgress.value = 0;
+        videoPlaybackError.value = '';
+        ownsVideoPreviewUrl = false;
+    };
+
+    const setVideoDownloadProgress = (event) => {
+        if (!event?.total) {
+            return;
+        }
+        const percent = Math.round((event.loaded / event.total) * 100);
+        videoDownloadProgress.value = Math.min(99, Math.max(0, percent));
+    };
+
+    const parseBlobError = async (blob) => {
+        if (!blob) {
+            return '';
+        }
+        const contentType = blob.type || '';
+        if (!contentType.includes('json') && blob.size > 2048) {
+            return '';
+        }
+        try {
+            const text = await blob.text();
+            const trimmed = text.trim();
+            if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+                return '';
+            }
+            try {
+                const json = JSON.parse(trimmed);
+                return json.info || json.msg || json.message || trimmed;
+            } catch (e) {
+                return trimmed;
+            }
+        } catch (e) {
+            return '';
+        }
+    };
+
+    const readLocalVideoBlob = async (message) => {
+        const filePath = message?.filePath;
+        if (!filePath || !window.electron?.ipcRenderer?.invoke) {
+            return null;
+        }
+
+        const result = await window.electron.ipcRenderer.invoke('readLocalVideoFile', { filePath });
+        const buffer = result?.arrayBuffer || result?.buffer;
+        if (!result?.success || !buffer) {
+            return null;
+        }
+
+        videoDownloadProgress.value = 100;
+        return new Blob([buffer], { type: getVideoMimeType(Utils.getFileMessageName(message)) });
+    };
 
     const openFilePreviewDialog = (message) => {
         if (!Utils.isFileMessage(message)) {
@@ -17,6 +97,12 @@ export const useFileTransfer = ({ proxy }) => {
     const closeFilePreviewDialog = () => {
         selectedFileMessage.value = null;
         isReceivingFile.value = false;
+    };
+
+    const closeVideoPreviewDialog = () => {
+        selectedVideoMessage.value = null;
+        isLoadingVideo.value = false;
+        revokeVideoPreviewUrl();
     };
 
     const downloadFileMessage = async (message) => {
@@ -51,6 +137,161 @@ export const useFileTransfer = ({ proxy }) => {
         return true;
     };
 
+    const fetchVideoBlob = async (message, { showError = true, allowLocalFallback = true } = {}) => {
+        videoDownloadProgress.value = 0;
+        videoPlaybackError.value = '';
+        const blob = await proxy.Request({
+            url: proxy.Api.downloadFile,
+            params: {
+                fileId: message.messageId,
+                showCover: false
+            },
+            responseType: 'blob',
+            showLoading: false,
+            showError: false,
+            timeout: 0,
+            downloadProgressCallback: setVideoDownloadProgress
+        });
+        if (!blob) {
+            if (allowLocalFallback) {
+                const localBlob = await readLocalVideoBlob(message);
+                if (localBlob) {
+                    return localBlob;
+                }
+            }
+            videoPlaybackError.value = '视频下载失败，请检查网络后重试';
+            if (showError) {
+                proxy.Message.error('视频下载失败');
+            }
+            return null;
+        }
+        if (!blob.size) {
+            videoPlaybackError.value = '视频文件为空，无法预览';
+            if (showError) {
+                proxy.Message.error('视频文件为空');
+            }
+            return null;
+        }
+        const errorText = await parseBlobError(blob);
+        if (errorText) {
+            console.error('video download failed:', errorText);
+            if (allowLocalFallback) {
+                const localBlob = await readLocalVideoBlob(message);
+                if (localBlob) {
+                    return localBlob;
+                }
+            }
+            videoPlaybackError.value = '视频下载失败，后端未返回有效视频文件';
+            if (showError) {
+                proxy.Message.error('视频下载失败');
+            }
+            return null;
+        }
+        if (blob.type?.includes('json')) {
+            const text = await blob.text();
+            console.error('video download failed:', text);
+            proxy.Message.error('视频下载失败');
+            return null;
+        }
+        videoDownloadProgress.value = 100;
+        return new Blob([blob], { type: getVideoMimeType(Utils.getFileMessageName(message)) });
+    };
+
+    const ensureSelectedVideoBlob = async () => {
+        if (!selectedVideoMessage.value) {
+            return null;
+        }
+        if (videoPreviewBlob) {
+            return videoPreviewBlob;
+        }
+        isLoadingVideo.value = true;
+        const blob = await fetchVideoBlob(selectedVideoMessage.value);
+        isLoadingVideo.value = false;
+        if (blob) {
+            videoPreviewBlob = blob;
+        }
+        return blob;
+    };
+
+    const openVideoPreviewDialog = async (message) => {
+        if (!Utils.isVideoMessage(message) || Utils.isVideoPreviewDisabled(message)) {
+            return;
+        }
+        selectedVideoMessage.value = message;
+        showVideoPreviewDialog.value = true;
+        revokeVideoPreviewUrl();
+
+        if (message.localPreviewUrl) {
+            videoPreviewUrl.value = message.localPreviewUrl;
+            ownsVideoPreviewUrl = false;
+            return;
+        }
+
+        isLoadingVideo.value = true;
+        const blob = await fetchVideoBlob(message);
+        isLoadingVideo.value = false;
+        if (!blob || selectedVideoMessage.value?.messageId != message.messageId) {
+            return;
+        }
+        videoPreviewBlob = blob;
+        videoPreviewUrl.value = URL.createObjectURL(blob);
+        ownsVideoPreviewUrl = true;
+    };
+
+    const markVideoPlaybackError = () => {
+        videoPlaybackError.value = '当前视频编码暂不支持内置预览，可以下载或用系统播放器打开';
+    };
+
+    const openSelectedVideoExternal = async () => {
+        if (!selectedVideoMessage.value || !window.electron?.ipcRenderer?.invoke) {
+            return;
+        }
+
+        if (selectedVideoMessage.value.filePath) {
+            const result = await window.electron.ipcRenderer.invoke('openLocalVideoFile', {
+                filePath: selectedVideoMessage.value.filePath
+            });
+            if (result?.success) {
+                return;
+            }
+        }
+
+        const blob = await ensureSelectedVideoBlob();
+        if (!blob) {
+            return;
+        }
+
+        const buffer = await blob.arrayBuffer();
+        const result = await window.electron.ipcRenderer.invoke('openTempVideoFile', {
+            fileName: Utils.getFileMessageName(selectedVideoMessage.value),
+            buffer
+        });
+        if (!result?.success) {
+            proxy.Message.error(result?.error || '打开系统播放器失败');
+        }
+    };
+
+    const downloadSelectedVideoMessage = async () => {
+        if (!selectedVideoMessage.value) {
+            return;
+        }
+
+        const blob = await ensureSelectedVideoBlob();
+        if (!blob) {
+            return;
+        }
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = Utils.getFileMessageName(selectedVideoMessage.value);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => {
+            URL.revokeObjectURL(objectUrl);
+        }, 1000);
+    };
+
     const receiveSelectedFileMessage = async () => {
         if (!selectedFileMessage.value || Utils.isFileReceiveDisabled(selectedFileMessage.value)) {
             return;
@@ -66,10 +307,21 @@ export const useFileTransfer = ({ proxy }) => {
 
     return {
         closeFilePreviewDialog,
+        closeVideoPreviewDialog,
+        downloadSelectedVideoMessage,
         isReceivingFile,
+        isLoadingVideo,
+        markVideoPlaybackError,
         openFilePreviewDialog,
+        openSelectedVideoExternal,
+        openVideoPreviewDialog,
         receiveSelectedFileMessage,
         selectedFileMessage,
-        showFilePreviewDialog
+        selectedVideoMessage,
+        showFilePreviewDialog,
+        showVideoPreviewDialog,
+        videoDownloadProgress,
+        videoPlaybackError,
+        videoPreviewUrl
     };
 };

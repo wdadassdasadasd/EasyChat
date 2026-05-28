@@ -83,7 +83,9 @@
                     :key="fileItem.id"
                     class="pending-file-item"
                 >
-                    <div class="pending-file-icon">FILE</div>
+                    <div :class="['pending-file-icon', fileItem.fileType === 1 ? 'pending-file-icon-video' : '']">
+                        {{ fileItem.fileType === 1 ? 'VIDEO' : 'FILE' }}
+                    </div>
                     <div class="pending-file-info">
                         <div class="pending-file-name">{{ fileItem.name }}</div>
                         <div class="pending-file-size">{{ formatFileSize(fileItem.size) }}</div>
@@ -150,7 +152,7 @@ const props = defineProps({
     }
 });
 
-const emit = defineEmits(['sendMessage', 'sendImageMessage', 'sendFileMessage']);
+const emit = defineEmits(['sendMessage', 'sendImageMessage', 'sendFileMessage', 'sendVideoMessage']);
 
 const activeEmoji = ref(emojiList[0]?.name || '');
 const {
@@ -349,6 +351,11 @@ const {
     color: #666;
     font-size: 10px;
     border: 1px solid #dedede;
+}
+
+.pending-file-icon-video {
+    background: #eef5ff;
+    color: #4378c7;
 }
 
 .pending-file-info {

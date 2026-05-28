@@ -23,6 +23,7 @@
                             :showGroupMemberNick="showGroupMemberNick"
                             @imageLoaded="$emit('imageLoaded')"
                             @openFilePreview="$emit('openFilePreview', $event)"
+                            @openVideoPreview="$emit('openVideoPreview', $event)"
                         />
                     </template>
                     <div ref="messageBottomRef" class="message-bottom-anchor"></div>
@@ -39,7 +40,7 @@
 import { computed, ref } from 'vue';
 import ChatMessage from './ChatMessage.vue';
 
-const emit = defineEmits(['imageLoaded', 'loadMore', 'openFilePreview', 'userScroll']);
+const emit = defineEmits(['imageLoaded', 'loadMore', 'openFilePreview', 'openVideoPreview', 'userScroll']);
 
 const props = defineProps({
     currentChatSession: {

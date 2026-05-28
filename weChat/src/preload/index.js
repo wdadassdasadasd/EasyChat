@@ -1,8 +1,15 @@
-import { contextBridge ,ipcRenderer} from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 window.ipcRenderer=ipcRenderer;
 // Custom APIs for renderer
-const api = {}
+const api = {
+  getPathForFile: (file) => {
+    if (!file) {
+      return ''
+    }
+    return webUtils.getPathForFile(file)
+  }
+}
 
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise

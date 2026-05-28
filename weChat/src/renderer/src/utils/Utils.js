@@ -51,6 +51,10 @@ const isFileMessage = (message) => {
     return Number(message?.messageType) === 5 && Number(message?.fileType) === 2;
 }
 
+const isVideoMessage = (message) => {
+    return Number(message?.messageType) === 5 && Number(message?.fileType) === 1;
+}
+
 const isSelfMessage = (message, currentUserId) => {
     return message?.sendUserId == currentUserId;
 }
@@ -61,6 +65,10 @@ const getFileMessageName = (message) => {
 
 const isFileReceiveDisabled = (message) => {
     return !isFileMessage(message) || message?.status == 0 || message?.uploading;
+}
+
+const isVideoPreviewDisabled = (message) => {
+    return !isVideoMessage(message) || message?.status == 0 || message?.uploading;
 }
 
 const getFileMessageStatusText = (message) => {
@@ -82,5 +90,7 @@ export  default{
     isFileMessage,
     isFileReceiveDisabled,
     isImageMessage,
+    isVideoMessage,
+    isVideoPreviewDisabled,
     isSelfMessage
 }

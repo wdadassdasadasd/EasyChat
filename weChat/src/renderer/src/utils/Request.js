@@ -84,16 +84,24 @@ instance.interceptors.response.use(
     },
     (error) => {
         console.error('[Request调试] 网络错误:', error.message, 'URL:', error.config?.url);
-        if (error.config.showLoading && loading) {
+        if (error.config?.showLoading && loading) {
             loading.close();
         }
-        return Promise.reject({ showError: true, msg: "网络异常" })
+        return Promise.reject({ showError: error.config?.showError ?? true, msg: "网络异常" })
     }
 );
 
 //封装请求方法
 const request = (config) => {
-    const { url, params, dataType, showLoading = true, responseType = responseTypeJson, showError = true } = config;
+    const {
+        url,
+        params,
+        dataType,
+        showLoading = true,
+        responseType = responseTypeJson,
+        showError = true,
+        timeout
+    } = config;
     let contentType = contentTypeForm;
     let requestData = new URLSearchParams();
     const shouldUseFormData = Object.values(params || {}).some((value) => isFileLike(value));
@@ -127,7 +135,13 @@ const request = (config) => {
                 config.uploadProgressCallback(event);
             }
         },
+        onDownloadProgress: (event) => {
+            if (config.downloadProgressCallback) {
+                config.downloadProgressCallback(event);
+            }
+        },
         responseType: responseType,
+        timeout: timeout ?? instance.defaults.timeout,
         headers: headers,
         showLoading: showLoading,
         errorCallback: config.errorCallback,

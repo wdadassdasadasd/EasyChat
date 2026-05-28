@@ -1,4 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import fs from 'fs'
+import path from 'path'
 import {initWs, closeWs} from './wsClient.js'
 import store from './store.js'
 import { addUserSetting, getLocalFileFolder, resetLocalFileFolder, updateLocalFileFolder } from './db/UserSettingModel.js';
@@ -207,6 +209,68 @@ const onLocalFileFolder = () => {
         };
     });
 };
+
+const onOpenTempVideoFile = () => {
+    ipcMain.handle('openTempVideoFile', async (e, data = {}) => {
+        const { fileName = 'video.mp4', buffer } = data;
+        if (!buffer) {
+            return {
+                success: false,
+                error: '视频数据为空'
+            };
+        }
+
+        const safeFileName = String(fileName).replace(/[\\/:*?"<>|]/g, '_');
+        const tempFolder = path.join(app.getPath('temp'), 'EasyChat', 'video-preview');
+        fs.mkdirSync(tempFolder, { recursive: true });
+        const filePath = path.join(tempFolder, `${Date.now()}_${safeFileName}`);
+        fs.writeFileSync(filePath, Buffer.from(buffer));
+        const error = await shell.openPath(filePath);
+
+        return {
+            success: !error,
+            error,
+            filePath
+        };
+    });
+
+    ipcMain.handle('readLocalVideoFile', async (e, data = {}) => {
+        const { filePath } = data;
+        if (!filePath || !fs.existsSync(filePath)) {
+            return {
+                success: false,
+                error: '本地视频文件不存在'
+            };
+        }
+
+        const buffer = fs.readFileSync(filePath);
+        const arrayBuffer = buffer.buffer.slice(
+            buffer.byteOffset,
+            buffer.byteOffset + buffer.byteLength
+        );
+        return {
+            success: true,
+            arrayBuffer,
+            fileSize: buffer.length
+        };
+    });
+
+    ipcMain.handle('openLocalVideoFile', async (e, data = {}) => {
+        const { filePath } = data;
+        if (!filePath || !fs.existsSync(filePath)) {
+            return {
+                success: false,
+                error: '本地视频文件不存在'
+            };
+        }
+
+        const error = await shell.openPath(filePath);
+        return {
+            success: !error,
+            error
+        };
+    });
+};
 export {
     onLoginOnRegister,
     onLoginSuccess,
@@ -222,5 +286,6 @@ export {
     onSaveSendMessage,
     onClearChatMessage,
     onSearchChatMessage,
-    onLocalFileFolder
+    onLocalFileFolder,
+    onOpenTempVideoFile
 };

@@ -12,11 +12,17 @@
                 v-if="currentChatSession.contactType == 1 && !isSelf && showGroupMemberNick"
                 class="message-nick"
             >{{ message.sendUserNickName }}</div>
-            <div :class="['message-item', isSelf ? 'message-item-self' : '', Utils.isImageMessage(message) ? 'message-item-image' : '', Utils.isFileMessage(message) ? 'message-item-file' : '']">
+            <div :class="['message-item', isSelf ? 'message-item-self' : '', isMediaMessage ? 'message-item-media' : '', Utils.isFileMessage(message) ? 'message-item-file' : '']">
                 <ChatMessageImage
                     v-if="Utils.isImageMessage(message)"
                     :message="message"
                     @loaded="$emit('imageLoaded')"
+                />
+                <ChatMessageVideo
+                    v-else-if="Utils.isVideoMessage(message)"
+                    :message="message"
+                    @loaded="$emit('imageLoaded')"
+                    @open="$emit('openVideoPreview', $event)"
                 />
                 <ChatMessageFile
                     v-else-if="Utils.isFileMessage(message)"
@@ -45,6 +51,7 @@ import AvatarBase from '@/components/AvatarBase.vue';
 import Utils from '@/utils/Utils';
 import ChatMessageFile from './ChatMessageFile.vue';
 import ChatMessageImage from './ChatMessageImage.vue';
+import ChatMessageVideo from './ChatMessageVideo.vue';
 
 const props = defineProps({
     currentChatSession: {
@@ -65,10 +72,14 @@ const props = defineProps({
     }
 });
 
-defineEmits(['imageLoaded', 'openFilePreview']);
+defineEmits(['imageLoaded', 'openFilePreview', 'openVideoPreview']);
 
 const isSelf = computed(() => {
     return Utils.isSelfMessage(props.message, props.currentUserId);
+});
+
+const isMediaMessage = computed(() => {
+    return Utils.isImageMessage(props.message) || Utils.isVideoMessage(props.message);
 });
 </script>
 
@@ -121,7 +132,7 @@ const isSelf = computed(() => {
     background: #95ec69;
 }
 
-.message-item-image {
+.message-item-media {
     padding: 0;
     background: transparent;
     box-shadow: none;

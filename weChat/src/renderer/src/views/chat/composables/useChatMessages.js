@@ -32,7 +32,8 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
         handleFileUploadDone,
         onSendChatMessage,
         onSendFileMessage,
-        onSendImageMessage
+        onSendImageMessage,
+        onSendVideoMessage
     } = useChatMessageSender({
         currentChatSession,
         isNearMessageBottom,
@@ -244,6 +245,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
         onSendChatMessage,
         onSendFileMessage,
         onSendImageMessage,
+        onSendVideoMessage,
         registerMessageListeners,
         settleScrollToBottom
     };

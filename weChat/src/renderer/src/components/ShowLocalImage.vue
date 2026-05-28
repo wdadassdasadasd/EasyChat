@@ -59,6 +59,10 @@ const props = defineProps({
     preview: {
         type: Boolean,
         default: false
+    },
+    showCover: {
+        type: Boolean,
+        default: false
     }
 });
 
@@ -91,7 +95,7 @@ const loadImage = async () => {
     let token = userInfoJson ? JSON.parse(userInfoJson).token : '';
 
     try {
-        const response = await axios.post(url, `fileId=${props.fileId}&showCover=false`, {
+        const response = await axios.post(url, `fileId=${props.fileId}&showCover=${props.showCover}`, {
             baseURL: import.meta.env.PROD ? (import.meta.env.VITE_DOMAIN || import.meta.env.VITE_PROD_DOMAIN || 'http://localhost:5050') : '',
             responseType: 'blob',
             headers: {
@@ -121,7 +125,7 @@ const loadImage = async () => {
 };
 
 watch(
-    () => [props.fileId, props.partType, props.forceGet],
+    () => [props.fileId, props.partType, props.forceGet, props.showCover],
     () => {
         loadImage();
     },

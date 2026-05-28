@@ -34,6 +34,13 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         return file?.type?.startsWith('image/');
     };
 
+    const isVideoFile = (file) => {
+        if (file?.type?.startsWith('video/')) {
+            return true;
+        }
+        return /\.(mp4|avi|rmvb|mkv|mov)$/i.test(file?.name || '');
+    };
+
     const createImageCover = (file) => {
         return new Promise((resolve) => {
             const image = new Image();
@@ -79,6 +86,50 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         });
     };
 
+    const createVideoCover = (file) => {
+        return new Promise((resolve) => {
+            const video = document.createElement('video');
+            const objectUrl = URL.createObjectURL(file);
+
+            const cleanup = () => {
+                video.pause();
+                video.removeAttribute('src');
+                video.load();
+                URL.revokeObjectURL(objectUrl);
+            };
+
+            const fallback = async () => {
+                cleanup();
+                resolve(await createFileCover());
+            };
+
+            video.preload = 'metadata';
+            video.muted = true;
+            video.playsInline = true;
+            video.onloadedmetadata = () => {
+                const seekTime = Math.min(1, Math.max(0, (video.duration || 0) / 4));
+                video.currentTime = seekTime;
+            };
+            video.onseeked = () => {
+                const maxSize = 360;
+                const width = video.videoWidth || 16;
+                const height = video.videoHeight || 9;
+                const ratio = Math.min(maxSize / width, maxSize / height, 1);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(width * ratio);
+                canvas.height = Math.round(height * ratio);
+                const context = canvas.getContext('2d');
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob((blob) => {
+                    cleanup();
+                    resolve(blob || file);
+                }, 'image/jpeg', 0.82);
+            };
+            video.onerror = fallback;
+            video.src = objectUrl;
+        });
+    };
+
     const isOverFileLimit = () => {
         return pendingImageList.value.length + pendingFileList.value.length >= fileLimit;
     };
@@ -111,7 +162,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         });
     };
 
-    const addPendingFile = async (file) => {
+    const addPendingFile = async (file, fileType = 2) => {
         if (!file) {
             return;
         }
@@ -124,7 +175,8 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         pendingFileList.value.push({
             id: `${Date.now()}_${Math.random()}`,
             file,
-            cover: await createFileCover(),
+            cover: fileType === 1 ? await createVideoCover(file) : await createFileCover(),
+            fileType,
             name: file.name,
             size: file.size
         });
@@ -133,6 +185,10 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     const addPendingMedia = async (file) => {
         if (isImageFile(file)) {
             await addPendingImage(file);
+            return;
+        }
+        if (isVideoFile(file)) {
+            await addPendingFile(file, 1);
             return;
         }
 
@@ -227,7 +283,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         clearPendingImages();
 
         pendingFileList.value.forEach((fileItem) => {
-            emit('sendFileMessage', {
+            emit(fileItem.fileType === 1 ? 'sendVideoMessage' : 'sendFileMessage', {
                 contactId: currentChatSession.value.contactId,
                 contactType: currentChatSession.value.contactType,
                 file: fileItem.file,
@@ -353,7 +409,8 @@ export const useChatMessageSender = ({
                 file,
                 cover
             },
-            showLoading: false
+            showLoading: false,
+            timeout: 0
         });
 
         if (!uploadResult) {
@@ -405,7 +462,14 @@ export const useChatMessageSender = ({
             return;
         }
 
+        const filePath = file.path || window.api?.getPathForFile?.(file) || '';
+        if (filePath) {
+            message.filePath = filePath;
+        }
+
         if (fileType === 0) {
+            message.localPreviewUrl = URL.createObjectURL(file);
+        } else if (fileType === 1) {
             message.localPreviewUrl = URL.createObjectURL(file);
         }
         message.uploading = true;
@@ -424,6 +488,10 @@ export const useChatMessageSender = ({
         return sendMediaMessage(payload, 2);
     };
 
+    const sendVideoMessage = (payload) => {
+        return sendMediaMessage(payload, 1);
+    };
+
     const onSendChatMessage = (payload) => {
         enqueueSendTask(() => sendChatMessage(payload));
     };
@@ -434,6 +502,10 @@ export const useChatMessageSender = ({
 
     const onSendFileMessage = (payload) => {
         enqueueSendTask(() => sendFileMessage(payload));
+    };
+
+    const onSendVideoMessage = (payload) => {
+        enqueueSendTask(() => sendVideoMessage(payload));
     };
 
     const handleFileUploadDone = (message) => {
@@ -453,6 +525,7 @@ export const useChatMessageSender = ({
         handleFileUploadDone,
         onSendChatMessage,
         onSendFileMessage,
-        onSendImageMessage
+        onSendImageMessage,
+        onSendVideoMessage
     };
 };

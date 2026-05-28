@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow,Menu,Tray} from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { onGetLocalStore, onLoadSessionData, onLocalFileFolder, onLoginOnRegister, onLoginSuccess, onResetToLogin, onSetLocalStore, winTitleOp ,onDelChatSession,onMarkSessionRead,onTopChatSession,onLoadChatMessage,onSaveSendMessage,onClearChatMessage,onSearchChatMessage} from './ipc.js';
+import { onGetLocalStore, onLoadSessionData, onLocalFileFolder, onLoginOnRegister, onLoginSuccess, onOpenTempVideoFile, onResetToLogin, onSetLocalStore, winTitleOp ,onDelChatSession,onMarkSessionRead,onTopChatSession,onLoadChatMessage,onSaveSendMessage,onClearChatMessage,onSearchChatMessage} from './ipc.js';
 import { createTable } from './db/ADB.js';
 
 const NODE_ENV=process.env.EODE_ENV;
@@ -139,6 +139,7 @@ function createWindow() {
   onClearChatMessage();
   onSearchChatMessage();
   onLocalFileFolder();
+  onOpenTempVideoFile();
 
   winTitleOp((e,{action,data})=>{
     const webContents=e.sender;

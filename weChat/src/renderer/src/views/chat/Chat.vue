@@ -66,6 +66,7 @@
                             @imageLoaded="settleScrollToBottom"
                             @loadMore="loadMoreChatMessage"
                             @openFilePreview="openFilePreviewDialog"
+                            @openVideoPreview="openVideoPreviewDialog"
                             @userScroll="clearInitialBottomLock"
                         />
 
@@ -74,6 +75,7 @@
                             @sendMessage="onSendChatMessage"
                             @sendImageMessage="onSendImageMessage"
                             @sendFileMessage="onSendFileMessage"
+                            @sendVideoMessage="onSendVideoMessage"
                         />
                     </div>
                     <GroupChatDrawer
@@ -121,6 +123,18 @@
                 @closed="closeFilePreviewDialog"
                 @receive="receiveSelectedFileMessage"
             />
+            <VideoPreviewDialog
+                v-model="showVideoPreviewDialog"
+                :message="selectedVideoMessage"
+                :loading="isLoadingVideo"
+                :progress="videoDownloadProgress"
+                :errorText="videoPlaybackError"
+                :videoUrl="videoPreviewUrl"
+                @closed="closeVideoPreviewDialog"
+                @download="downloadSelectedVideoMessage"
+                @openExternal="openSelectedVideoExternal"
+                @videoError="markVideoPlaybackError"
+            />
         </template>
     </Layout>
 </template>
@@ -134,6 +148,7 @@ import FilePreviewDialog from '@/components/chat/FilePreviewDialog.vue';
 import GroupChatDrawer from '@/components/chat/GroupChatDrawer.vue';
 import MessageSend from '@/components/chat/MessageSend.vue';
 import UserChatDrawer from '@/components/chat/UserChatDrawer.vue';
+import VideoPreviewDialog from '@/components/chat/VideoPreviewDialog.vue';
 import { useUserInfoStore } from '@/stores/userInfoStore';
 import { useChatMessages } from './composables/useChatMessages';
 import { useChatSessions } from './composables/useChatSessions';
@@ -178,6 +193,7 @@ const {
     onSendChatMessage,
     onSendFileMessage,
     onSendImageMessage,
+    onSendVideoMessage,
     registerMessageListeners,
     settleScrollToBottom
 } = useChatMessages({
@@ -189,11 +205,22 @@ const {
 
 const {
     closeFilePreviewDialog,
+    closeVideoPreviewDialog,
+    downloadSelectedVideoMessage,
     isReceivingFile,
+    isLoadingVideo,
+    markVideoPlaybackError,
     openFilePreviewDialog,
+    openSelectedVideoExternal,
+    openVideoPreviewDialog,
     receiveSelectedFileMessage,
     selectedFileMessage,
-    showFilePreviewDialog
+    selectedVideoMessage,
+    showFilePreviewDialog,
+    showVideoPreviewDialog,
+    videoDownloadProgress,
+    videoPlaybackError,
+    videoPreviewUrl
 } = useFileTransfer({ proxy });
 
 const currentUserId = computed(() => {
@@ -301,6 +328,7 @@ onUnmounted(() => {
     groupDetailVisible.value = false;
     userDetailVisible.value = false;
     removeSessionListener();
+    closeVideoPreviewDialog();
     cleanupChatMessages();
 });
 </script>
