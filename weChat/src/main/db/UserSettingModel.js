@@ -68,11 +68,9 @@ const getFolderStats = (folder) => {
     return stats;
 };
 
-const updateNoReadCount = (contactId, noReadCount) => {
-    return new Promise(async (resolve) => {
+const updateNoReadCount = async (contactId, noReadCount) => {
         let sql = null;
         if (noReadCount === 0) {
-            resolve();
             return;
         }
         if (noReadCount) {
@@ -82,8 +80,6 @@ const updateNoReadCount = (contactId, noReadCount) => {
             sql = "update user_setting set contact_no_read=? where user_id=?";
         }
         await run(sql, [noReadCount, contactId]);
-        resolve();
-    });
 };
 
 const addUserSetting = async (userId, email) => {

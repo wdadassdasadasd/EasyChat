@@ -12,7 +12,7 @@ export const useContactStateStore=defineStore('contactStateInfo',{
         setContactReload(contactReload){
             this.contactReload=contactReload;
         },
-       delContactId(contactId){
+       setDelContactId(contactId){
             this.delContactId=contactId;
         }}
 

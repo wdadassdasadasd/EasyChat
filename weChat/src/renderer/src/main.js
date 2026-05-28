@@ -73,7 +73,7 @@ app.component('WinOp', WinOp);
 app.component('ContactPanel', ContactPanel);
 app.component('ShowLocalImage', ShowLocalImage);
 app.component('UserBaseInfo', UserBaseInfo);
-app.component('Dialog', Dialog);
+app.component('AppDialog', Dialog);
 app.component('Avatar', Avatar);
 app.component('AvatarBase', AvatarBase);
 app.component('AvatarUpload', AvatarUpload);

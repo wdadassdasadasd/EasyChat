@@ -9,7 +9,7 @@
 
 
 <script setup>
-const props = defineProps({
+defineProps({
     showTopBorder: {
         type: Boolean,
         default: false

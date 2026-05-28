@@ -26,8 +26,7 @@
 
 <script setup>
 
-import { ref, computed, getCurrentInstance,watch,onBeforeUnmount} from 'vue';
-const proxy = getCurrentInstance();
+import { ref, computed, watch,onBeforeUnmount} from 'vue';
 const props = defineProps({
     // 头像可以是字符串路径，也可以是文件对象
     modelValue: {

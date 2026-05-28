@@ -1,7 +1,7 @@
 <template>
   <el-dialog :show-close="showClose" :draggable="draggable" :model-value="show" :close-on-click-modal="false"
     class="cust-dialog" :top="top + 'px'" :width="width" @close="close" @open="open">
-    <template #header="{ close, titleId, titleClass }">
+    <template #header>
       <div v-if="title" class="title">{{ title }}</div>
       <slot v-else name="header"></slot>
     </template>
@@ -11,7 +11,7 @@
     <template v-if="(buttons && buttons.length > 0) || showCancel">
       <div class="dialog-footer">
         <el-button link @click="close" v-if="showCancel"> 取消 </el-button>
-        <el-button v-for="btn in buttons" :type="btn.type || 'primary'" @click="btn.click">
+        <el-button v-for="btn in buttons" :key="btn.text" :type="btn.type || 'primary'" @click="btn.click">
           {{ btn.text }}
         </el-button>
       </div>

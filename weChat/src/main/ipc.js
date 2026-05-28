@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, dialog, ipcMain, shell } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import {initWs, closeWs} from './wsClient.js'
@@ -6,7 +6,6 @@ import store from './store.js'
 import { addUserSetting, getLocalFileFolder, resetLocalFileFolder, updateLocalFileFolder } from './db/UserSettingModel.js';
 import { selectUserSessionList,delChatSession,markSessionRead,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
 import { clearMessageBySessionId, searchMessageBySessionId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
-const Node_ENV=process.env.NODE_ENV;
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister=(mainWindow, callback)=>{
       ipcMain.on("loginOrRegister",(e,isLogin)=>{

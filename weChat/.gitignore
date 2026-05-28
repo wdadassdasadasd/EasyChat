@@ -2,3 +2,7 @@ node_modules
 dist
 out
 *.log*
+*.rdb
+logs/
+check.json
+cookies.txt

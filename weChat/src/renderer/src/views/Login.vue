@@ -62,7 +62,7 @@
 <script setup>
 import { ref, nextTick, getCurrentInstance, onMounted } from 'vue';
 import md5 from 'js-md5';
-import {useUserInfoStore} from '@/stores/userInfoStore.js';
+import {useUserInfoStore} from '@/stores/UserInfoStore.js';
 import { useRouter } from 'vue-router';
 
 const router=useRouter();

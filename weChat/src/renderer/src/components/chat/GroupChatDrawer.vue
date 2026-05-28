@@ -102,7 +102,7 @@
         </div>
     </aside>
 
-    <Dialog
+    <AppDialog
         :show="editDialogVisible"
         title="编辑群资料"
         width="420px"
@@ -124,9 +124,9 @@
                 />
             </el-form-item>
         </el-form>
-    </Dialog>
+    </AppDialog>
 
-    <Dialog
+    <AppDialog
         :show="addMemberDialogVisible"
         title="添加群成员"
         width="430px"
@@ -156,9 +156,9 @@
                 暂无可添加好友
             </div>
         </div>
-    </Dialog>
+    </AppDialog>
 
-    <Dialog
+    <AppDialog
         :show="searchDialogVisible"
         title="查找聊天内容"
         width="460px"
@@ -191,7 +191,7 @@
                 </div>
             </div>
         </div>
-    </Dialog>
+    </AppDialog>
 </template>
 
 <script setup>
@@ -199,7 +199,7 @@ import { computed, getCurrentInstance, nextTick, onUnmounted, ref, toRef, watch 
 import { ArrowRight, EditPen, Plus, Search } from '@element-plus/icons-vue';
 import AvatarBase from '@/components/AvatarBase.vue';
 import { useContactStateStore } from '@/stores/ContactStateStore';
-import { useUserInfoStore } from '@/stores/userInfoStore';
+import { useUserInfoStore } from '@/stores/UserInfoStore';
 import { useGroupChatDrawer } from '@/views/chat/composables/useGroupChatDrawer';
 
 const GROUP_MEMBER_OP_ADD = 1;

@@ -4,7 +4,7 @@
             <div class="drag-panel drag"></div>
             
             <div class="menu-list">
-                <div :class="['menu-item',route.path==item.path?'menu-active':'']" v-for="item in settingMenuList" @click="jump(item)">
+                <div :class="['menu-item',route.path==item.path?'menu-active':'']" v-for="item in settingMenuList" :key="item.path" @click="jump(item)">
                     <div class="menu-item-icon" :style="{background:item.bgColor}">
                         <el-icon>
                             <component :is="item.icon"></component>
@@ -22,20 +22,16 @@
             <RouterView v-slot="{Component}">
                 <component :is="Component"></component>
             </RouterView>
-            <WinOp :showSetTop="true" :showMin="true" :showMax="true" :closeType="1" showSetTop="1"></WinOp>
+            <WinOp :showSetTop="true" :showMin="true" :showMax="true" :closeType="1"></WinOp>
         </template>
     </Layout>
 </template>
 
 <script setup>
-import { ref, computed, getCurrentInstance } from 'vue';
-import { useContactStateStore } from '../../stores/ContactStateStore';
+import { ref } from 'vue';
 import { useRoute ,useRouter} from 'vue-router';
-import { useUserInfoStore } from '../../stores/userInfoStore';
 
-const {proxy}=getCurrentInstance();
 const rightTitle=ref();
-const userInfoStore=useUserInfoStore();
 const route=useRoute();
 const router=useRouter();
 const settingMenuList=ref([

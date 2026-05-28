@@ -27,7 +27,7 @@ import AvatarBase from './AvatarBase.vue';
 import { getCurrentInstance } from 'vue';
 const { proxy } = getCurrentInstance();
 
-const props = defineProps({
+defineProps({
     userInfo: {
         type: Object,
         default: () => ({})

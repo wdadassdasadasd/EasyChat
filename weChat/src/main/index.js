@@ -3,9 +3,8 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { onGetLocalStore, onLoadSessionData, onLocalFileFolder, onLoginOnRegister, onLoginSuccess, onOpenTempVideoFile, onResetToLogin, onSetLocalStore, winTitleOp ,onDelChatSession,onMarkSessionRead,onTopChatSession,onLoadChatMessage,onSaveSendMessage,onClearChatMessage,onSearchChatMessage} from './ipc.js';
-import { createTable } from './db/ADB.js';
 
-const NODE_ENV=process.env.EODE_ENV;
+const NODE_ENV=process.env.NODE_ENV;
 
 const login_width=300;
 const login_height=370;
@@ -23,7 +22,7 @@ function createWindow() {
     titleBarStyle: 'hidden',
     resizable: false,
     frame: false,
-    transfsparent: true,
+    transparent: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -94,9 +93,6 @@ function createWindow() {
     mainWindow.center();
     mainWindow.setMaximizable(true);
     //管理后台的窗口操作
-    if(config.admin){
-
-    }
     if(hasUserTrayMenu){
       contextMenu.shift();
     }

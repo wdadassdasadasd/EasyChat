@@ -51,7 +51,7 @@
             <RouterView v-slot="{Component}">
                 <component :is="Component" :key="Route.fullPath"></component>
             </RouterView>
-            <WinOp :showSetTop="true" :showMin="true" :showMax="true" :closeType="1" showSetTop="1"></WinOp>
+            <WinOp :showSetTop="true" :showMin="true" :showMax="true" :closeType="1"></WinOp>
         </template>
        
     </Layout>
@@ -209,7 +209,7 @@ const isCurrentContact = (contact, part) => {
 //监听 Pinia Store 的状态变化，自动刷新联系人列表
 watch(()=>
     contactStateStore.contactReload,
-    (newVal,oldVal)=>{
+    (newVal)=>{
         if(!newVal) return;
          switch(newVal){
         case 'MY_GROUP':

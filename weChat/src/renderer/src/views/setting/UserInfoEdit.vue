@@ -70,7 +70,7 @@
 
 <script setup>
 import { ref, getCurrentInstance, watch } from 'vue';
-import { useUserInfoStore } from '../../stores/userInfoStore';
+import { useUserInfoStore } from '../../stores/UserInfoStore';
 import AreaSelect from '../../components/AreaSelect.vue';
 
 const { proxy } = getCurrentInstance();

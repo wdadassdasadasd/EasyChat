@@ -5,10 +5,7 @@
 </template>
 
 <script setup>
-import  {ref,reactive, nextTick,getCurrentInstance} from 'vue';
 import ShowLocalImage from './ShowLocalImage.vue';
- 
-const {proxy} = getCurrentInstance();
 const props = defineProps({
     userId: {
         type: String,

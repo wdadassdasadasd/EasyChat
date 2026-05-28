@@ -2,4 +2,8 @@ node_modules/
 dist/
 .DS_Store
 *.log
+*.rdb
+logs/
+check.json
+cookies.txt
 .env

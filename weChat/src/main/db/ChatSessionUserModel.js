@@ -1,12 +1,9 @@
 import store from '../store';
 import {
-    insertOrReplace,
     insertOrIgnore,
     queryAll,
     queryOne,
-    queryCount,
     run,
-    insert,
     update
 
 } from './ADB';

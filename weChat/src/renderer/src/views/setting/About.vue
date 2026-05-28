@@ -24,19 +24,23 @@
 
 
 <script setup>
-import { ref, computed, getCurrentInstance } from 'vue';
-import { useContactStateStore } from '../../stores/ContactStateStore';
-import { useRoute ,useRouter} from 'vue-router';
-import { useUserInfoStore } from '../../stores/userInfoStore';
-
+import { ref, getCurrentInstance } from 'vue';
 
 const {proxy}=getCurrentInstance();
-const userInfoStore=useUserInfoStore();
-const route=useRoute();
-const router=useRouter();
+const formDataRef=ref();
+const formData=ref({});
+const rules={};
 
-const changeUpdate=()=>{
+const checkUpdate=()=>{
+    proxy.Message.info('当前已是最新版本');
+}
 
+const changeFolder=()=>{
+    proxy.Message.info('请在文件管理中修改文件保存位置');
+}
+
+const openLocalFolder=()=>{
+    proxy.Message.info('请在文件管理中打开文件夹');
 }
 
 </script>

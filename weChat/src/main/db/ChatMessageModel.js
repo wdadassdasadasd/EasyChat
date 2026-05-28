@@ -1,12 +1,10 @@
 import store from '../store';
 import {
     insertOrReplace,
-    insertOrIgnore,
     queryAll,
     queryOne,
     queryCount,
     run,
-    insert,
     update
 
 } from './ADB';
@@ -99,8 +97,7 @@ const saveMessage=async (data)=>{
 }
 
 
-const saveMessageBatch=(chatMeassageList)=>{
-     return new Promise(async(resolve,reject)=>{
+const saveMessageBatch=async(chatMeassageList)=>{
         const visibleMessageList = [];
         for (let item of chatMeassageList) {
             if (!(await isMessageBeforeClear(item))) {
@@ -133,9 +130,6 @@ const saveMessageBatch=(chatMeassageList)=>{
             await saveMessage(item);
 
         }
-        resolve();
-
-    })
 }
 
 const updateMessageStatus=(messageId,status=1)=>{
@@ -163,17 +157,15 @@ const getPageOffset=(pageNo=1,totalCount)=>{
 
 }
 
-const selectMesssageList = (query = {}) => {
-    return new Promise(async (resolve) => {
+const selectMesssageList = async (query = {}) => {
         const { sessionId, pageNo = 1, maxMessageId } = query;
 
         if (!sessionId) {
-            resolve({
+            return {
                 dataList: [],
                 pageNo,
                 pageTotal: 0
-            });
-            return;
+            };
         }
 
         const clearInfo = await getClearInfoBySessionId(sessionId);
@@ -204,12 +196,11 @@ const selectMesssageList = (query = {}) => {
         let dataList = await queryAll(sqlParts.join(' '), params);
         dataList = dataList.sort((a, b) => a.messageId - b.messageId);
 
-        resolve({
+        return {
             dataList,
             pageNo,
             pageTotal
-        });
-    });
+        };
 };
 
 const clearMessageBySessionId = async (sessionId) => {
@@ -228,12 +219,10 @@ const escapeLikeKeyword = (keyword = '') => {
     return String(keyword).replace(/[\\%_]/g, (match) => `\\${match}`);
 };
 
-const searchMessageBySessionId = ({ sessionId, keyword } = {}) => {
-    return new Promise(async (resolve) => {
+const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
         const searchKey = String(keyword || '').trim();
         if (!sessionId || !searchKey) {
-            resolve([]);
-            return;
+            return [];
         }
 
         const clearInfo = await getClearInfoBySessionId(sessionId);
@@ -248,8 +237,7 @@ const searchMessageBySessionId = ({ sessionId, keyword } = {}) => {
         sqlParts.push('order by message_id desc limit 50');
 
         const dataList = await queryAll(sqlParts.join(' '), params);
-        resolve(dataList || []);
-    });
+        return dataList || [];
 };
 
 export {

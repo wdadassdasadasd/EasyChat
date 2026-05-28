@@ -124,7 +124,7 @@ const delContact=()=>{
 const delContactData=()=>{
     const contactId = userInfo.value.userId || userInfo.value.contactId;
     contactStateStore.setContactReload('REMOVE_USER');
-    contactStateStore.delContactId(contactId);
+    contactStateStore.setDelContactId(contactId);
 }
 
 const sendMessage=()=>{
@@ -137,7 +137,7 @@ const sendMessage=()=>{
     })
 }
 
-watch(()=>route.query.contactId, (newVal,oldVal) => {
+watch(()=>route.query.contactId, (newVal) => {
     if (newVal) {
         loadUserDetail(newVal);
     }

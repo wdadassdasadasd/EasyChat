@@ -149,7 +149,7 @@ import GroupChatDrawer from '@/components/chat/GroupChatDrawer.vue';
 import MessageSend from '@/components/chat/MessageSend.vue';
 import UserChatDrawer from '@/components/chat/UserChatDrawer.vue';
 import VideoPreviewDialog from '@/components/chat/VideoPreviewDialog.vue';
-import { useUserInfoStore } from '@/stores/userInfoStore';
+import { useUserInfoStore } from '@/stores/UserInfoStore';
 import { useChatMessages } from './composables/useChatMessages';
 import { useChatSessions } from './composables/useChatSessions';
 import { useFileTransfer } from './composables/useFileTransfer';

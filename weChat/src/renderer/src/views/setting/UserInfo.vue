@@ -164,7 +164,7 @@ import { computed, getCurrentInstance, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import md5 from 'js-md5';
 import AreaSelect from '../../components/AreaSelect.vue';
-import { useUserInfoStore } from '../../stores/userInfoStore';
+import { useUserInfoStore } from '../../stores/UserInfoStore';
 
 const { proxy } = getCurrentInstance();
 const router = useRouter();

@@ -40,7 +40,7 @@
 </template>
 
 <script setup>
-import{ref,reactive,getCurrentInstance,nextTick, onMounted,onUnmounted,computed} from 'vue';
+import{ref,getCurrentInstance, onMounted,onUnmounted,computed} from 'vue';
 import { useRouter } from 'vue-router';
 import {useUserInfoStore} from '@/stores/UserInfoStore';
 const userInfoStore = useUserInfoStore();

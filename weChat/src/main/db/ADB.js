@@ -56,36 +56,43 @@ if(!fs.existsSync(flieFolder)){
 
 const db=new sqlite3.Database(flieFolder+'local.db')  // 创建/连接SQLite数据库文件
 
-//初始化数据库表
-const createTable=()=>{
-    return new Promise(async(resolve,reject)=>{
-
-        for(const item of add_tables){
-            await db.run(item)
-        }
-        for(const item of add_index){
-            await db.run(item)
-        }
-        for(const item of alter_tables){
-            const fieldList=await queryAll(`PRAGMA table_info(${item.table_Name})`,[])
-            const field=fieldList.some(row=>row.name=item.field)
-            if(!field){
-                await db.run(sql)
+const runRawSql = (sql) => {
+    return new Promise((resolve) => {
+        db.run(sql, (err) => {
+            if (err) {
+                console.error(`初始化数据库失败:${sql}`, err)
             }
-        }
-        resolve()
-
+            resolve()
+        })
     })
+}
 
+//初始化数据库表
+const createTable=async()=>{
+    for(const item of add_tables){
+        await runRawSql(item)
+    }
+    for(const item of add_index){
+        await runRawSql(item)
+    }
+    for(const item of alter_tables){
+        const tableName = item.tableName || item.table_Name
+        const fieldList=await queryAll(`PRAGMA table_info(${tableName})`,[])
+        const field=fieldList.some(row=>row.name===item.field)
+        if(!field&&item.sql){
+            await runRawSql(item.sql)
+        }
+    }
 }
 
 //查询所有数据
 const queryAll=(sql,params)=>{
-    return new  Promise((resolve,reject)=>{
+    return new  Promise((resolve)=>{
         const stmt=db.prepare(sql)
         stmt.all(params,function (err,row){
             if(err){
                 resolve([])
+                return
 
             }
             row.forEach((item,index)=>{
@@ -104,11 +111,12 @@ const queryAll=(sql,params)=>{
 
 
 const queryOne=(sql,params)=>{
-       return new  Promise((resolve,reject)=>{
+       return new  Promise((resolve)=>{
         const stmt=db.prepare(sql)
         stmt.get(params,function (err,row){
-            if(err){
-                resolve([])
+            if(err||!row){
+                resolve(null)
+                return
             }
             resolve(convertDbObj2BizObj(row))
 
@@ -138,12 +146,13 @@ const queryCount=(sql,params)=>{
 }
 
 const run=(sql,params)=>{
-   return new  Promise((resolve,reject)=>{
+   return new  Promise((resolve)=>{
         const stmt=db.prepare(sql)
         stmt.run(params,function (err){
             if(err){
                 console.error(`执行的SQL:${sql},params:${params},执行失败:${err}`)
-                resolve(操作数据库失败)
+                resolve(0)
+                return
             }
             console.error(`执行的SQL:${sql},params:${params},执行记录数:${this.changes}`)
             resolve(this.changes)
@@ -176,11 +185,6 @@ const toCamelCase=(str)=>{
     });
     
 }
-const obj=convertDbObj2BizObj({
-
-})
-
-
 const insert=(sqlPrefix,tableName,data)=>{
     const columnsMap=globalColumnMap[tableName]
     const dbColumns=[]
@@ -223,7 +227,7 @@ const update=(tableName,data,paramData)=>{
         }
     }
     for(let item in paramData){
-        if(paramData[item]){
+        if(paramData[item]!==undefined&&paramData[item]!==null){
             params.push(paramData[item])
             whereColumns.push(`${columnsMap[item]}=?`)
         }

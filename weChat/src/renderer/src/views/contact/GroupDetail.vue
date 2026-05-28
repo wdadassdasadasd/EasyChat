@@ -56,7 +56,7 @@
 import { ref, getCurrentInstance ,watch} from 'vue';
 import { useContactStateStore } from '../../stores/ContactStateStore';
 import { useRoute ,useRouter} from 'vue-router';
-import { useUserInfoStore } from '../../stores/userInfoStore';
+import { useUserInfoStore } from '../../stores/UserInfoStore';
 import GroupEditDialag from './GroupEditDialag.vue';
 
 const contactStateStore = useContactStateStore();
@@ -144,7 +144,7 @@ const sendMessage=()=>{
     })
 }
 //监听路由变化
-watch(()=>route.query.contactId,(newVal,oldVal)=>{
+watch(()=>route.query.contactId,(newVal)=>{
     if(newVal){
         groupId.value=newVal;
         //加载群信息

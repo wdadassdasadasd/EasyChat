@@ -1,5 +1,5 @@
 <template>
-    <Dialog
+    <AppDialog
         :show="dialogConfig.show"
         :title="dialogConfig.title"
         :buttons="dialogConfig.buttons"
@@ -8,7 +8,7 @@
         @close="dialogConfig.show = false"
     >
        <GroupEditForm ref="groupEditRef" @editBack="editBack"></GroupEditForm>
-    </Dialog>
+    </AppDialog>
 </template>
 
 
