@@ -1,4 +1,4 @@
-import { ref } from 'vue';
+import { nextTick, ref } from 'vue';
 import { useChatMessageSender } from './useMessageSender';
 import { useMessageScroll } from './useMessageScroll';
 
@@ -10,7 +10,9 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
         noData: false
     };
     const messageList = ref([]);
+    const messageLoadingMore = ref(false);
     let shouldScrollToBottomAfterLoad = false;
+    let pendingPrependScrollState = null;
 
     const {
         cleanupMessageScroll,
@@ -50,19 +52,60 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
     const clearCurrentMessages = () => {
         startMessagePanelRender();
         messageList.value = [];
+        messageLoadingMore.value = false;
+        pendingPrependScrollState = null;
         resetMessageCountInfo();
         messageCountInfo.noData = true;
         markMessagePanelReady();
     };
 
-    const loadChatMessage = () => {
+    const getMessagePanel = () => {
+        return document.getElementById('message-panel');
+    };
+
+    const capturePrependScrollState = () => {
+        const messagePanel = getMessagePanel();
+        if (!messagePanel) {
+            return null;
+        }
+        return {
+            scrollHeight: messagePanel.scrollHeight,
+            scrollTop: messagePanel.scrollTop
+        };
+    };
+
+    const restorePrependScrollPosition = async () => {
+        const scrollState = pendingPrependScrollState;
+        pendingPrependScrollState = null;
+        if (!scrollState) {
+            return;
+        }
+
+        await nextTick();
+        await new Promise((resolve) => {
+            window.requestAnimationFrame(() => {
+                const messagePanel = getMessagePanel();
+                if (messagePanel) {
+                    const heightDiff = messagePanel.scrollHeight - scrollState.scrollHeight;
+                    messagePanel.scrollTop = scrollState.scrollTop + heightDiff;
+                }
+                resolve();
+            });
+        });
+    };
+
+    const loadChatMessage = ({ keepScrollPosition = false } = {}) => {
         if (!currentChatSession.value.sessionId) {
             messageCountInfo.noData = true;
             markMessagePanelReady();
-            return;
+            return false;
         }
-        if (messageCountInfo.noData) {
-            return;
+        if (messageCountInfo.noData || (keepScrollPosition && messageLoadingMore.value)) {
+            return false;
+        }
+        if (keepScrollPosition) {
+            pendingPrependScrollState = capturePrependScrollState();
+            messageLoadingMore.value = true;
         }
         messageCountInfo.pageNo++;
         window.ipcRenderer.send('loadChatMessage', {
@@ -71,6 +114,11 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
             maxMessageId: messageCountInfo.maxMessageId,
             loadSeq: getActiveMessageLoadSeq()
         });
+        return true;
+    };
+
+    const loadMoreChatMessage = () => {
+        loadChatMessage({ keepScrollPosition: true });
     };
 
     const chatSessionClickHandler = (item) => {
@@ -79,6 +127,8 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
             currentChatSession.value = Object.assign({}, currentChatSession.value, item);
             if (shouldLoadMessages) {
                 messageList.value = [];
+                messageLoadingMore.value = false;
+                pendingPrependScrollState = null;
                 resetMessageCountInfo();
                 shouldScrollToBottomAfterLoad = true;
                 loadChatMessage();
@@ -89,34 +139,42 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
         startMessagePanelRender();
         currentChatSession.value = Object.assign({}, item);
         messageList.value = [];
+        messageLoadingMore.value = false;
+        pendingPrependScrollState = null;
         resetMessageCountInfo();
         shouldScrollToBottomAfterLoad = true;
         loadChatMessage();
     };
 
     const onLoadChatMessage = () => {
-        window.ipcRenderer.on('loadChatMessageCallback', (e, { dataList, pageTotal, pageNo, sessionId, loadSeq }) => {
+        window.ipcRenderer.on('loadChatMessageCallback', async (e, { dataList, pageTotal, pageNo, sessionId, loadSeq }) => {
             const isExpiredLoad = loadSeq != null && loadSeq !== getActiveMessageLoadSeq();
             const isWrongSession = sessionId != null && sessionId !== currentChatSession.value.sessionId;
             if (isExpiredLoad || isWrongSession) {
+                messageLoadingMore.value = false;
+                pendingPrependScrollState = null;
                 return;
             }
-            if (pageNo == pageTotal) {
+            const loadedMessages = Array.isArray(dataList) ? dataList : [];
+            if (pageNo >= pageTotal || loadedMessages.length === 0) {
                 messageCountInfo.noData = true;
             }
-            dataList.sort((a, b) => {
+            loadedMessages.sort((a, b) => {
                 return a.messageId - b.messageId;
             });
-            messageList.value = dataList.concat(messageList.value);
+            messageList.value = loadedMessages.concat(messageList.value);
             messageCountInfo.pageNo = pageNo;
             messageCountInfo.totalPage = pageTotal;
             if (pageNo == 1) {
-                messageCountInfo.maxMessageId = dataList.length > 0 ? dataList[dataList.length - 1].maxMessageId : null;
+                messageCountInfo.maxMessageId = loadedMessages.length > 0 ? loadedMessages[loadedMessages.length - 1].maxMessageId : null;
             }
             if (shouldScrollToBottomAfterLoad && pageNo == 1) {
                 shouldScrollToBottomAfterLoad = false;
                 showMessagePanelAtBottom(getMessagePanelRenderSeq());
+            } else if (messageLoadingMore.value) {
+                await restorePrependScrollPosition();
             }
+            messageLoadingMore.value = false;
         });
     };
 
@@ -159,6 +217,8 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
     const cleanupChatMessages = () => {
         removeMessageListeners();
         cleanupMessageScroll();
+        messageLoadingMore.value = false;
+        pendingPrependScrollState = null;
         messageList.value.forEach((message) => {
             if (message.localPreviewUrl) {
                 URL.revokeObjectURL(message.localPreviewUrl);
@@ -172,7 +232,9 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
         clearCurrentMessages,
         clearInitialBottomLock,
         loadChatMessage,
+        loadMoreChatMessage,
         messageList,
+        messageLoadingMore,
         messagePanelPhase,
         onSendChatMessage,
         onSendFileMessage,

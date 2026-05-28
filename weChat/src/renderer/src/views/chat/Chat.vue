@@ -59,10 +59,12 @@
                             :messageList="messageList"
                             :currentChatSession="currentChatSession"
                             :currentUserId="currentUserId"
+                            :messageLoadingMore="messageLoadingMore"
                             :messagePanelPhase="messagePanelPhase"
                             :showGroupMemberNick="showGroupMemberNick"
                             :welcomeText="welcomeText"
                             @imageLoaded="settleScrollToBottom"
+                            @loadMore="loadMoreChatMessage"
                             @openFilePreview="openFilePreviewDialog"
                             @userScroll="clearInitialBottomLock"
                         />
@@ -168,7 +170,9 @@ const {
     cleanupChatMessages,
     clearCurrentMessages,
     clearInitialBottomLock,
+    loadMoreChatMessage,
     messageList,
+    messageLoadingMore,
     messagePanelPhase,
     onSendChatMessage,
     onSendFileMessage,
