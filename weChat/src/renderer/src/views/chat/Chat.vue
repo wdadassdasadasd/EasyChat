@@ -155,6 +155,7 @@ const {
     currentChatSessionTitle,
     hasCurrentChat,
     loadChatSession,
+    markSessionRead,
     onContextmenu,
     openChatFromRoute,
     registerSessionListener,
@@ -182,6 +183,7 @@ const {
 } = useChatMessages({
     currentChatSession,
     loadChatSession,
+    markSessionRead,
     proxy
 });
 
@@ -196,6 +198,12 @@ const {
 
 const currentUserId = computed(() => {
     return userInfoStore.getInfo()?.userId;
+});
+
+const totalUnreadCount = computed(() => {
+    return chatSessionList.value.reduce((total, item) => {
+        return total + Number(item.noReadCount || 0);
+    }, 0);
 });
 
 const showChatDetail = () => {
@@ -272,6 +280,20 @@ watch(
     () => {
         groupDetailVisible.value = false;
         userDetailVisible.value = false;
+    }
+);
+
+watch(
+    totalUnreadCount,
+    (count) => {
+        window.dispatchEvent(new CustomEvent('chatUnreadCountChange', {
+            detail: {
+                count
+            }
+        }));
+    },
+    {
+        immediate: true
     }
 );
 

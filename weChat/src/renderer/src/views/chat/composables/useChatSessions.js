@@ -211,6 +211,22 @@ export const useChatSessions = ({ proxy, route }) => {
         sortChatSessionList(chatSessionList.value);
     };
 
+    const markSessionRead = (contactId) => {
+        if (!contactId) {
+            return;
+        }
+        const session = chatSessionList.value.find((item) => item.contactId == contactId);
+        if (session) {
+            session.noReadCount = 0;
+        }
+        if (currentChatSession.value.contactId == contactId) {
+            currentChatSession.value = Object.assign({}, currentChatSession.value, {
+                noReadCount: 0
+            });
+        }
+        window.ipcRenderer.send('markSessionRead', contactId);
+    };
+
     const setTop = (data) => {
         setChatSessionTop(data.contactId, data.topType == 0 ? 1 : 0);
     };
@@ -254,6 +270,7 @@ export const useChatSessions = ({ proxy, route }) => {
         currentChatSessionTitle,
         hasCurrentChat,
         loadChatSession,
+        markSessionRead,
         onContextmenu,
         openChatFromRoute,
         registerSessionListener,

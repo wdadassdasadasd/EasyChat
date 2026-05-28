@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import {initWs, closeWs} from './wsClient.js'
 import store from './store.js'
 import { addUserSetting, getLocalFileFolder, resetLocalFileFolder, updateLocalFileFolder } from './db/UserSettingModel.js';
-import { selectUserSessionList,delChatSession,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
+import { selectUserSessionList,delChatSession,markSessionRead,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
 import { clearMessageBySessionId, searchMessageBySessionId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
 const Node_ENV=process.env.NODE_ENV;
 //通知主进程切换登录/注册窗口
@@ -85,6 +85,16 @@ const onLoadChatMessage=()=>{
         });
     })
 
+}
+
+const onMarkSessionRead=()=>{
+    ipcMain.on("markSessionRead",async (e,contactId)=>{
+        await markSessionRead(contactId);
+        e.sender.send("markSessionReadCallback",{
+            contactId,
+            success:true
+        });
+    })
 }
 
 const onResetToLogin=(_mainWindow, callback)=>{
@@ -206,6 +216,7 @@ export {
     onGetLocalStore,
     onLoadSessionData,
     onDelChatSession,
+    onMarkSessionRead,
     onTopChatSession,
     onLoadChatMessage,
     onSaveSendMessage,

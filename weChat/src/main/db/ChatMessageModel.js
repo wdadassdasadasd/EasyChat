@@ -110,6 +110,9 @@ const saveMessageBatch=(chatMeassageList)=>{
 
         const chatSessionCountMap={}
         visibleMessageList.forEach((item)=>{
+            if(item.sendUserId==store.getUserId()){
+                return;
+            }
             let contactId=item.contactType==1?item.contactId:item.sendUserId;
             let noReadCount=chatSessionCountMap[contactId];
             if(!noReadCount){

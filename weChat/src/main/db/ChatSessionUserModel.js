@@ -44,9 +44,20 @@ const saveOrUpdateChatSessionBatch4Init=async (chatSessionList)=>{
 
 //更新未读数
 const updateNoReadCount=({contactId,noReadCount})=>{
-    let sql="update chat_session_user set no_read_count=? where user_id=? and contact_id=?";
+    if(!contactId){
+        return Promise.resolve(0);
+    }
+    if(noReadCount===0){
+        let sql="update chat_session_user set no_read_count=0 where user_id=? and contact_id=?";
+        return run(sql,[store.getUserId(),contactId])
+    }
+    let sql="update chat_session_user set no_read_count=coalesce(no_read_count,0)+? where user_id=? and contact_id=?";
     return run(sql,[noReadCount,store.getUserId(),contactId])
 
+}
+
+const markSessionRead=(contactId)=>{
+    return updateNoReadCount({contactId,noReadCount:0})
 }
 
 //查询用户会话列表
@@ -95,6 +106,7 @@ const topChatSession=(contactId,topType)=>{
 export {
      saveOrUpdateChatSessionBatch4Init,
      updateNoReadCount,
+     markSessionRead,
      selectUserSessionList,
      delChatSession,
      topChatSession

@@ -1,6 +1,9 @@
 <template>
     <div :class="['chat-session-item', currentSession ? 'active' : '']">
-        <AvatarBase :userId="data.contactId" :width="45" :borderRadius="4"></AvatarBase>
+        <div class="avatar-wrap">
+            <AvatarBase :userId="data.contactId" :width="45" :borderRadius="4"></AvatarBase>
+            <span class="unread-badge" v-if="unreadCount > 0">{{ unreadText }}</span>
+        </div>
         <div class="user-info">
             <div class="user-panel">
                 <div class="user-name">{{ data.contactName }}</div>
@@ -16,12 +19,12 @@
 </template>
 
 <script setup>
-import { getCurrentInstance } from 'vue';
+import { computed, getCurrentInstance } from 'vue';
 import AvatarBase from '@/components/AvatarBase.vue';
 
 const { proxy } = getCurrentInstance();
 
-defineProps({
+const props = defineProps({
     data: {
         type: Object,
         default: () => ({})
@@ -31,6 +34,9 @@ defineProps({
         default: false
     }
 });
+
+const unreadCount = computed(() => Number(props.data?.noReadCount || 0));
+const unreadText = computed(() => unreadCount.value > 99 ? '99+' : String(unreadCount.value));
 </script>
 
 <style lang="scss" scoped>
@@ -49,6 +55,35 @@ defineProps({
     &.active {
         background: #c6c6c6;
     }
+}
+
+.avatar-wrap {
+    position: relative;
+    flex: 0 0 45px;
+    width: 45px;
+    height: 45px;
+}
+
+.unread-badge {
+    position: absolute;
+    top: -6px;
+    right: -7px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: #fa5151;
+    color: #fff;
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+    box-sizing: border-box;
+    box-shadow: 0 0 0 2px #e5e5e5;
+    z-index: 2;
+}
+
+.chat-session-item.active .unread-badge {
+    box-shadow: 0 0 0 2px #c6c6c6;
 }
 
 .user-info {

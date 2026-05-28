@@ -2,7 +2,7 @@ import { nextTick, ref } from 'vue';
 import { useChatMessageSender } from './useMessageSender';
 import { useMessageScroll } from './useMessageScroll';
 
-export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) => {
+export const useChatMessages = ({ currentChatSession, loadChatSession, markSessionRead, proxy }) => {
     const messageCountInfo = {
         totalPage: 0,
         pageNo: 0,
@@ -122,6 +122,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
     };
 
     const chatSessionClickHandler = (item) => {
+        markSessionRead?.(item.contactId);
         if (currentChatSession.value.contactId == item.contactId) {
             const shouldLoadMessages = !currentChatSession.value.sessionId && item.sessionId;
             currentChatSession.value = Object.assign({}, currentChatSession.value, item);
@@ -192,7 +193,11 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, proxy }) 
                 handleFileUploadDone(message);
                 return;
             }
-            if (message.sessionId == currentChatSession.value.sessionId) {
+            const receiveContactId = message.contactType == 1 ? message.contactId : message.sendUserId;
+            const isCurrentSession = message.sessionId == currentChatSession.value.sessionId ||
+                receiveContactId == currentChatSession.value.contactId;
+            if (isCurrentSession) {
+                markSessionRead?.(receiveContactId);
                 const exists = messageList.value.some((item) => item.messageId == message.messageId);
                 if (!exists) {
                     const shouldStickToBottom = isNearMessageBottom();

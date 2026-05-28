@@ -16,6 +16,7 @@
                     <el-icon>
                         <component :is="item.icon"></component>
                     </el-icon>
+                    <span class="menu-badge" v-if="item.name=='chat'&&chatUnreadCount>0">{{ chatUnreadText }}</span>
                 </div>
             </div>
             <div class="menu-list menu-bottom">
@@ -39,7 +40,7 @@
 </template>
 
 <script setup>
-import{ref,reactive,getCurrentInstance,nextTick, onMounted,computed} from 'vue';
+import{ref,reactive,getCurrentInstance,nextTick, onMounted,onUnmounted,computed} from 'vue';
 import { useRouter } from 'vue-router';
 import {useUserInfoStore} from '@/stores/UserInfoStore';
 const userInfoStore = useUserInfoStore();
@@ -85,13 +86,23 @@ const menuList=ref([{
 }])
 
 const currentMenu=ref(menuList.value[0]);
+const chatUnreadCount=ref(0);
+const chatUnreadText=computed(()=>chatUnreadCount.value>99?'99+':String(chatUnreadCount.value));
 const changeMenu=(item)=>{
     currentMenu.value=item;
     router.push(item.path);
 }
+const handleChatUnreadCountChange=(event)=>{
+    chatUnreadCount.value=Number(event.detail?.count||0);
+}
 
 onMounted(()=>{
     getLoginInfo();
+    window.addEventListener('chatUnreadCountChange',handleChatUnreadCountChange);
+})
+
+onUnmounted(()=>{
+    window.removeEventListener('chatUnreadCountChange',handleChatUnreadCountChange);
 })
 </script>
 
@@ -139,6 +150,7 @@ onMounted(()=>{
 }
 
 .tab-item {
+    position: relative;
     width: 40px;
     height: 40px;
     display: flex;
@@ -158,6 +170,22 @@ onMounted(()=>{
     &.active {
         color: #ffffff;
     }
+}
+
+.menu-badge {
+    position: absolute;
+    top: 2px;
+    right: 0;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: #fa5151;
+    color: #fff;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+    box-sizing: border-box;
 }
 
 .right-container {
