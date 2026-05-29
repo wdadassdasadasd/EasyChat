@@ -55,6 +55,22 @@ if(!fs.existsSync(flieFolder)){
 }
 
 const db=new sqlite3.Database(flieFolder+'local.db')  // 创建/连接SQLite数据库文件
+if (typeof db.configure === 'function') {
+    db.configure('busyTimeout', 5000)
+}
+let transactionQueue = Promise.resolve()
+
+const executeSql = (sql, params = []) => {
+    return new Promise((resolve, reject) => {
+        db.run(sql, params, function (err) {
+            if (err) {
+                reject(err)
+                return
+            }
+            resolve(this.changes || 0)
+        })
+    })
+}
 
 const runRawSql = (sql) => {
     return new Promise((resolve) => {
@@ -69,6 +85,9 @@ const runRawSql = (sql) => {
 
 //初始化数据库表
 const createTable=async()=>{
+    await runRawSql('PRAGMA journal_mode=WAL')
+    await runRawSql('PRAGMA busy_timeout=5000')
+    await runRawSql('PRAGMA synchronous=NORMAL')
     for(const item of add_tables){
         await runRawSql(item)
     }
@@ -164,6 +183,26 @@ const run=(sql,params)=>{
 }
 
 //数据库对象转业务对象
+const transaction=(callback)=>{
+    const task = transactionQueue.catch(() => {}).then(async()=>{
+        await executeSql('BEGIN IMMEDIATE')
+        try {
+            const result = await callback()
+            await executeSql('COMMIT')
+            return result
+        } catch (error) {
+            try {
+                await executeSql('ROLLBACK')
+            } catch (rollbackError) {
+                console.error('ROLLBACK failed', rollbackError)
+            }
+            throw error
+        }
+    })
+    transactionQueue = task.catch(() => {})
+    return task
+}
+
 const convertDbObj2BizObj=(data)=>{
     if(!data){
         return null;
@@ -253,6 +292,7 @@ export {
     queryOne,
     queryCount,
     run,
+    transaction,
     insert,
     update
 }

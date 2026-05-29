@@ -5,6 +5,8 @@ export const useChatSessions = ({ proxy, route }) => {
     const chatSessionList = ref([]);
     const currentChatSession = ref({});
     let selectSession = () => {};
+    const pendingReadContactIds = new Set();
+    let pendingReadTimer = null;
 
     const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0);
 
@@ -47,6 +49,44 @@ export const useChatSessions = ({ proxy, route }) => {
             }
             return topTypeResult;
         });
+    };
+
+    const applySessionPatches = (sessionPatches = []) => {
+        if (!Array.isArray(sessionPatches) || sessionPatches.length === 0) {
+            return;
+        }
+
+        const sessionMap = new Map(chatSessionList.value.map((item) => [item.contactId, item]));
+        sessionPatches.forEach((patch = {}) => {
+            if (!patch.contactId) {
+                return;
+            }
+            const previous = sessionMap.get(patch.contactId);
+            const noReadCountDelta = Number(patch.noReadCountDelta || 0);
+            const patchInfo = Object.assign({}, patch);
+            delete patchInfo.noReadCountDelta;
+
+            if (previous) {
+                const nextNoReadCount = patchInfo.noReadCount ?? (
+                    noReadCountDelta > 0 ? Number(previous.noReadCount || 0) + noReadCountDelta : previous.noReadCount
+                );
+                Object.assign(previous, patchInfo, {
+                    noReadCount: nextNoReadCount,
+                    topType: patchInfo.topType ?? previous.topType
+                });
+                syncCurrentSession(previous);
+                return;
+            }
+
+            const nextSession = Object.assign({
+                status: 1,
+                topType: 0,
+                noReadCount: noReadCountDelta
+            }, patchInfo);
+            sessionMap.set(nextSession.contactId, nextSession);
+            chatSessionList.value.push(nextSession);
+        });
+        sortChatSessionList(chatSessionList.value);
     };
 
     const delChatSessionList = (contactId) => {
@@ -180,6 +220,11 @@ export const useChatSessions = ({ proxy, route }) => {
 
     const removeSessionListener = () => {
         window.ipcRenderer.removeAllListeners('loadSessionDataCallback');
+        if (pendingReadTimer) {
+            window.clearTimeout(pendingReadTimer);
+            pendingReadTimer = null;
+        }
+        pendingReadContactIds.clear();
     };
 
     const setChatSessionTop = (contactId, topType) => {
@@ -211,6 +256,15 @@ export const useChatSessions = ({ proxy, route }) => {
         sortChatSessionList(chatSessionList.value);
     };
 
+    const flushPendingRead = () => {
+        pendingReadTimer = null;
+        const contactIds = [...pendingReadContactIds];
+        pendingReadContactIds.clear();
+        contactIds.forEach((contactId) => {
+            window.ipcRenderer.send('markSessionRead', contactId);
+        });
+    };
+
     const markSessionRead = (contactId) => {
         if (!contactId) {
             return;
@@ -224,7 +278,10 @@ export const useChatSessions = ({ proxy, route }) => {
                 noReadCount: 0
             });
         }
-        window.ipcRenderer.send('markSessionRead', contactId);
+        pendingReadContactIds.add(contactId);
+        if (!pendingReadTimer) {
+            pendingReadTimer = window.setTimeout(flushPendingRead, 250);
+        }
     };
 
     const setTop = (data) => {
@@ -268,6 +325,7 @@ export const useChatSessions = ({ proxy, route }) => {
         chatSessionList,
         currentChatSession,
         currentChatSessionTitle,
+        applySessionPatches,
         hasCurrentChat,
         loadChatSession,
         markSessionRead,

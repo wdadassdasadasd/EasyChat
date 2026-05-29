@@ -5,6 +5,7 @@ import {
     queryOne,
     queryCount,
     run,
+    transaction,
     update
 
 } from './ADB';
@@ -69,6 +70,31 @@ const isMessageBeforeClear = async (message = {}) => {
     return clearTime > 0 && sendTime > 0 && sendTime <= clearTime;
 };
 
+const isMessageBeforeClearInfo = (message = {}, clearInfo) => {
+    if (!clearInfo) {
+        return false;
+    }
+
+    const clearMessageId = Number(clearInfo.clearMessageId || 0);
+    const messageId = Number(message.messageId || 0);
+    if (clearMessageId > 0 && messageId > 0) {
+        return messageId <= clearMessageId;
+    }
+
+    const clearTime = Number(clearInfo.clearTime || 0);
+    const sendTime = Number(message.sendTime || 0);
+    return clearTime > 0 && sendTime > 0 && sendTime <= clearTime;
+};
+
+const getClearInfoMapByMessages = async (messageList = []) => {
+    const sessionIds = [...new Set(messageList.map((item) => item?.sessionId).filter(Boolean))];
+    const clearInfoMap = new Map();
+    for (const sessionId of sessionIds) {
+        clearInfoMap.set(sessionId, await getClearInfoBySessionId(sessionId));
+    }
+    return clearInfoMap;
+};
+
 const appendClearFilter = (sqlParts, params, clearInfo) => {
     const clearMessageId = Number(clearInfo?.clearMessageId || 0);
     const clearTime = Number(clearInfo?.clearTime || 0);
@@ -130,6 +156,55 @@ const saveMessageBatch=async(chatMeassageList)=>{
             await saveMessage(item);
 
         }
+}
+
+const saveMessageBatchInTransaction=async(chatMeassageList=[])=>{
+        if(!Array.isArray(chatMeassageList)||chatMeassageList.length===0){
+            return {
+                messages: [],
+                unreadCounts: {}
+            };
+        }
+
+        const clearInfoMap = await getClearInfoMapByMessages(chatMeassageList);
+        const visibleMessageList = chatMeassageList.filter((item) => {
+            return !isMessageBeforeClearInfo(item, clearInfoMap.get(item?.sessionId));
+        });
+
+        const chatSessionCountMap={}
+        visibleMessageList.forEach((item)=>{
+            if(item.sendUserId==store.getUserId()){
+                return;
+            }
+            let contactId=item.contactType==1?item.contactId:item.sendUserId;
+            let noReadCount=chatSessionCountMap[contactId];
+            if(!noReadCount){
+                chatSessionCountMap[contactId]=1
+            }
+            else{
+                chatSessionCountMap[contactId]=noReadCount+1;
+            }
+        })
+
+        await transaction(async()=>{
+            for(let item in chatSessionCountMap){
+                await updateNoReadCount({contactId:item,noReadCount:chatSessionCountMap[item]})
+            }
+            for(let item of visibleMessageList){
+                item.userId=store.getUserId();
+                await insertOrReplace("chat_message",item);
+            }
+        });
+
+        return {
+            messages: visibleMessageList,
+            unreadCounts: chatSessionCountMap
+        };
+}
+
+const saveMessageBatchOptimized=async(chatMeassageList)=>{
+        const result = await saveMessageBatchInTransaction(chatMeassageList);
+        return result.messages;
 }
 
 const updateMessageStatus=(messageId,status=1)=>{
@@ -242,7 +317,8 @@ const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
 
 export {
     saveMessage,
-    saveMessageBatch,
+    saveMessageBatchOptimized as saveMessageBatch,
+    saveMessageBatchInTransaction,
     updateMessageStatus,
     selectMesssageList,
     selectMesssageList as selectMessageList,

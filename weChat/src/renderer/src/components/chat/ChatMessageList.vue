@@ -1,36 +1,55 @@
 <template>
     <div class="chat-panel">
-        <div
+        <DynamicScroller
+            v-if="messageList.length > 0"
             :class="['message-panel', 'message-panel-' + messagePanelPhase]"
             id="message-panel"
             ref="messagePanelRef"
+            :items="renderList"
+            :min-item-size="64"
+            key-field="key"
             @scroll.passive="handleScroll"
             @wheel.passive="$emit('userScroll')"
             @pointerdown="$emit('userScroll')"
         >
-            <div class="message-panel-content">
-                <template v-if="messageList.length > 0">
-                    <div v-if="messageLoadingMore" class="message-loading-tip">加载中...</div>
-                    <template v-for="item in renderList" :key="item.key">
-                        <div v-if="item.type === 'time'" class="message-time-divider">
-                            {{ item.text }}
-                        </div>
-                        <ChatMessage
-                            v-else
-                            :message="item.message"
-                            :currentChatSession="currentChatSession"
-                            :currentUserId="currentUserId"
-                            :showGroupMemberNick="showGroupMemberNick"
-                            @imageLoaded="$emit('imageLoaded')"
-                            @openFilePreview="$emit('openFilePreview', $event)"
-                            @openVideoPreview="$emit('openVideoPreview', $event)"
-                        />
-                    </template>
-                    <div ref="messageBottomRef" class="message-bottom-anchor"></div>
-                </template>
-                <div class="chat-empty" v-else>
-                    <div class="empty-tip">{{ welcomeText }}</div>
-                </div>
+            <template #before>
+                <div v-if="messageLoadingMore" class="message-loading-tip">Loading...</div>
+            </template>
+            <template #default="{ item, index, active }">
+                <DynamicScrollerItem
+                    :item="item"
+                    :active="active"
+                    :index="index"
+                    :size-dependencies="getSizeDependencies(item)"
+                    class="message-virtual-item"
+                >
+                    <div v-if="item.type === 'time'" class="message-time-divider">
+                        {{ item.text }}
+                    </div>
+                    <ChatMessage
+                        v-else
+                        :message="item.message"
+                        :currentChatSession="currentChatSession"
+                        :currentUserId="currentUserId"
+                        :showGroupMemberNick="showGroupMemberNick"
+                        @imageLoaded="$emit('imageLoaded')"
+                        @openFilePreview="$emit('openFilePreview', $event)"
+                        @openVideoPreview="$emit('openVideoPreview', $event)"
+                    />
+                </DynamicScrollerItem>
+            </template>
+            <template #after>
+                <div ref="messageBottomRef" class="message-bottom-anchor"></div>
+            </template>
+        </DynamicScroller>
+        <div
+            v-else
+            :class="['message-panel', 'message-panel-' + messagePanelPhase]"
+            id="message-panel"
+            ref="messagePanelRef"
+        >
+            <div class="chat-empty">
+                <div class="empty-tip">{{ welcomeText }}</div>
             </div>
         </div>
     </div>
@@ -38,6 +57,7 @@
 
 <script setup>
 import { computed, ref } from 'vue';
+import { DynamicScroller, DynamicScrollerItem } from 'vue-virtual-scroller';
 import ChatMessage from './ChatMessage.vue';
 
 const emit = defineEmits(['imageLoaded', 'loadMore', 'openFilePreview', 'openVideoPreview', 'userScroll']);
@@ -111,16 +131,16 @@ const formatMessageTime = (time) => {
         return timeText;
     }
     if (dayDiff === 1) {
-        return `昨天 ${timeText}`;
+        return `Yesterday ${timeText}`;
     }
     if (dayDiff > 1 && dayDiff < 7) {
-        const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+        const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         return `${weekdays[date.getDay()]} ${timeText}`;
     }
     if (date.getFullYear() === now.getFullYear()) {
-        return `${date.getMonth() + 1}月${date.getDate()}日 ${timeText}`;
+        return `${date.getMonth() + 1}/${date.getDate()} ${timeText}`;
     }
-    return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${timeText}`;
+    return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${timeText}`;
 };
 
 const renderList = computed(() => {
@@ -150,6 +170,21 @@ const renderList = computed(() => {
     return list;
 });
 
+const getSizeDependencies = (item) => {
+    if (item.type === 'time') {
+        return [item.text];
+    }
+    const message = item.message || {};
+    return [
+        message.messageContent,
+        message.fileName,
+        message.fileSize,
+        message.filePath,
+        message.status,
+        message.forceGet
+    ];
+};
+
 const handleScroll = (event) => {
     const target = event.target;
     if (!target || props.messageLoadingMore || props.messagePanelPhase !== 'ready') {
@@ -177,8 +212,6 @@ defineExpose({
 .message-panel {
     flex: 1;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
     overflow-y: auto;
     padding: 20px 28px 16px;
     scroll-behavior: auto;
@@ -191,16 +224,7 @@ defineExpose({
     pointer-events: none;
 }
 
-.message-panel-content {
-    position: relative;
-    flex: 0 0 auto;
-    min-height: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-}
-
-.message-panel-entering .message-panel-content {
+.message-panel-entering {
     animation: message-panel-enter 100ms cubic-bezier(0.2, 0, 0, 1) both;
     will-change: opacity;
 }
@@ -215,14 +239,16 @@ defineExpose({
     }
 }
 
+.message-virtual-item {
+    box-sizing: border-box;
+}
+
 .message-bottom-anchor {
-    flex-shrink: 0;
     height: 1px;
 }
 
 .message-loading-tip,
 .message-time-divider {
-    flex-shrink: 0;
     color: #9a9a9a;
     font-size: 13px;
     line-height: 20px;
@@ -230,10 +256,7 @@ defineExpose({
 }
 
 .message-loading-tip {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: -14px;
+    padding-bottom: 10px;
     pointer-events: none;
 }
 
@@ -242,7 +265,7 @@ defineExpose({
 }
 
 .chat-empty {
-    flex: 1;
+    min-height: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;

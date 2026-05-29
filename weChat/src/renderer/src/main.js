@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import ElementPlus from 'element-plus'
+import VueVirtualScroller from 'vue-virtual-scroller'
 import {
     ChatDotRound,
     Close,
@@ -20,6 +21,7 @@ import {
 } from '@element-plus/icons-vue'
 
 import 'element-plus/dist/index.css'
+import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import '@imengyu/vue3-context-menu/lib/vue3-context-menu.css'
 import './assets/icon/iconfont.css'
 import './assets/base.scss'
@@ -66,6 +68,7 @@ for (const [name, component] of Object.entries(iconComponents)) {
 }
 
 app.use(ElementPlus)
+app.use(VueVirtualScroller)
 app.use(router)
 app.use(Pinia.createPinia())
 app.component('Layout', Layout);

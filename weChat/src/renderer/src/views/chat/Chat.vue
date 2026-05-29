@@ -165,6 +165,7 @@ const showGroupMemberNick = ref(true);
 const search = () => {};
 
 const {
+    applySessionPatches,
     chatSessionList,
     currentChatSession,
     currentChatSessionTitle,
@@ -197,6 +198,7 @@ const {
     registerMessageListeners,
     settleScrollToBottom
 } = useChatMessages({
+    applySessionPatches,
     currentChatSession,
     loadChatSession,
     markSessionRead,

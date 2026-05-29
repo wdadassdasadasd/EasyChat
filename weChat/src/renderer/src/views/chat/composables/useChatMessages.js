@@ -2,7 +2,7 @@ import { nextTick, ref } from 'vue';
 import { useChatMessageSender } from './useMessageSender';
 import { useMessageScroll } from './useMessageScroll';
 
-export const useChatMessages = ({ currentChatSession, loadChatSession, markSessionRead, proxy }) => {
+export const useChatMessages = ({ applySessionPatches, currentChatSession, loadChatSession, markSessionRead, proxy }) => {
     const messageCountInfo = {
         totalPage: 0,
         pageNo: 0,
@@ -11,6 +11,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
     };
     const messageList = ref([]);
     const messageLoadingMore = ref(false);
+    let messageIdSet = new Set();
     let shouldScrollToBottomAfterLoad = false;
     let pendingPrependScrollState = null;
 
@@ -53,11 +54,62 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
     const clearCurrentMessages = () => {
         startMessagePanelRender();
         messageList.value = [];
+        messageIdSet = new Set();
         messageLoadingMore.value = false;
         pendingPrependScrollState = null;
         resetMessageCountInfo();
         messageCountInfo.noData = true;
         markMessagePanelReady();
+    };
+
+    const rebuildMessageIdSet = () => {
+        messageIdSet = new Set(messageList.value.map((item) => item.messageId).filter((messageId) => messageId != null));
+    };
+
+    const appendMessagesIfMissing = async (messages = []) => {
+        const incomingMessages = Array.isArray(messages) ? messages : [];
+        const nextMessages = [];
+        incomingMessages.forEach((message) => {
+            if (!message) {
+                return;
+            }
+            if (message.messageId != null && messageIdSet.has(message.messageId)) {
+                return;
+            }
+            if (message.messageId != null) {
+                messageIdSet.add(message.messageId);
+            }
+            nextMessages.push(message);
+        });
+
+        if (nextMessages.length === 0) {
+            return false;
+        }
+
+        const shouldStickToBottom = isNearMessageBottom();
+        messageList.value = messageList.value.concat(nextMessages);
+        await scrollMessageToBottom({ force: shouldStickToBottom });
+        return true;
+    };
+
+    const handleIncomingMessages = async (messages = []) => {
+        const currentMessages = [];
+        const readContactIds = new Set();
+
+        messages.forEach((message) => {
+            const receiveContactId = message.contactType == 1 ? message.contactId : message.sendUserId;
+            const isCurrentSession = message.sessionId == currentChatSession.value.sessionId ||
+                receiveContactId == currentChatSession.value.contactId;
+            if (isCurrentSession) {
+                currentMessages.push(message);
+                readContactIds.add(receiveContactId);
+            }
+        });
+
+        readContactIds.forEach((contactId) => {
+            markSessionRead?.(contactId);
+        });
+        await appendMessagesIfMissing(currentMessages);
     };
 
     const getMessagePanel = () => {
@@ -129,6 +181,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
             currentChatSession.value = Object.assign({}, currentChatSession.value, item);
             if (shouldLoadMessages) {
                 messageList.value = [];
+                messageIdSet = new Set();
                 messageLoadingMore.value = false;
                 pendingPrependScrollState = null;
                 resetMessageCountInfo();
@@ -141,6 +194,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
         startMessagePanelRender();
         currentChatSession.value = Object.assign({}, item);
         messageList.value = [];
+        messageIdSet = new Set();
         messageLoadingMore.value = false;
         pendingPrependScrollState = null;
         resetMessageCountInfo();
@@ -165,10 +219,11 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
                 return a.messageId - b.messageId;
             });
             messageList.value = loadedMessages.concat(messageList.value);
+            rebuildMessageIdSet();
             messageCountInfo.pageNo = pageNo;
             messageCountInfo.totalPage = pageTotal;
             if (pageNo == 1) {
-                messageCountInfo.maxMessageId = loadedMessages.length > 0 ? loadedMessages[loadedMessages.length - 1].maxMessageId : null;
+                messageCountInfo.maxMessageId = loadedMessages.length > 0 ? loadedMessages[0].messageId : null;
             }
             if (shouldScrollToBottomAfterLoad && pageNo == 1) {
                 shouldScrollToBottomAfterLoad = false;
@@ -181,6 +236,18 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
     };
 
     const onReceiveMessage = () => {
+        window.ipcRenderer.on('receiveMessageBatch', async (e, payload = {}) => {
+            const messages = Array.isArray(payload.messages) ? payload.messages : [];
+            const sessionPatches = Array.isArray(payload.sessionPatches) ? payload.sessionPatches : [];
+            const statusUpdates = Array.isArray(payload.statusUpdates) ? payload.statusUpdates : [];
+
+            applySessionPatches?.(sessionPatches);
+            statusUpdates.forEach((message) => {
+                handleFileUploadDone(message);
+            });
+            await handleIncomingMessages(messages);
+        });
+
         window.ipcRenderer.on('receiveMessage', (e, message) => {
             console.log('收到消息', message);
             if (typeof message === 'string') {
@@ -217,6 +284,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
 
     const removeMessageListeners = () => {
         window.ipcRenderer.removeAllListeners('receiveMessage');
+        window.ipcRenderer.removeAllListeners('receiveMessageBatch');
         window.ipcRenderer.removeAllListeners('loadChatMessageCallback');
     };
 

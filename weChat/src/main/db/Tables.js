@@ -53,6 +53,19 @@ const add_index=[
     "create index if not exists idx_session_id" +
     " on chat_message(" +
     " session_id asc" +
+    ");",
+    "create index if not exists idx_chat_message_user_session_message" +
+    " on chat_message(" +
+    " user_id asc," +
+    " session_id asc," +
+    " message_id desc" +
+    ");",
+    "create index if not exists idx_chat_session_user_sort" +
+    " on chat_session_user(" +
+    " user_id asc," +
+    " status asc," +
+    " top_type desc," +
+    " last_receive_time desc" +
     ");"
 
 ]
