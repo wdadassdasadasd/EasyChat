@@ -9,7 +9,7 @@
                 <div class="user-name">{{ data.contactName }}</div>
                 <div class="message-time">{{ proxy.Utils.formData(data.lastReceiveTime) }}</div>
             </div>
-            <div class="last-message" v-html="data.lastMessage"></div>
+            <div class="last-message">{{ data.lastMessage }}</div>
         </div>
         <div class="contact-tag" v-if="data.contactType==1">群</div>
         <el-icon class="chat-top" v-if="data.topType==1">

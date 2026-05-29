@@ -19,6 +19,7 @@ let heartbeatTimer=null;
 let incomingMessageQueue=[];
 let incomingFlushTimer=null;
 let incomingFlushing=false;
+let incomingFlushPromise=null;
 
 const sendToRenderer=(channel,payload)=>{
     if(!webContentsSender || webContentsSender.isDestroyed?.()){
@@ -78,21 +79,28 @@ const emitMessageBatch=(messages,sessionPatches,queuedAt,statusUpdates=[])=>{
     });
 }
 
-const flushIncomingMessages=async()=>{
+const flushIncomingMessages=async(options={})=>{
     if(incomingFlushing){
-        return;
+        return incomingFlushPromise;
     }
     incomingFlushing=true;
+    const flushUserId=options.userId || store.getUserId();
     if(incomingFlushTimer){
         clearTimeout(incomingFlushTimer);
         incomingFlushTimer=null;
     }
 
+    incomingFlushPromise=(async()=>{
     try {
         while(incomingMessageQueue.length>0){
             const batch=incomingMessageQueue.slice(0,MESSAGE_BATCH_SIZE);
-            const queuedAt=Math.min(...batch.map((item)=>item.queuedAt));
-            const messageList=batch.map((item)=>item.message);
+            const validBatch=batch.filter((item)=>item.userId===flushUserId);
+            if(validBatch.length===0){
+                incomingMessageQueue.splice(0,batch.length);
+                continue;
+            }
+            const queuedAt=Math.min(...validBatch.map((item)=>item.queuedAt));
+            const messageList=validBatch.map((item)=>item.message);
             const preliminarySessionPatches=dedupeSessionPatches(messageList);
             await upsertSessionBatchInTransaction(preliminarySessionPatches);
             const saveResult=await saveMessageBatchInTransaction(messageList);
@@ -107,10 +115,13 @@ const flushIncomingMessages=async()=>{
         console.error('flush incoming messages failed', error);
     } finally {
         incomingFlushing=false;
+        incomingFlushPromise=null;
         if(incomingMessageQueue.length>0){
             scheduleIncomingFlush();
         }
     }
+    })();
+    return incomingFlushPromise;
 }
 
 const scheduleIncomingFlush=()=>{
@@ -125,6 +136,7 @@ const scheduleIncomingFlush=()=>{
 const enqueueIncomingMessage=(message)=>{
     incomingMessageQueue.push({
         message,
+        userId: store.getUserId(),
         queuedAt: Date.now()
     });
     if(incomingMessageQueue.length>=MESSAGE_BATCH_SIZE){
@@ -157,8 +169,9 @@ const initWs=(config,sender)=>{
     maxReConnectTimes=5;
     createWs();
 }
-const closeWs=()=>{
+const closeWs=async()=>{
     needReconnect=false;
+    const closingUserId=store.getUserId();
     if(heartbeatTimer){
         clearInterval(heartbeatTimer);
         heartbeatTimer=null;
@@ -167,7 +180,7 @@ const closeWs=()=>{
         clearTimeout(incomingFlushTimer);
         incomingFlushTimer=null;
     }
-    flushIncomingMessages();
+    await flushIncomingMessages({ userId: closingUserId });
     if(ws){
         ws.close();
     }

@@ -14,6 +14,7 @@ export const useChatMessages = ({ applySessionPatches, currentChatSession, loadC
     let messageIdSet = new Set();
     let shouldScrollToBottomAfterLoad = false;
     let pendingPrependScrollState = null;
+    const MESSAGE_PAGE_SIZE = 20;
 
     const {
         cleanupMessageScroll,
@@ -160,11 +161,12 @@ export const useChatMessages = ({ applySessionPatches, currentChatSession, loadC
             pendingPrependScrollState = capturePrependScrollState();
             messageLoadingMore.value = true;
         }
-        messageCountInfo.pageNo++;
+        const maxMessageId = keepScrollPosition ? messageList.value[0]?.messageId || messageCountInfo.maxMessageId : 0;
+        const pageNo = maxMessageId ? 1 : messageCountInfo.pageNo + 1;
         window.ipcRenderer.send('loadChatMessage', {
             sessionId: currentChatSession.value.sessionId,
-            pageNo: messageCountInfo.pageNo,
-            maxMessageId: messageCountInfo.maxMessageId,
+            pageNo,
+            maxMessageId,
             loadSeq: getActiveMessageLoadSeq()
         });
         return true;
@@ -202,8 +204,8 @@ export const useChatMessages = ({ applySessionPatches, currentChatSession, loadC
         loadChatMessage();
     };
 
-    const onLoadChatMessage = () => {
-        window.ipcRenderer.on('loadChatMessageCallback', async (e, { dataList, pageTotal, pageNo, sessionId, loadSeq }) => {
+    const handleLoadChatMessageCallback = async (e, payload = {}) => {
+        const { dataList, pageTotal, pageNo, sessionId, loadSeq, maxMessageId } = payload;
             const isExpiredLoad = loadSeq != null && loadSeq !== getActiveMessageLoadSeq();
             const isWrongSession = sessionId != null && sessionId !== currentChatSession.value.sessionId;
             if (isExpiredLoad || isWrongSession) {
@@ -212,7 +214,7 @@ export const useChatMessages = ({ applySessionPatches, currentChatSession, loadC
                 return;
             }
             const loadedMessages = Array.isArray(dataList) ? dataList : [];
-            if (pageNo >= pageTotal || loadedMessages.length === 0) {
+            if (loadedMessages.length === 0 || loadedMessages.length < MESSAGE_PAGE_SIZE) {
                 messageCountInfo.noData = true;
             }
             loadedMessages.sort((a, b) => {
@@ -220,22 +222,66 @@ export const useChatMessages = ({ applySessionPatches, currentChatSession, loadC
             });
             messageList.value = loadedMessages.concat(messageList.value);
             rebuildMessageIdSet();
-            messageCountInfo.pageNo = pageNo;
+            messageCountInfo.pageNo = maxMessageId ? messageCountInfo.pageNo + 1 : pageNo;
             messageCountInfo.totalPage = pageTotal;
-            if (pageNo == 1) {
-                messageCountInfo.maxMessageId = loadedMessages.length > 0 ? loadedMessages[0].messageId : null;
-            }
-            if (shouldScrollToBottomAfterLoad && pageNo == 1) {
+            messageCountInfo.maxMessageId = messageList.value.length > 0 ? messageList.value[0].messageId : null;
+            if (shouldScrollToBottomAfterLoad && !maxMessageId && pageNo == 1) {
                 shouldScrollToBottomAfterLoad = false;
                 showMessagePanelAtBottom(getMessagePanelRenderSeq());
             } else if (messageLoadingMore.value) {
                 await restorePrependScrollPosition();
             }
             messageLoadingMore.value = false;
+    };
+
+    const onLoadChatMessage = () => {
+        window.ipcRenderer.on('loadChatMessageCallback', handleLoadChatMessageCallback);
+    };
+
+    const handleReceiveMessageBatch = async (e, payload = {}) => {
+        const messages = Array.isArray(payload.messages) ? payload.messages : [];
+        const sessionPatches = Array.isArray(payload.sessionPatches) ? payload.sessionPatches : [];
+        const statusUpdates = Array.isArray(payload.statusUpdates) ? payload.statusUpdates : [];
+
+        applySessionPatches?.(sessionPatches);
+        statusUpdates.forEach((message) => {
+            handleFileUploadDone(message);
         });
+        await handleIncomingMessages(messages);
+    };
+
+    const handleReceiveMessage = (e, message) => {
+        console.log('收到消息', message);
+        if (typeof message === 'string') {
+            message = JSON.parse(message);
+        }
+        if (message.messageType == 0) {
+            loadChatSession();
+            return;
+        }
+        if (message.messageType == 6) {
+            handleFileUploadDone(message);
+            return;
+        }
+        const receiveContactId = message.contactType == 1 ? message.contactId : message.sendUserId;
+        const isCurrentSession = message.sessionId == currentChatSession.value.sessionId ||
+            receiveContactId == currentChatSession.value.contactId;
+        if (isCurrentSession) {
+            markSessionRead?.(receiveContactId);
+            const exists = messageList.value.some((item) => item.messageId == message.messageId);
+            if (!exists) {
+                const shouldStickToBottom = isNearMessageBottom();
+                messageList.value.push(message);
+                scrollMessageToBottom({ force: shouldStickToBottom });
+            }
+        }
+        loadChatSession();
     };
 
     const onReceiveMessage = () => {
+        window.ipcRenderer.on('receiveMessageBatch', handleReceiveMessageBatch);
+        window.ipcRenderer.on('receiveMessage', handleReceiveMessage);
+        return;
         window.ipcRenderer.on('receiveMessageBatch', async (e, payload = {}) => {
             const messages = Array.isArray(payload.messages) ? payload.messages : [];
             const sessionPatches = Array.isArray(payload.sessionPatches) ? payload.sessionPatches : [];
@@ -278,14 +324,15 @@ export const useChatMessages = ({ applySessionPatches, currentChatSession, loadC
     };
 
     const registerMessageListeners = () => {
-        onReceiveMessage();
-        onLoadChatMessage();
+        window.ipcRenderer.on('receiveMessageBatch', handleReceiveMessageBatch);
+        window.ipcRenderer.on('receiveMessage', handleReceiveMessage);
+        window.ipcRenderer.on('loadChatMessageCallback', handleLoadChatMessageCallback);
     };
 
     const removeMessageListeners = () => {
-        window.ipcRenderer.removeAllListeners('receiveMessage');
-        window.ipcRenderer.removeAllListeners('receiveMessageBatch');
-        window.ipcRenderer.removeAllListeners('loadChatMessageCallback');
+        window.ipcRenderer.removeListener('receiveMessage', handleReceiveMessage);
+        window.ipcRenderer.removeListener('receiveMessageBatch', handleReceiveMessageBatch);
+        window.ipcRenderer.removeListener('loadChatMessageCallback', handleLoadChatMessageCallback);
     };
 
     const cleanupChatMessages = () => {

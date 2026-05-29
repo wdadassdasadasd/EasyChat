@@ -6,6 +6,7 @@ export const useChatSessions = ({ proxy, route }) => {
     const currentChatSession = ref({});
     let selectSession = () => {};
     const pendingReadContactIds = new Set();
+    const sessionInfoCache = new Map();
     let pendingReadTimer = null;
 
     const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0);
@@ -106,6 +107,10 @@ export const useChatSessions = ({ proxy, route }) => {
         if (!contactId) {
             return {};
         }
+        const cacheKey = `${contactType}_${contactId}`;
+        if (sessionInfoCache.has(cacheKey)) {
+            return sessionInfoCache.get(cacheKey);
+        }
 
         if (contactType == 1) {
             const result = await proxy.Request({
@@ -119,13 +124,15 @@ export const useChatSessions = ({ proxy, route }) => {
 
             const groupInfo = result?.data?.groupInfo || result?.data?.group || result?.data || {};
             const groupName = groupInfo.groupName || result?.data?.groupName;
-            return {
+            const sessionInfo = {
                 contactId,
                 contactType,
                 contactName: groupName,
                 memberCount: groupInfo.memberCount,
                 groupName
             };
+            sessionInfoCache.set(cacheKey, sessionInfo);
+            return sessionInfo;
         }
 
         const result = await proxy.Request({
@@ -138,19 +145,21 @@ export const useChatSessions = ({ proxy, route }) => {
         });
 
         const userInfo = result?.data || {};
-        return {
+        const sessionInfo = {
             contactId,
             contactType,
             contactName: userInfo.contactName || userInfo.nickName,
             nickName: userInfo.nickName
         };
+        sessionInfoCache.set(cacheKey, sessionInfo);
+        return sessionInfo;
     };
 
     const fillSessionName = async (session) => {
         if (!session?.contactId) {
             return session;
         }
-        if (session.contactType != 1 && getRealSessionName(session)) {
+        if (getRealSessionName(session) && (session.contactType != 1 || session.memberCount != null)) {
             return session;
         }
         const serverInfo = await getSessionInfoFromServer(session.contactId, session.contactType);
@@ -209,17 +218,20 @@ export const useChatSessions = ({ proxy, route }) => {
         selectSession(session);
     };
 
+    const handleLoadSessionDataCallback = async (e, payload) => {
+        const dataList = Array.isArray(payload) ? payload : payload?.dataList;
+        const hydratedList = await hydrateSessionList(dataList || []);
+        sortChatSessionList(hydratedList);
+        chatSessionList.value = hydratedList;
+        openChatFromRoute();
+    };
+
     const registerSessionListener = () => {
-        window.ipcRenderer.on('loadSessionDataCallback', async (e, dataList) => {
-            const hydratedList = await hydrateSessionList(dataList || []);
-            sortChatSessionList(hydratedList);
-            chatSessionList.value = hydratedList;
-            openChatFromRoute();
-        });
+        window.ipcRenderer.on('loadSessionDataCallback', handleLoadSessionDataCallback);
     };
 
     const removeSessionListener = () => {
-        window.ipcRenderer.removeAllListeners('loadSessionDataCallback');
+        window.ipcRenderer.removeListener('loadSessionDataCallback', handleLoadSessionDataCallback);
         if (pendingReadTimer) {
             window.clearTimeout(pendingReadTimer);
             pendingReadTimer = null;

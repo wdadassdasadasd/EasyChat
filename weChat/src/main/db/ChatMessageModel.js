@@ -95,6 +95,18 @@ const getClearInfoMapByMessages = async (messageList = []) => {
     return clearInfoMap;
 };
 
+const getExistingMessageIdSet = async (messageList = []) => {
+    const messageIds = [...new Set(messageList.map((item) => item?.messageId).filter((messageId) => messageId != null))];
+    if (messageIds.length === 0) {
+        return new Set();
+    }
+
+    const placeholders = messageIds.map(() => '?').join(',');
+    const sql = `select message_id from chat_message where user_id=? and message_id in (${placeholders})`;
+    const dataList = await queryAll(sql, [store.getUserId(), ...messageIds]);
+    return new Set((dataList || []).map((item) => String(item.messageId)));
+};
+
 const appendClearFilter = (sqlParts, params, clearInfo) => {
     const clearMessageId = Number(clearInfo?.clearMessageId || 0);
     const clearTime = Number(clearInfo?.clearTime || 0);
@@ -131,8 +143,13 @@ const saveMessageBatch=async(chatMeassageList)=>{
             }
         }
 
+        const existingMessageIdSet = await getExistingMessageIdSet(visibleMessageList);
+        const newVisibleMessageList = visibleMessageList.filter((item) => {
+            return item.messageId == null || !existingMessageIdSet.has(String(item.messageId));
+        });
+
         const chatSessionCountMap={}
-        visibleMessageList.forEach((item)=>{
+        newVisibleMessageList.forEach((item)=>{
             if(item.sendUserId==store.getUserId()){
                 return;
             }
@@ -254,7 +271,8 @@ const selectMesssageList = async (query = {}) => {
         }
 
         const totalCount = await queryCount(countSqlParts.join(' '), countParams);
-        const { pageTotal, offset, limit } = getPageOffset(pageNo, totalCount);
+        const pageQueryNo = maxMessageId ? 1 : pageNo;
+        const { pageTotal, offset, limit } = getPageOffset(pageQueryNo, totalCount);
 
         const sqlParts = ['select * from chat_message where user_id=? and session_id=?'];
         const params = [store.getUserId(), sessionId];

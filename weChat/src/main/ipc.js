@@ -6,6 +6,71 @@ import store from './store.js'
 import { addUserSetting, getLocalFileFolder, resetLocalFileFolder, updateLocalFileFolder } from './db/UserSettingModel.js';
 import { selectUserSessionList,delChatSession,markSessionRead,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
 import { clearMessageBySessionId, searchMessageBySessionId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
+
+const VIDEO_PREVIEW_MAX_BYTES = 300 * 1024 * 1024;
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.avi', '.rmvb']);
+
+const getVideoPreviewTempFolder = () => {
+    return path.join(app.getPath('temp'), 'EasyChat', 'video-preview');
+};
+
+const isPathInside = (targetPath, rootPath) => {
+    const relativePath = path.relative(path.resolve(rootPath), path.resolve(targetPath));
+    return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+};
+
+const createIpcError = (error) => {
+    return error?.message || String(error);
+};
+
+const validateLocalVideoFile = async (filePath, { checkSize = false } = {}) => {
+    if (!filePath) {
+        return {
+            success: false,
+            error: '本地视频文件不存在'
+        };
+    }
+
+    const normalizedPath = path.resolve(String(filePath));
+    const folderInfo = await getLocalFileFolder();
+    const allowedRoots = [folderInfo.localFileFolder, getVideoPreviewTempFolder()];
+    const isAllowedPath = allowedRoots.some((rootPath) => isPathInside(normalizedPath, rootPath));
+    if (!isAllowedPath) {
+        return {
+            success: false,
+            error: '不允许访问该本地视频路径'
+        };
+    }
+
+    if (!fs.existsSync(normalizedPath)) {
+        return {
+            success: false,
+            error: '本地视频文件不存在'
+        };
+    }
+
+    const fileStat = fs.statSync(normalizedPath);
+    const fileExt = path.extname(normalizedPath).toLowerCase();
+    if (!fileStat.isFile() || !VIDEO_EXTENSIONS.has(fileExt)) {
+        return {
+            success: false,
+            error: '不支持的本地视频文件'
+        };
+    }
+
+    if (checkSize && fileStat.size > VIDEO_PREVIEW_MAX_BYTES) {
+        return {
+            success: false,
+            error: '本地视频文件过大，请使用系统播放器打开'
+        };
+    }
+
+    return {
+        success: true,
+        filePath: normalizedPath,
+        fileSize: fileStat.size
+    };
+};
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister=(mainWindow, callback)=>{
       ipcMain.on("loginOrRegister",(e,isLogin)=>{
@@ -55,8 +120,19 @@ const onGetLocalStore=()=>{
 //查询本地会话列表
 const onLoadSessionData=()=>{
     ipcMain.on("loadSessionData",async (e)=>{
-        const result=await selectUserSessionList();
-        e.sender.send("loadSessionDataCallback",result);
+        try {
+            const result=await selectUserSessionList();
+            e.sender.send("loadSessionDataCallback",{
+                success:true,
+                dataList:result
+            });
+        } catch (error) {
+            e.sender.send("loadSessionDataCallback",{
+                success:false,
+                dataList:[],
+                error:createIpcError(error)
+            });
+        }
     })
 
 }
@@ -78,35 +154,58 @@ const onTopChatSession=()=>{
 //分页查询聊天消息
 const onLoadChatMessage=()=>{
     ipcMain.on("loadChatMessage",async (e,data)=>{
-        const result=await selectMessageList(data);
-        e.sender.send("loadChatMessageCallback",{
-            ...result,
-            sessionId: data?.sessionId,
-            loadSeq: data?.loadSeq
-        });
+        try {
+            const result=await selectMessageList(data);
+            e.sender.send("loadChatMessageCallback",{
+                success:true,
+                ...result,
+                sessionId: data?.sessionId,
+                loadSeq: data?.loadSeq,
+                maxMessageId: data?.maxMessageId
+            });
+        } catch (error) {
+            e.sender.send("loadChatMessageCallback",{
+                success:false,
+                dataList:[],
+                pageNo:data?.pageNo || 1,
+                pageTotal:0,
+                sessionId: data?.sessionId,
+                loadSeq: data?.loadSeq,
+                maxMessageId: data?.maxMessageId,
+                error:createIpcError(error)
+            });
+        }
     })
 
 }
 
 const onMarkSessionRead=()=>{
     ipcMain.on("markSessionRead",async (e,contactId)=>{
-        await markSessionRead(contactId);
-        e.sender.send("markSessionReadCallback",{
-            contactId,
-            success:true
-        });
+        try {
+            await markSessionRead(contactId);
+            e.sender.send("markSessionReadCallback",{
+                contactId,
+                success:true
+            });
+        } catch (error) {
+            e.sender.send("markSessionReadCallback",{
+                contactId,
+                success:false,
+                error:createIpcError(error)
+            });
+        }
     })
 }
 
 const onResetToLogin=(_mainWindow, callback)=>{
-    const reset = () => {
-        closeWs();
+    const reset = async () => {
+        await closeWs();
         callback();
         return true;
     };
 
-    ipcMain.handle("logout", () => {
-        return reset();
+    ipcMain.handle("logout", async () => {
+        return await reset();
     });
 
     ipcMain.on("reLogin", () => {
@@ -119,9 +218,10 @@ const onResetToLogin=(_mainWindow, callback)=>{
 //保存发送的消息到本地，并更新会话
 const onSaveSendMessage = () => {
     ipcMain.on('saveSendMessage', async (e, { message, chatSession }) => {
-        if (!message) {
-            return;
-        }
+        try {
+            if (!message) {
+                throw new Error('message is required');
+            }
         //保存发送的消息到chat_message 表
         await saveMessage(message);
 
@@ -143,6 +243,13 @@ const onSaveSendMessage = () => {
             success: true,
             messageId: message.messageId
         });
+        } catch (error) {
+            e.sender.send('saveSendMessageCallback', {
+                success: false,
+                messageId: message?.messageId,
+                error:createIpcError(error)
+            });
+        }
     });
 };
 
@@ -166,13 +273,25 @@ const onClearChatMessage = () => {
 
 const onSearchChatMessage = () => {
     ipcMain.on('searchChatMessage', async (e, data = {}) => {
-        const dataList = await searchMessageBySessionId(data);
-        e.sender.send('searchChatMessageCallback', {
-            sessionId: data.sessionId,
-            keyword: data.keyword,
-            searchSeq: data.searchSeq,
-            dataList
-        });
+        try {
+            const dataList = await searchMessageBySessionId(data);
+            e.sender.send('searchChatMessageCallback', {
+                success:true,
+                sessionId: data.sessionId,
+                keyword: data.keyword,
+                searchSeq: data.searchSeq,
+                dataList
+            });
+        } catch (error) {
+            e.sender.send('searchChatMessageCallback', {
+                success:false,
+                sessionId: data.sessionId,
+                keyword: data.keyword,
+                searchSeq: data.searchSeq,
+                dataList:[],
+                error:createIpcError(error)
+            });
+        }
     });
 };
 
@@ -219,11 +338,19 @@ const onOpenTempVideoFile = () => {
             };
         }
 
+        const fileBuffer = Buffer.from(buffer);
+        if (fileBuffer.length > VIDEO_PREVIEW_MAX_BYTES) {
+            return {
+                success: false,
+                error: '视频文件过大，请下载后使用系统播放器打开'
+            };
+        }
+
         const safeFileName = String(fileName).replace(/[\\/:*?"<>|]/g, '_');
-        const tempFolder = path.join(app.getPath('temp'), 'EasyChat', 'video-preview');
+        const tempFolder = getVideoPreviewTempFolder();
         fs.mkdirSync(tempFolder, { recursive: true });
         const filePath = path.join(tempFolder, `${Date.now()}_${safeFileName}`);
-        fs.writeFileSync(filePath, Buffer.from(buffer));
+        fs.writeFileSync(filePath, fileBuffer);
         const error = await shell.openPath(filePath);
 
         return {
@@ -235,6 +362,10 @@ const onOpenTempVideoFile = () => {
 
     ipcMain.handle('readLocalVideoFile', async (e, data = {}) => {
         const { filePath } = data;
+        const validation = await validateLocalVideoFile(filePath, { checkSize: true });
+        if (!validation.success) {
+            return validation;
+        }
         if (!filePath || !fs.existsSync(filePath)) {
             return {
                 success: false,
@@ -242,7 +373,7 @@ const onOpenTempVideoFile = () => {
             };
         }
 
-        const buffer = fs.readFileSync(filePath);
+        const buffer = fs.readFileSync(validation.filePath);
         const arrayBuffer = buffer.buffer.slice(
             buffer.byteOffset,
             buffer.byteOffset + buffer.byteLength
@@ -256,6 +387,10 @@ const onOpenTempVideoFile = () => {
 
     ipcMain.handle('openLocalVideoFile', async (e, data = {}) => {
         const { filePath } = data;
+        const validation = await validateLocalVideoFile(filePath);
+        if (!validation.success) {
+            return validation;
+        }
         if (!filePath || !fs.existsSync(filePath)) {
             return {
                 success: false,
@@ -263,7 +398,7 @@ const onOpenTempVideoFile = () => {
             };
         }
 
-        const error = await shell.openPath(filePath);
+        const error = await shell.openPath(validation.filePath);
         return {
             success: !error,
             error

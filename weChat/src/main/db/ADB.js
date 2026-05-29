@@ -165,12 +165,12 @@ const queryCount=(sql,params)=>{
 }
 
 const run=(sql,params)=>{
-   return new  Promise((resolve)=>{
+   return new  Promise((resolve,reject)=>{
         const stmt=db.prepare(sql)
         stmt.run(params,function (err){
             if(err){
                 console.error(`执行的SQL:${sql},params:${params},执行失败:${err}`)
-                resolve(0)
+                reject(err)
                 return
             }
             console.error(`执行的SQL:${sql},params:${params},执行记录数:${this.changes}`)
