@@ -1,160 +1,136 @@
 <template>
     <ContactPanel class="account-panel">
         <div class="account-center">
-            <aside class="account-summary">
-                <div class="summary-avatar">
-                    <ShowLocalImage :fileId="userInfo.userId" partType="avatar" :width="92"></ShowLocalImage>
-                </div>
-                <div class="summary-name" :title="userInfo.nickName">{{ userInfo.nickName || '-' }}</div>
-                <div class="summary-email" :title="userInfo.email">{{ userInfo.email || '-' }}</div>
-                <div class="summary-badges">
-                    <span>{{ sexText }}</span>
-                    <span>{{ joinTypeText }}</span>
-                </div>
-
-                <div class="summary-list">
-                    <div class="summary-row">
-                        <span>账号 ID</span>
-                        <strong :title="userInfo.userId">{{ userInfo.userId || '-' }}</strong>
+            <section class="setting-card profile-card">
+                <div class="profile-identity">
+                    <div class="identity-avatar">
+                        <ShowLocalImage :fileId="userInfo.userId" partType="avatar" :width="64"></ShowLocalImage>
                     </div>
-                    <div class="summary-row">
-                        <span>地区</span>
-                        <strong :title="areaText">{{ areaText }}</strong>
-                    </div>
-                    <div class="summary-row">
-                        <span>个性签名</span>
-                        <strong class="summary-signature" :title="signatureText">{{ signatureText }}</strong>
-                    </div>
-                </div>
-            </aside>
-
-            <main class="account-content">
-                <section class="setting-card">
-                    <div class="card-header">
-                        <div>
-                            <h3>个人资料</h3>
-                            <p>头像、昵称和资料会同步到聊天与联系人信息中。</p>
-                        </div>
-                        <el-button text @click="resetProfileForm">重置</el-button>
-                    </div>
-
-                    <el-form
-                        ref="profileFormRef"
-                        class="profile-form"
-                        :model="profileForm"
-                        :rules="profileRules"
-                        label-width="92px"
-                        @submit.prevent="saveUserInfo"
-                    >
-                        <el-form-item label="头像" prop="avatarFile">
-                            <AvatarUpload v-model="profileForm.avatarFile" @coverfile="saveCover"></AvatarUpload>
-                        </el-form-item>
-                        <el-form-item label="昵称" prop="nickName">
-                            <el-input
-                                v-model.trim="profileForm.nickName"
-                                maxlength="150"
-                                clearable
-                                placeholder="请输入昵称"
-                            ></el-input>
-                        </el-form-item>
-                        <el-form-item label="性别" prop="sex">
-                            <el-radio-group v-model="profileForm.sex">
-                                <el-radio :label="1">男</el-radio>
-                                <el-radio :label="0">女</el-radio>
-                            </el-radio-group>
-                        </el-form-item>
-                        <el-form-item label="好友权限" prop="joinType">
-                            <div class="switch-row">
-                                <el-switch
-                                    v-model="profileForm.joinType"
-                                    :active-value="1"
-                                    :inactive-value="0"
-                                ></el-switch>
-                                <span>加我为好友时需要验证</span>
-                            </div>
-                        </el-form-item>
-                        <el-form-item label="地区" prop="area">
-                            <AreaSelect v-model="profileForm.area"></AreaSelect>
-                        </el-form-item>
-                        <el-form-item label="个性签名" prop="personalSignature">
-                            <el-input
-                                v-model.trim="profileForm.personalSignature"
-                                maxlength="30"
-                                clearable
-                                placeholder="请输入个性签名"
-                                type="textarea"
-                                rows="3"
-                                :show-word-limit="true"
-                                resize="none"
-                            ></el-input>
-                        </el-form-item>
-                        <el-form-item class="form-actions">
-                            <el-button
-                                type="primary"
-                                :loading="savingProfile"
-                                @click="saveUserInfo"
-                            >
-                                保存资料
-                            </el-button>
-                        </el-form-item>
-                    </el-form>
-                </section>
-
-                <section class="setting-card">
-                    <div class="card-header">
-                        <div>
-                            <h3>账号安全</h3>
-                            <p>修改密码后会退出当前登录，需要重新登录。</p>
+                    <div class="identity-info">
+                        <div class="identity-name" :title="userInfo.nickName">{{ userInfo.nickName || '-' }}</div>
+                        <div class="identity-meta">
+                            <span class="meta-item" :title="userInfo.email">{{ userInfo.email || '-' }}</span>
+                            <span class="meta-divider">·</span>
+                            <span class="meta-item">ID: {{ userInfo.userId || '-' }}</span>
                         </div>
                     </div>
+                    <el-button text size="small" @click="resetProfileForm">重置</el-button>
+                </div>
 
-                    <el-form
-                        ref="passwordFormRef"
-                        class="password-form"
-                        :model="passwordForm"
-                        :rules="passwordRules"
-                        label-width="92px"
-                        @submit.prevent="savePassword"
-                    >
-                        <el-form-item label="新密码" prop="password">
-                            <el-input
-                                v-model.trim="passwordForm.password"
-                                clearable
-                                placeholder="8-18 位，必须包含字母和数字"
-                                type="password"
-                                show-password
-                            ></el-input>
-                        </el-form-item>
-                        <el-form-item label="确认密码" prop="rePassword">
-                            <el-input
-                                v-model.trim="passwordForm.rePassword"
-                                clearable
-                                placeholder="请再次输入新密码"
-                                type="password"
-                                show-password
-                            ></el-input>
-                        </el-form-item>
-                        <el-form-item class="form-actions">
-                            <el-button
-                                type="primary"
-                                :loading="savingPassword"
-                                @click="savePassword"
-                            >
-                                修改密码
-                            </el-button>
-                            <el-button text @click="resetPasswordForm">清空</el-button>
-                        </el-form-item>
-                    </el-form>
-                </section>
+                <el-form
+                    ref="profileFormRef"
+                    class="profile-form"
+                    :model="profileForm"
+                    :rules="profileRules"
+                    label-width="92px"
+                    @submit.prevent="saveUserInfo"
+                >
+                    <el-form-item label="头像" prop="avatarFile">
+                        <AvatarUpload v-model="profileForm.avatarFile" @coverfile="saveCover"></AvatarUpload>
+                    </el-form-item>
+                    <el-form-item label="昵称" prop="nickName">
+                        <el-input
+                            v-model.trim="profileForm.nickName"
+                            maxlength="150"
+                            clearable
+                            placeholder="请输入昵称"
+                        ></el-input>
+                    </el-form-item>
+                    <el-form-item label="性别" prop="sex">
+                        <el-radio-group v-model="profileForm.sex">
+                            <el-radio :label="1">男</el-radio>
+                            <el-radio :label="0">女</el-radio>
+                        </el-radio-group>
+                    </el-form-item>
+                    <el-form-item label="好友权限" prop="joinType">
+                        <div class="switch-row">
+                            <el-switch
+                                v-model="profileForm.joinType"
+                                :active-value="1"
+                                :inactive-value="0"
+                            ></el-switch>
+                            <span>加我为好友时需要验证</span>
+                        </div>
+                    </el-form-item>
+                    <el-form-item label="地区" prop="area">
+                        <AreaSelect v-model="profileForm.area"></AreaSelect>
+                    </el-form-item>
+                    <el-form-item label="个性签名" prop="personalSignature">
+                        <el-input
+                            v-model.trim="profileForm.personalSignature"
+                            maxlength="30"
+                            clearable
+                            placeholder="请输入个性签名"
+                            type="textarea"
+                            rows="3"
+                            :show-word-limit="true"
+                            resize="none"
+                        ></el-input>
+                    </el-form-item>
+                    <el-form-item class="form-actions">
+                        <el-button
+                            type="primary"
+                            :loading="savingProfile"
+                            @click="saveUserInfo"
+                        >
+                            保存资料
+                        </el-button>
+                    </el-form-item>
+                </el-form>
+            </section>
 
-                <section class="setting-card danger-card">
-                    <div class="danger-copy">
-                        <h3>登录操作</h3>
-                        <p>退出后将关闭当前连接，并回到登录页。</p>
-                    </div>
-                    <el-button type="danger" plain :loading="loggingOut" @click="logout">退出登录</el-button>
-                </section>
-            </main>
+            <section class="setting-card">
+                <div class="card-header">
+                    <h3>账号安全</h3>
+                    <p>修改密码后会退出当前登录，需要重新登录。</p>
+                </div>
+
+                <el-form
+                    ref="passwordFormRef"
+                    class="password-form"
+                    :model="passwordForm"
+                    :rules="passwordRules"
+                    label-width="92px"
+                    @submit.prevent="savePassword"
+                >
+                    <el-form-item label="新密码" prop="password">
+                        <el-input
+                            v-model.trim="passwordForm.password"
+                            clearable
+                            placeholder="8-18 位，必须包含字母和数字"
+                            type="password"
+                            show-password
+                        ></el-input>
+                    </el-form-item>
+                    <el-form-item label="确认密码" prop="rePassword">
+                        <el-input
+                            v-model.trim="passwordForm.rePassword"
+                            clearable
+                            placeholder="请再次输入新密码"
+                            type="password"
+                            show-password
+                        ></el-input>
+                    </el-form-item>
+                    <el-form-item class="form-actions">
+                        <el-button
+                            type="primary"
+                            :loading="savingPassword"
+                            @click="savePassword"
+                        >
+                            修改密码
+                        </el-button>
+                        <el-button text @click="resetPasswordForm">清空</el-button>
+                    </el-form-item>
+                </el-form>
+            </section>
+
+            <section class="setting-card danger-card">
+                <div class="danger-copy">
+                    <h3>登录操作</h3>
+                    <p>退出后将关闭当前连接，并回到登录页。</p>
+                </div>
+                <el-button type="danger" plain :loading="loggingOut" @click="logout">退出登录</el-button>
+            </section>
         </div>
     </ContactPanel>
 </template>
@@ -195,19 +171,7 @@ const passwordForm = ref({
     rePassword: ''
 });
 
-const sexText = computed(() => {
-    if (userInfo.value.sex === 1) {
-        return '男';
-    }
-    if (userInfo.value.sex === 0) {
-        return '女';
-    }
-    return '未设置';
-});
 
-const joinTypeText = computed(() => userInfo.value.joinType === 1 ? '需要验证' : '直接添加');
-const areaText = computed(() => userInfo.value.areaName || '未设置');
-const signatureText = computed(() => userInfo.value.personalSignature || '暂无个性签名');
 
 const profileRules = {
     nickName: [{ required: true, message: '请输入昵称' }]
@@ -410,42 +374,51 @@ getUserInfo();
 
 :deep(.content-inner) {
     width: 100%;
-    max-width: 980px;
+    max-width: 680px;
 }
 
 .account-center {
-    display: grid;
-    grid-template-columns: 250px minmax(0, 1fr);
-    gap: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
     padding: 22px;
     box-sizing: border-box;
 }
 
-.account-summary,
 .setting-card {
     background: #fff;
     border: 1px solid #e7e8eb;
     border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    padding: 20px 24px 18px;
 }
 
-.account-summary {
-    align-self: start;
-    padding: 24px 18px;
-    text-align: center;
+/* ---- Profile identity bar ---- */
+.profile-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding-bottom: 18px;
+    margin-bottom: 18px;
+    border-bottom: 1px solid #eef0f3;
 }
 
-.summary-avatar {
-    width: 92px;
-    height: 92px;
-    margin: 0 auto 14px;
+.identity-avatar {
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
     overflow: hidden;
-    border-radius: 10px;
+    border-radius: 8px;
     background: #eceff3;
 }
 
-.summary-name {
-    font-size: 20px;
+.identity-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.identity-name {
+    font-size: 17px;
     font-weight: 600;
     color: #1f2937;
     overflow: hidden;
@@ -453,8 +426,11 @@ getUserInfo();
     white-space: nowrap;
 }
 
-.summary-email {
-    margin-top: 6px;
+.identity-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
     color: #8a9099;
     font-size: 13px;
     overflow: hidden;
@@ -462,91 +438,38 @@ getUserInfo();
     white-space: nowrap;
 }
 
-.summary-badges {
-    display: flex;
-    justify-content: center;
-    gap: 8px;
-    margin: 16px 0 18px;
-
-    span {
-        padding: 3px 9px;
-        border-radius: 999px;
-        background: #eef5ff;
-        color: #4378c7;
-        font-size: 12px;
-    }
+.meta-divider {
+    color: #d0d3d8;
 }
 
-.summary-list {
-    border-top: 1px solid #eef0f3;
-    padding-top: 14px;
+.meta-item {
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
-.summary-row {
-    text-align: left;
-    margin-top: 12px;
-
-    span {
-        display: block;
-        margin-bottom: 5px;
-        color: #9aa0a8;
-        font-size: 12px;
-    }
-
-    strong {
-        display: block;
-        color: #3f4650;
-        font-size: 14px;
-        font-weight: 500;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-}
-
-.summary-signature {
-    white-space: normal !important;
-    display: -webkit-box !important;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-}
-
-.account-content {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.setting-card {
-    padding: 20px 22px 18px;
-}
-
+/* ---- Card header (password & logout) ---- */
 .card-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
     margin-bottom: 18px;
 
     h3 {
         margin: 0;
         color: #1f2937;
-        font-size: 17px;
+        font-size: 16px;
         font-weight: 600;
     }
 
     p {
-        margin: 6px 0 0;
+        margin: 4px 0 0;
         color: #8a9099;
         font-size: 13px;
         line-height: 1.5;
     }
 }
 
+/* ---- Form ---- */
 .profile-form,
 .password-form {
-    max-width: 560px;
+    max-width: 520px;
 }
 
 .switch-row {
@@ -561,6 +484,7 @@ getUserInfo();
     margin-bottom: 0;
 }
 
+/* ---- Danger card ---- */
 .danger-card {
     display: flex;
     align-items: center;
@@ -570,20 +494,25 @@ getUserInfo();
     h3 {
         margin: 0;
         color: #1f2937;
-        font-size: 17px;
+        font-size: 16px;
+        font-weight: 600;
     }
 
     p {
-        margin: 6px 0 0;
+        margin: 4px 0 0;
         color: #8a9099;
         font-size: 13px;
     }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 720px) {
     .account-center {
-        grid-template-columns: 220px minmax(0, 1fr);
-        padding: 16px;
+        padding: 12px;
+    }
+
+    .profile-form,
+    .password-form {
+        max-width: 100%;
     }
 }
 </style>
