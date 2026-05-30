@@ -85,9 +85,10 @@ const isMediaMessage = computed(() => {
 
 <style lang="scss" scoped>
 .message-row {
+    box-sizing: border-box;
     flex-shrink: 0;
     display: flex;
-    margin-bottom: 14px;
+    padding-bottom: 14px;
     align-items: flex-start;
 }
 

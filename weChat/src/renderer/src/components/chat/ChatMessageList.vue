@@ -238,7 +238,7 @@ defineExpose({
 }
 
 .message-time-divider {
-    margin: 10px 0 18px;
+    padding: 10px 0 18px;
 }
 
 .chat-empty {
