@@ -1,26 +1,82 @@
 import { nextTick, ref } from 'vue';
 
-export const useMessageScroll = () => {
+export const useMessageScroll = ({ messageListRef } = {}) => {
     const messagePanelPhase = ref('ready');
+    const BOTTOM_GAP_TOLERANCE = 2;
+    const INITIAL_BOTTOM_LOCK_DURATION = 800;
+    const MAX_BOTTOM_SETTLE_FRAMES = 8;
+    const STABLE_FRAME_COUNT = 2;
     let messagePanelRenderSeq = 0;
     let activeMessageLoadSeq = 0;
     let initialBottomLockSeq = 0;
     let initialBottomLockTimer = null;
-    let messagePanelEnterTimer = null;
     let pendingBottomSettleFrame = null;
 
+    const getMessageList = () => {
+        return messageListRef?.value || null;
+    };
+
     const getMessagePanel = () => {
+        const messageList = getMessageList();
+        if (typeof messageList?.getMessagePanelElement === 'function') {
+            return messageList.getMessagePanelElement();
+        }
         return document.getElementById('message-panel');
     };
 
+    const getScrollState = () => {
+        const messageList = getMessageList();
+        if (typeof messageList?.getScrollState === 'function') {
+            return messageList.getScrollState();
+        }
+
+        const messagePanel = getMessagePanel();
+        if (!messagePanel) {
+            return null;
+        }
+        return {
+            scrollHeight: messagePanel.scrollHeight,
+            scrollTop: messagePanel.scrollTop,
+            clientHeight: messagePanel.clientHeight,
+            bottomGap: Math.max(0, messagePanel.scrollHeight - messagePanel.scrollTop - messagePanel.clientHeight)
+        };
+    };
+
     const setMessagePanelToBottom = () => {
+        const messageList = getMessageList();
+        if (typeof messageList?.scrollToBottom === 'function') {
+            messageList.scrollToBottom();
+            return;
+        }
+
         const messagePanel = getMessagePanel();
         if (messagePanel) {
             const bottomScrollTop = Math.max(0, messagePanel.scrollHeight - messagePanel.clientHeight);
-            messagePanel.scrollTo({
-                top: bottomScrollTop,
-                behavior: 'auto'
-            });
+            const previousScrollBehavior = messagePanel.style.scrollBehavior;
+            messagePanel.style.scrollBehavior = 'auto';
+            messagePanel.scrollTop = bottomScrollTop;
+            if (previousScrollBehavior) {
+                messagePanel.style.scrollBehavior = previousScrollBehavior;
+            } else {
+                messagePanel.style.removeProperty('scroll-behavior');
+            }
+        }
+    };
+
+    const getBottomGap = () => {
+        const messageList = getMessageList();
+        if (typeof messageList?.getBottomGap === 'function') {
+            return messageList.getBottomGap();
+        }
+
+        const scrollState = getScrollState();
+        return scrollState ? scrollState.bottomGap : 0;
+    };
+
+    const clearPendingBottomSettleFrame = () => {
+        if (pendingBottomSettleFrame) {
+            window.cancelAnimationFrame(pendingBottomSettleFrame);
+            pendingBottomSettleFrame = null;
         }
     };
 
@@ -30,6 +86,7 @@ export const useMessageScroll = () => {
             window.clearTimeout(initialBottomLockTimer);
             initialBottomLockTimer = null;
         }
+        clearPendingBottomSettleFrame();
     };
 
     const keepInitialBottomLock = (renderSeq) => {
@@ -40,25 +97,11 @@ export const useMessageScroll = () => {
                 initialBottomLockSeq = 0;
             }
             initialBottomLockTimer = null;
-        }, 5000);
+        }, INITIAL_BOTTOM_LOCK_DURATION);
     };
 
     const isInitialBottomLocked = () => {
         return initialBottomLockSeq !== 0 && initialBottomLockSeq === messagePanelRenderSeq;
-    };
-
-    const clearMessagePanelEnterTimer = () => {
-        if (messagePanelEnterTimer) {
-            window.clearTimeout(messagePanelEnterTimer);
-            messagePanelEnterTimer = null;
-        }
-    };
-
-    const clearPendingBottomSettleFrame = () => {
-        if (pendingBottomSettleFrame) {
-            window.cancelAnimationFrame(pendingBottomSettleFrame);
-            pendingBottomSettleFrame = null;
-        }
     };
 
     const scheduleBottomSettle = () => {
@@ -73,11 +116,11 @@ export const useMessageScroll = () => {
     };
 
     const isNearMessageBottom = (threshold = 120) => {
-        const messagePanel = getMessagePanel();
-        if (!messagePanel) {
+        const scrollState = getScrollState();
+        if (!scrollState) {
             return true;
         }
-        return messagePanel.scrollHeight - messagePanel.scrollTop - messagePanel.clientHeight < threshold;
+        return scrollState.bottomGap < threshold;
     };
 
     const scrollMessageToBottom = async ({ force = false } = {}) => {
@@ -106,30 +149,43 @@ export const useMessageScroll = () => {
         if (renderSeq !== messagePanelRenderSeq) {
             return;
         }
-        setMessagePanelToBottom();
-        await waitForNextFrame();
-        if (renderSeq !== messagePanelRenderSeq) {
-            return;
-        }
-        setMessagePanelToBottom();
-        await waitForNextFrame();
-        if (renderSeq !== messagePanelRenderSeq) {
-            return;
-        }
-        messagePanelPhase.value = 'entering';
-        keepInitialBottomLock(renderSeq);
-        clearMessagePanelEnterTimer();
-        messagePanelEnterTimer = window.setTimeout(() => {
-            if (renderSeq === messagePanelRenderSeq) {
-                messagePanelPhase.value = 'ready';
+
+        let stableFrames = 0;
+        let previousState = null;
+        for (let index = 0; index < MAX_BOTTOM_SETTLE_FRAMES; index++) {
+            setMessagePanelToBottom();
+            await waitForNextFrame();
+            if (renderSeq !== messagePanelRenderSeq) {
+                return;
             }
-            messagePanelEnterTimer = null;
-        }, 120);
+
+            const scrollState = getScrollState();
+            if (!scrollState) {
+                break;
+            }
+
+            const isBottomPinned = getBottomGap() <= BOTTOM_GAP_TOLERANCE;
+            const isLayoutStable = previousState &&
+                Math.abs(scrollState.scrollHeight - previousState.scrollHeight) <= 1 &&
+                Math.abs(scrollState.scrollTop - previousState.scrollTop) <= 1;
+            stableFrames = isBottomPinned && isLayoutStable ? stableFrames + 1 : 0;
+            previousState = scrollState;
+
+            if (stableFrames >= STABLE_FRAME_COUNT) {
+                break;
+            }
+        }
+
+        setMessagePanelToBottom();
+        if (renderSeq !== messagePanelRenderSeq) {
+            return;
+        }
+        messagePanelPhase.value = 'ready';
+        keepInitialBottomLock(renderSeq);
     };
 
     const startMessagePanelRender = () => {
         clearInitialBottomLock();
-        clearMessagePanelEnterTimer();
         clearPendingBottomSettleFrame();
         messagePanelRenderSeq++;
         activeMessageLoadSeq = messagePanelRenderSeq;
@@ -151,7 +207,6 @@ export const useMessageScroll = () => {
 
     const cleanupMessageScroll = () => {
         clearInitialBottomLock();
-        clearMessagePanelEnterTimer();
         clearPendingBottomSettleFrame();
     };
 
@@ -159,6 +214,7 @@ export const useMessageScroll = () => {
         messagePanelPhase,
         clearInitialBottomLock,
         getActiveMessageLoadSeq,
+        getMessagePanel,
         getMessagePanelRenderSeq,
         isNearMessageBottom,
         markMessagePanelReady,

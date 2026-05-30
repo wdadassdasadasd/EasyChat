@@ -160,9 +160,59 @@ const handleScroll = (event) => {
     }
 };
 
+const getMessagePanelElement = () => {
+    return messagePanelRef.value;
+};
+
+const setElementToBottom = () => {
+    const messagePanel = getMessagePanelElement();
+    if (!messagePanel) {
+        return;
+    }
+
+    const bottomScrollTop = Math.max(0, messagePanel.scrollHeight - messagePanel.clientHeight);
+    const previousScrollBehavior = messagePanel.style.scrollBehavior;
+    messagePanel.style.scrollBehavior = 'auto';
+    messagePanel.scrollTop = bottomScrollTop;
+    if (previousScrollBehavior) {
+        messagePanel.style.scrollBehavior = previousScrollBehavior;
+    } else {
+        messagePanel.style.removeProperty('scroll-behavior');
+    }
+};
+
+const scrollToBottom = () => {
+    setElementToBottom();
+};
+
+const getBottomGap = () => {
+    const messagePanel = getMessagePanelElement();
+    if (!messagePanel) {
+        return 0;
+    }
+    return Math.max(0, messagePanel.scrollHeight - messagePanel.scrollTop - messagePanel.clientHeight);
+};
+
+const getScrollState = () => {
+    const messagePanel = getMessagePanelElement();
+    if (!messagePanel) {
+        return null;
+    }
+    return {
+        scrollHeight: messagePanel.scrollHeight,
+        scrollTop: messagePanel.scrollTop,
+        clientHeight: messagePanel.clientHeight,
+        bottomGap: getBottomGap()
+    };
+};
+
 defineExpose({
+    getBottomGap,
+    getMessagePanelElement,
+    getScrollState,
     messageBottomRef,
-    messagePanelRef
+    messagePanelRef,
+    scrollToBottom
 });
 </script>
 

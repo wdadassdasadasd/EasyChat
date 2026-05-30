@@ -2,7 +2,13 @@ import { nextTick, ref } from 'vue';
 import { useChatMessageSender } from './useMessageSender';
 import { useMessageScroll } from './useMessageScroll';
 
-export const useChatMessages = ({ currentChatSession, loadChatSession, markSessionRead, proxy }) => {
+export const useChatMessages = ({
+    currentChatSession,
+    loadChatSession,
+    markSessionRead,
+    messageListRef,
+    proxy
+}) => {
     const messageCountInfo = {
         totalPage: 0,
         pageNo: 0,
@@ -18,6 +24,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
         cleanupMessageScroll,
         clearInitialBottomLock,
         getActiveMessageLoadSeq,
+        getMessagePanel,
         getMessagePanelRenderSeq,
         isNearMessageBottom,
         markMessagePanelReady,
@@ -26,7 +33,7 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
         settleScrollToBottom,
         showMessagePanelAtBottom,
         startMessagePanelRender
-    } = useMessageScroll();
+    } = useMessageScroll({ messageListRef });
 
     const {
         handleFileUploadDone,
@@ -58,10 +65,6 @@ export const useChatMessages = ({ currentChatSession, loadChatSession, markSessi
         resetMessageCountInfo();
         messageCountInfo.noData = true;
         markMessagePanelReady();
-    };
-
-    const getMessagePanel = () => {
-        return document.getElementById('message-panel');
     };
 
     const capturePrependScrollState = () => {

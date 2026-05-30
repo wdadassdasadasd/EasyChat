@@ -56,6 +56,7 @@
                 <div class="chat-workspace">
                     <div class="chat-content">
                         <ChatMessageList
+                            ref="messageListRef"
                             :messageList="messageList"
                             :currentChatSession="currentChatSession"
                             :currentUserId="currentUserId"
@@ -161,6 +162,7 @@ const searchKey = ref();
 const groupDetailVisible = ref(false);
 const userDetailVisible = ref(false);
 const showGroupMemberNick = ref(true);
+const messageListRef = ref(null);
 
 const search = () => {};
 
@@ -200,6 +202,7 @@ const {
     currentChatSession,
     loadChatSession,
     markSessionRead,
+    messageListRef,
     proxy
 });
 
