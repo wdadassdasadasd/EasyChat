@@ -15,7 +15,7 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 const locale = zhCn
 </script>
 
-<style lang="less">
+<style lang="scss"
 
 
 

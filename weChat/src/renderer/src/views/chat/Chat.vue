@@ -1,6 +1,7 @@
 <template>
     <Layout>
         <template #left-content>
+            <!-- 左侧会话列表：只负责展示本地会话状态，数据由 useChatSessions 通过主进程 IPC 同步。 -->
             <div class="chat-list-header">
                 <span>聊天</span>
                 <div class="top-search">
@@ -27,6 +28,7 @@
 
         <template #right-content>
             <template v-if="hasCurrentChat">
+                <!-- 聊天头部：当前会话标题、窗口操作和会话详情抽屉入口集中在这里。 -->
                 <div class="title-panel drag">
                     <div class="title">
                         <span>{{ currentChatSessionTitle }}</span>
@@ -53,6 +55,7 @@
                     </div>
                 </div>
 
+                <!-- 聊天工作区：消息列表、发送框、群/单聊详情抽屉共享 currentChatSession。 -->
                 <div class="chat-workspace">
                     <div class="chat-content">
                         <ChatMessageList
@@ -97,6 +100,7 @@
             </template>
 
             <template v-else>
+                <!-- 没有选中会话时仍保留窗口操作区，避免主窗口控制入口丢失。 -->
                 <div class="title-panel title-panel-empty drag">
                     <div class="title"></div>
                     <div class="title-actions no-drag">
@@ -117,6 +121,7 @@
                 </div>
             </template>
 
+            <!-- 文件/视频预览弹窗独立挂在右侧容器下，避免随消息列表滚动和复用。 -->
             <FilePreviewDialog
                 v-model="showFilePreviewDialog"
                 :message="selectedFileMessage"
@@ -166,6 +171,7 @@ const messageListRef = ref(null);
 
 const search = () => {};
 
+// 会话链路负责：加载/排序会话、响应路由打开聊天、处理置顶/删除/已读等主进程 IPC。
 const {
     chatSessionList,
     currentChatSession,
@@ -183,6 +189,7 @@ const {
     welcomeText
 } = useChatSessions({ proxy, route });
 
+// 消息链路负责：切换会话后分页拉取历史消息，监听主进程推送，并把发送事件交给发送 composable。
 const {
     chatSessionClickHandler,
     cleanupChatMessages,
@@ -206,6 +213,7 @@ const {
     proxy
 });
 
+// 文件链路负责：文件接收下载、视频预览下载、本地视频回退和对象 URL 生命周期。
 const {
     closeFilePreviewDialog,
     closeVideoPreviewDialog,
@@ -237,6 +245,7 @@ const totalUnreadCount = computed(() => {
 });
 
 const showChatDetail = () => {
+    // 单聊和群聊使用不同详情抽屉；每次只允许打开一个，避免右侧面板状态串线。
     if (currentChatSession.value.contactType == 1) {
         userDetailVisible.value = false;
         groupDetailVisible.value = !groupDetailVisible.value;
@@ -270,6 +279,7 @@ const handleClearMessages = () => {
         return;
     }
 
+    // 清空聊天记录由主进程落库，renderer 只在确认同一 session 成功后清空当前内存列表。
     proxy.Confirm({
         message: '确认清空聊天记录吗？',
         okfun: () => {
@@ -292,6 +302,7 @@ const handleClearMessages = () => {
 setSessionSelector(chatSessionClickHandler);
 
 onMounted(() => {
+    // 挂载时先注册 IPC 监听，再触发会话加载和路由打开，避免回调早于监听导致首屏丢消息。
     registerMessageListeners();
     registerSessionListener();
     loadChatSession();
@@ -301,6 +312,7 @@ onMounted(() => {
 watch(
     () => [route.query.type, route.query.chatId],
     () => {
+        // 联系人页“发消息”会改路由 query，这里把路由意图转换成当前聊天会话。
         openChatFromRoute();
     }
 );
@@ -316,6 +328,7 @@ watch(
 watch(
     totalUnreadCount,
     (count) => {
+        // Main.vue 监听该全局事件，用于侧边栏聊天红点；真实未读数仍以会话列表状态为准。
         window.dispatchEvent(new CustomEvent('chatUnreadCountChange', {
             detail: {
                 count

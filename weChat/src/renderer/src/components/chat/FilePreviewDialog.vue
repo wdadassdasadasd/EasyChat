@@ -1,4 +1,5 @@
 <template>
+    <!-- 普通文件预览弹窗只负责确认接收，实际下载由 useFileTransfer 统一处理。 -->
     <el-dialog
         :model-value="modelValue"
         width="690px"

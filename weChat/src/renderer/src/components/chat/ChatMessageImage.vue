@@ -1,5 +1,6 @@
 <template>
     <div class="message-image-frame">
+        <!-- 自己刚发送的图片优先用本地预览 URL；历史消息走文件接口拉取缩略图。 -->
         <el-image
             v-if="message.localPreviewUrl"
             :src="message.localPreviewUrl"

@@ -55,6 +55,7 @@ const onGetLocalStore=()=>{
 //查询本地会话列表
 const onLoadSessionData=()=>{
     ipcMain.on("loadSessionData",async (e)=>{
+        // renderer 左侧会话列表只读本地 SQLite，WebSocket/发送链路负责提前把会话写入表。
         const result=await selectUserSessionList();
         e.sender.send("loadSessionDataCallback",result);
     })
@@ -63,6 +64,7 @@ const onLoadSessionData=()=>{
 
 const onDelChatSession=()=>{
     ipcMain.on("delChatSession",(e,contactId)=>{
+        // 删除会话仅把会话置为不可见，不删除 chat_message 历史记录。
         delChatSession(contactId);
 
     })
@@ -70,6 +72,7 @@ const onDelChatSession=()=>{
 
 const onTopChatSession=()=>{
     ipcMain.on("topChatSession",(e,{contactId,topType})=>{
+        // 置顶状态由 renderer 乐观更新，这里负责把结果持久化。
         topChatSession(contactId,topType);
 
     })
@@ -78,6 +81,7 @@ const onTopChatSession=()=>{
 //分页查询聊天消息
 const onLoadChatMessage=()=>{
     ipcMain.on("loadChatMessage",async (e,data)=>{
+        // 历史消息分页在主进程完成，sessionId/loadSeq 原样带回给 renderer 做防串线校验。
         const result=await selectMessageList(data);
         e.sender.send("loadChatMessageCallback",{
             ...result,
@@ -90,6 +94,7 @@ const onLoadChatMessage=()=>{
 
 const onMarkSessionRead=()=>{
     ipcMain.on("markSessionRead",async (e,contactId)=>{
+        // 已读会同步清零本地会话未读数，renderer 收到新会话列表后红点也会随之刷新。
         await markSessionRead(contactId);
         e.sender.send("markSessionReadCallback",{
             contactId,
@@ -123,8 +128,10 @@ const onSaveSendMessage = () => {
             return;
         }
         //保存发送的消息到chat_message 表
+        // HTTP 发送成功后的消息在这里落库，避免刷新会话后本地历史缺失自己发出的消息。
         await saveMessage(message);
 
+        // 同步更新会话表的最后一条消息，使左侧列表立即反映本次发送。
         const sessionInfo = {
             contactId: chatSession?.contactId || message.contactId,
             contactType: chatSession?.contactType ?? message.contactType,
@@ -149,6 +156,7 @@ const onSaveSendMessage = () => {
 const onClearChatMessage = () => {
     ipcMain.on('clearChatMessage', async (e, { sessionId } = {}) => {
         try {
+            // 清空记录写入 clear 游标后删除当前本地消息，后续旧 WebSocket 回补会被过滤。
             await clearMessageBySessionId(sessionId);
             e.sender.send('clearChatMessageCallback', {
                 success: true,
@@ -166,6 +174,7 @@ const onClearChatMessage = () => {
 
 const onSearchChatMessage = () => {
     ipcMain.on('searchChatMessage', async (e, data = {}) => {
+        // 搜索只查当前 session 的本地消息，并把 searchSeq 带回 renderer 丢弃过期结果。
         const dataList = await searchMessageBySessionId(data);
         e.sender.send('searchChatMessageCallback', {
             sessionId: data.sessionId,
@@ -211,6 +220,7 @@ const onLocalFileFolder = () => {
 
 const onOpenTempVideoFile = () => {
     ipcMain.handle('openTempVideoFile', async (e, data = {}) => {
+        // 没有本地原文件时，renderer 会把已下载视频 blob 交给主进程写入临时文件再打开。
         const { fileName = 'video.mp4', buffer } = data;
         if (!buffer) {
             return {
@@ -234,6 +244,7 @@ const onOpenTempVideoFile = () => {
     });
 
     ipcMain.handle('readLocalVideoFile', async (e, data = {}) => {
+        // 自己刚发送的视频可从本地路径读取，用于服务端文件尚未可下载时的预览回退。
         const { filePath } = data;
         if (!filePath || !fs.existsSync(filePath)) {
             return {
@@ -255,6 +266,7 @@ const onOpenTempVideoFile = () => {
     });
 
     ipcMain.handle('openLocalVideoFile', async (e, data = {}) => {
+        // 系统播放器入口优先打开本地原文件，避免重复下载大视频。
         const { filePath } = data;
         if (!filePath || !fs.existsSync(filePath)) {
             return {

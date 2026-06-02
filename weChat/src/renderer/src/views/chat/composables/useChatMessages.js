@@ -17,6 +17,7 @@ export const useChatMessages = ({
     };
     const messageList = ref([]);
     const messageLoadingMore = ref(false);
+    // 首屏加载需要自动贴底；向上翻页则要保持用户当前阅读位置。
     let shouldScrollToBottomAfterLoad = false;
     let pendingPrependScrollState = null;
 
@@ -58,6 +59,7 @@ export const useChatMessages = ({
     };
 
     const clearCurrentMessages = () => {
+        // 清空当前会话后主动标记无更多数据，避免滚动到顶部又触发旧消息分页加载。
         startMessagePanelRender();
         messageList.value = [];
         messageLoadingMore.value = false;
@@ -85,6 +87,7 @@ export const useChatMessages = ({
             return;
         }
 
+        // 历史消息 prepend 后 scrollHeight 会变大，用高度差把视口还原到用户原来的阅读位置。
         await nextTick();
         await new Promise((resolve) => {
             window.requestAnimationFrame(() => {
@@ -111,6 +114,7 @@ export const useChatMessages = ({
             pendingPrependScrollState = capturePrependScrollState();
             messageLoadingMore.value = true;
         }
+        // loadSeq 用来识别过期分页回包，防止快速切换会话时旧回包写入新会话。
         messageCountInfo.pageNo++;
         window.ipcRenderer.send('loadChatMessage', {
             sessionId: currentChatSession.value.sessionId,
@@ -128,6 +132,7 @@ export const useChatMessages = ({
     const chatSessionClickHandler = (item) => {
         markSessionRead?.(item.contactId);
         if (currentChatSession.value.contactId == item.contactId) {
+            // 同一会话从路由补齐 sessionId 后，需要补拉一次历史消息。
             const shouldLoadMessages = !currentChatSession.value.sessionId && item.sessionId;
             currentChatSession.value = Object.assign({}, currentChatSession.value, item);
             if (shouldLoadMessages) {
@@ -141,6 +146,7 @@ export const useChatMessages = ({
             return;
         }
 
+        // 切换会话时重置分页游标和渲染序列，旧会话的滚动/分页状态不带入新会话。
         startMessagePanelRender();
         currentChatSession.value = Object.assign({}, item);
         messageList.value = [];
@@ -153,6 +159,7 @@ export const useChatMessages = ({
 
     const onLoadChatMessage = () => {
         window.ipcRenderer.on('loadChatMessageCallback', async (e, { dataList, pageTotal, pageNo, sessionId, loadSeq }) => {
+            // 主进程分页回调必须同时校验会话和渲染序列，避免异步回包串会话。
             const isExpiredLoad = loadSeq != null && loadSeq !== getActiveMessageLoadSeq();
             const isWrongSession = sessionId != null && sessionId !== currentChatSession.value.sessionId;
             if (isExpiredLoad || isWrongSession) {
@@ -175,6 +182,7 @@ export const useChatMessages = ({
             }
             if (shouldScrollToBottomAfterLoad && pageNo == 1) {
                 shouldScrollToBottomAfterLoad = false;
+                // 首屏消息和图片封面可能异步撑高布局，交给滚动模块多帧贴底。
                 showMessagePanelAtBottom(getMessagePanelRenderSeq());
             } else if (messageLoadingMore.value) {
                 await restorePrependScrollPosition();
@@ -190,10 +198,12 @@ export const useChatMessages = ({
                 message = JSON.parse(message);
             }
             if (message.messageType == 0) {
+                // 初始化消息只提示 renderer 重新拉会话列表，消息明细已经由主进程落库。
                 loadChatSession();
                 return;
             }
             if (message.messageType == 6) {
+                // 文件上传完成回执只更新本地消息状态，不重复插入一条消息。
                 handleFileUploadDone(message);
                 return;
             }
@@ -201,6 +211,7 @@ export const useChatMessages = ({
             const isCurrentSession = message.sessionId == currentChatSession.value.sessionId ||
                 receiveContactId == currentChatSession.value.contactId;
             if (isCurrentSession) {
+                // 当前会话收到消息时直接追加到内存列表，并按用户是否靠近底部决定是否自动滚动。
                 markSessionRead?.(receiveContactId);
                 const exists = messageList.value.some((item) => item.messageId == message.messageId);
                 if (!exists) {

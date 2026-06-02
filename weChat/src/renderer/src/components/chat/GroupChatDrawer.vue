@@ -1,5 +1,6 @@
 <template>
     <aside v-if="visible" class="group-chat-drawer">
+        <!-- 群聊详情抽屉：成员搜索、群资料编辑、置顶、清空记录和聊天记录搜索都从这里进入。 -->
         <div class="drawer-search">
             <el-input
                 v-model="searchKey"
@@ -495,6 +496,7 @@ const submitAddMembers = async () => {
 };
 
 const openSearchDialog = () => {
+    // 聊天记录搜索依赖本地 sessionId；没有落库会话时不能发起 IPC 查询。
     if (!props.currentChatSession.sessionId) {
         proxy.Message.warning('暂无可搜索的聊天记录');
         return;
@@ -522,6 +524,7 @@ const searchChatMessages = () => {
         return;
     }
 
+    // 搜索结果通过主进程 SQLite 查询返回，用 searchSeq 丢弃旧关键字的过期回包。
     const currentSeq = ++messageSearchSeq;
     messageSearching.value = true;
     searchExecuted.value = true;
@@ -533,6 +536,7 @@ const searchChatMessages = () => {
 };
 
 const handleSearchChatMessageCallback = (e, data) => {
+    // 回包必须同时匹配搜索序列和当前 session，避免切换群后显示旧搜索结果。
     if (data?.searchSeq !== messageSearchSeq || data?.sessionId !== props.currentChatSession.sessionId) {
         return;
     }
@@ -567,6 +571,7 @@ const formatMessageTime = (sendTime) => {
 };
 
 const scrollToMessage = (message = {}) => {
+    // 搜索结果只定位当前已加载到 DOM 的消息；未分页加载的历史消息不会强行跳转。
     const target = document.getElementById(`message${message.messageId}`);
     if (!target) {
         proxy.Message.warning('该消息未加载在当前页面');
@@ -592,6 +597,7 @@ watch(
 watch(
     () => props.currentChatSession.contactId,
     async () => {
+        // 会话切换时关闭所有群详情子弹窗，防止编辑/搜索状态泄露到新群。
         editDialogVisible.value = false;
         addMemberDialogVisible.value = false;
         searchDialogVisible.value = false;

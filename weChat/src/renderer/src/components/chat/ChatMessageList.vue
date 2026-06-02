@@ -1,5 +1,6 @@
 <template>
     <div class="chat-panel">
+        <!-- 消息滚动容器：向上触顶触发历史分页，用户滚动会通知父级解除首屏贴底锁。 -->
         <div
             :class="['message-panel', 'message-panel-' + messagePanelPhase]"
             id="message-panel"
@@ -11,6 +12,7 @@
             <div class="message-panel-content">
                 <template v-if="messageList.length > 0">
                     <div v-if="messageLoadingMore" class="message-loading-tip">加载中...</div>
+                    <!-- renderList 会在消息之间插入时间分割线，真实消息仍交给 ChatMessage 渲染。 -->
                     <template v-for="item in renderList" :key="item.key">
                         <div v-if="item.type === 'time'" class="message-time-divider">
                             {{ item.text }}
@@ -79,6 +81,7 @@ const TIME_SEPARATOR_GAP = 5 * 60 * 1000;
 const LOAD_MORE_THRESHOLD = 80;
 
 const normalizeTimestamp = (time) => {
+    // 后端时间戳可能是秒或毫秒，统一转成毫秒后再格式化和计算时间分割线。
     const timestamp = Number(time);
     if (!timestamp || Number.isNaN(timestamp)) {
         return 0;
@@ -124,6 +127,7 @@ const formatMessageTime = (time) => {
 };
 
 const renderList = computed(() => {
+    // 相邻消息间隔超过阈值时插入时间分割线，避免每条消息都显示时间造成噪音。
     const list = [];
     let previousTime = 0;
 
@@ -151,6 +155,7 @@ const renderList = computed(() => {
 });
 
 const handleScroll = (event) => {
+    // 只有面板 ready 且当前没有加载中时才允许触顶加载，避免重复分页请求。
     const target = event.target;
     if (!target || props.messageLoadingMore || props.messagePanelPhase !== 'ready') {
         return;
@@ -170,6 +175,7 @@ const setElementToBottom = () => {
         return;
     }
 
+    // 关闭平滑滚动后直接贴底，配合 useMessageScroll 的多帧稳定判断。
     const bottomScrollTop = Math.max(0, messagePanel.scrollHeight - messagePanel.clientHeight);
     const previousScrollBehavior = messagePanel.style.scrollBehavior;
     messagePanel.style.scrollBehavior = 'auto';

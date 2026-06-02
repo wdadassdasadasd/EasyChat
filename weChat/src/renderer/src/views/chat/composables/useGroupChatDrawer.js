@@ -51,6 +51,7 @@ export const useGroupChatDrawer = ({ currentChatSession, proxy }) => {
             return;
         }
 
+        // 抽屉可能在不同群聊间快速切换，loadSeq 用来丢弃过期的群资料回包。
         const currentSeq = ++loadSeq;
         loading.value = true;
         const result = await proxy.Request({
@@ -88,6 +89,7 @@ export const useGroupChatDrawer = ({ currentChatSession, proxy }) => {
             return;
         }
 
+        // 群聊抽屉只服务群会话，每次打开都刷新成员列表和群资料。
         visible.value = true;
         searchKey.value = '';
         await loadGroupInfo();
@@ -104,6 +106,7 @@ export const useGroupChatDrawer = ({ currentChatSession, proxy }) => {
             closeDrawer();
             return;
         }
+        // 切换到另一个群时先清空旧数据，避免 loading 期间展示上一群成员。
         if (activeGroupId !== currentChatSession.value?.contactId) {
             groupInfo.value = {};
             memberList.value = [];

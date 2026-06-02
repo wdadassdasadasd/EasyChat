@@ -127,6 +127,7 @@ function createWindow() {
 
   onSetLocalStore();
   onGetLocalStore();
+  // 聊天链路 IPC 集中注册：renderer 只发事件，主进程负责查询/更新本地 SQLite。
   onLoadSessionData();
   onDelChatSession();
   onMarkSessionRead();

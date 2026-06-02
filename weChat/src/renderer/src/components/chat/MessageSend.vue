@@ -1,5 +1,6 @@
 <template>
     <div class="send-panel">
+        <!-- 工具栏只收集待发送素材；真正的发送请求由父级 Chat.vue 接住 emit 后处理。 -->
         <div class="toolbar">
             <el-popover
                 :visible="showEmojiPopover"
@@ -60,40 +61,32 @@
         </div>
 
         <div class="input-area" @drop="dropHandler" @dragover="dragoverHandler">
-            <div v-if="pendingImageList.length" class="pending-image-list">
+            <!-- 待发送图片/文件先在本地预览，点击发送时再批量转成消息事件。 -->
+            <div v-if="pendingMediaList.length" class="pending-media-list">
                 <div
-                    v-for="image in pendingImageList"
-                    :key="image.id"
-                    class="pending-image-item"
+                    v-for="media in pendingMediaList"
+                    :key="media.id"
+                    :class="[
+                        'pending-media-item',
+                        media.mediaType === 'image' ? 'pending-media-item-image' : 'pending-media-item-file'
+                    ]"
                 >
-                    <img :src="image.previewUrl" :alt="image.name" />
+                    <template v-if="media.mediaType === 'image'">
+                        <img :src="media.previewUrl" :alt="media.name" />
+                    </template>
+                    <template v-else>
+                        <div :class="['pending-file-icon', media.mediaType === 'video' ? 'pending-file-icon-video' : '']">
+                            {{ media.mediaType === 'video' ? 'VIDEO' : 'FILE' }}
+                        </div>
+                        <div class="pending-file-info">
+                            <div class="pending-file-name" :title="media.name">{{ media.name }}</div>
+                            <div class="pending-file-size">{{ formatFileSize(media.size) }}</div>
+                        </div>
+                    </template>
                     <button
-                        class="pending-image-remove"
+                        class="pending-media-remove"
                         type="button"
-                        @click="removePendingImage(image.id)"
-                    >
-                        x
-                    </button>
-                </div>
-            </div>
-
-            <div v-if="pendingFileList.length" class="pending-file-list">
-                <div
-                    v-for="fileItem in pendingFileList"
-                    :key="fileItem.id"
-                    class="pending-file-item"
-                >
-                    <div :class="['pending-file-icon', fileItem.fileType === 1 ? 'pending-file-icon-video' : '']">
-                        {{ fileItem.fileType === 1 ? 'VIDEO' : 'FILE' }}
-                    </div>
-                    <div class="pending-file-info">
-                        <div class="pending-file-name">{{ fileItem.name }}</div>
-                        <div class="pending-file-size">{{ formatFileSize(fileItem.size) }}</div>
-                    </div>
-                    <button
-                        class="pending-file-remove"
-                        type="button"
-                        @click="removePendingFile(fileItem.id)"
+                        @click="media.mediaType === 'image' ? removePendingImage(media.id) : removePendingFile(media.id)"
                     >
                         x
                     </button>
@@ -155,6 +148,7 @@ const props = defineProps({
 const emit = defineEmits(['sendMessage', 'sendImageMessage', 'sendFileMessage', 'sendVideoMessage']);
 
 const activeEmoji = ref(emojiList[0]?.name || '');
+// useMessageComposer 聚合输入框、表情、粘贴、拖拽、文件选择等“编辑中”状态。
 const {
     canSend,
     closePopover,
@@ -165,8 +159,7 @@ const {
     msgContent,
     openPopover,
     pasteHandler,
-    pendingFileList,
-    pendingImageList,
+    pendingMediaList,
     removePendingFile,
     removePendingImage,
     sendEmoji,
@@ -270,27 +263,33 @@ const {
     }
 }
 
-.pending-image-list {
+.pending-media-list {
     display: flex;
-    flex-wrap: nowrap;
+    align-items: center;
     gap: 8px;
     flex-shrink: 0;
-    max-width: 100%;
-    max-height: 76px;
+    width: 100%;
+    min-height: 74px;
+    max-height: 74px;
     padding: 2px 0 8px;
     overflow-x: auto;
     overflow-y: hidden;
+    box-sizing: border-box;
 }
 
-.pending-image-item {
+.pending-media-item {
     position: relative;
-    width: 64px;
-    height: 64px;
-    flex: 0 0 64px;
+    flex: 0 0 auto;
     border: 1px solid #e5e5e5;
     border-radius: 4px;
-    overflow: hidden;
     background: #f7f7f7;
+    box-sizing: border-box;
+}
+
+.pending-media-item-image {
+    width: 64px;
+    height: 64px;
+    overflow: hidden;
 
     img {
         width: 100%;
@@ -300,43 +299,12 @@ const {
     }
 }
 
-.pending-image-remove {
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 17px;
-    height: 17px;
-    padding: 0;
-    border: none;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.56);
-    color: #fff;
-    font-size: 12px;
-    line-height: 17px;
-    cursor: pointer;
-}
-
-.pending-file-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    flex-shrink: 0;
-    max-height: 74px;
-    padding: 2px 0 8px;
-    overflow-y: auto;
-}
-
-.pending-file-item {
-    position: relative;
+.pending-media-item-file {
     display: flex;
     align-items: center;
-    width: min(340px, 100%);
-    min-height: 48px;
+    width: 276px;
+    height: 64px;
     padding: 7px 32px 7px 8px;
-    border: 1px solid #e5e5e5;
-    border-radius: 4px;
-    background: #f7f7f7;
-    box-sizing: border-box;
 }
 
 .pending-file-icon {
@@ -364,7 +332,7 @@ const {
 }
 
 .pending-file-name {
-    max-width: 240px;
+    max-width: 198px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -380,10 +348,10 @@ const {
     line-height: 16px;
 }
 
-.pending-file-remove {
+.pending-media-remove {
     position: absolute;
-    top: 15px;
-    right: 8px;
+    top: 3px;
+    right: 3px;
     width: 17px;
     height: 17px;
     padding: 0;

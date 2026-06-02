@@ -1,4 +1,5 @@
 const add_tables=[
+    // 聊天链路核心表：chat_message 存消息明细，chat_session_user 存会话摘要，chat_session_clear 存清空游标。
     "create table if not exists chat_message(" +
     "  user_id varchar not null," +
     "  message_id bigint not null default null," +

@@ -1,4 +1,5 @@
 <template>
+    <!-- 单条消息只做展示分发：文本直接渲染，媒体按 messageType/fileType 下发到专用组件。 -->
     <div :id="'message' + message.messageId" :class="['message-row', isSelf ? 'message-row-self' : '']">
         <AvatarBase
             v-if="!isSelf"
@@ -75,10 +76,12 @@ const props = defineProps({
 defineEmits(['imageLoaded', 'openFilePreview', 'openVideoPreview']);
 
 const isSelf = computed(() => {
+    // 自己发送的消息右对齐，别人消息左对齐；群聊昵称展示也依赖这个判断。
     return Utils.isSelfMessage(props.message, props.currentUserId);
 });
 
 const isMediaMessage = computed(() => {
+    // 图片和视频不使用普通气泡 padding，避免媒体预览被白底包裹。
     return Utils.isImageMessage(props.message) || Utils.isVideoMessage(props.message);
 });
 </script>

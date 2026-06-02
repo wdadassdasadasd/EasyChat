@@ -1,5 +1,6 @@
 <template>
     <aside v-if="visible" class="user-chat-drawer">
+        <!-- 单聊详情抽屉：用户资料来自接口，置顶/清空记录通过事件交给 Chat.vue 处理。 -->
         <div v-loading="loading" class="drawer-scroll">
             <div class="user-grid">
                 <div class="user-item">
@@ -65,6 +66,7 @@ const {
 });
 
 const displayUserId = computed(() => {
+    // 接口失败时使用 currentChatSession 兜底，保证抽屉里仍能展示当前聊天对象。
     return userInfo.value.userId || userInfo.value.contactId || props.currentChatSession.contactId || '';
 });
 
@@ -83,6 +85,7 @@ const showComingSoon = () => {
 watch(
     () => props.modelValue,
     async (nextVisible) => {
+        // v-model 控制打开关闭，syncVisible 会按当前会话类型决定是否真的显示。
         await syncVisible(nextVisible);
         if (visible.value !== nextVisible) {
             emit('update:modelValue', visible.value);
@@ -94,6 +97,7 @@ watch(
 watch(
     () => props.currentChatSession.contactId,
     async () => {
+        // 抽屉打开时切换会话，立即重新同步资料，避免显示上一个联系人。
         if (props.modelValue) {
             await syncVisible(props.currentChatSession.contactType != 1);
             emit('update:modelValue', visible.value);

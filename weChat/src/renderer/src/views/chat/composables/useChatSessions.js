@@ -4,6 +4,7 @@ import ContextMenu from '@imengyu/vue3-context-menu';
 export const useChatSessions = ({ proxy, route }) => {
     const chatSessionList = ref([]);
     const currentChatSession = ref({});
+    // Chat.vue 注入真正的选中会话处理函数；这里保持会话模块和消息模块解耦。
     let selectSession = () => {};
 
     const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0);
@@ -67,6 +68,7 @@ export const useChatSessions = ({ proxy, route }) => {
             return {};
         }
 
+        // 路由直达聊天时本地可能还没有完整会话名，需要按会话类型回源补齐展示信息。
         if (contactType == 1) {
             const result = await proxy.Request({
                 url: proxy.Api.getGroupInfo,
@@ -110,6 +112,7 @@ export const useChatSessions = ({ proxy, route }) => {
         if (!session?.contactId) {
             return session;
         }
+        // 单聊已有真实名称时直接复用；群聊经常需要刷新 memberCount/groupName。
         if (session.contactType != 1 && getRealSessionName(session)) {
             return session;
         }
@@ -137,6 +140,7 @@ export const useChatSessions = ({ proxy, route }) => {
             return;
         }
 
+        // 联系人/群详情页跳转到 /chat?chatId=... 时，优先复用本地会话，否则临时创建会话壳。
         const contactType = getContactTypeValue(route.query.type);
         let session = chatSessionList.value.find((item) => item.contactId == chatId);
         if (session) {
@@ -171,6 +175,7 @@ export const useChatSessions = ({ proxy, route }) => {
 
     const registerSessionListener = () => {
         window.ipcRenderer.on('loadSessionDataCallback', async (e, dataList) => {
+            // 主进程返回的是本地 SQLite 会话列表；renderer 补齐名称后再排序展示。
             const hydratedList = await hydrateSessionList(dataList || []);
             sortChatSessionList(hydratedList);
             chatSessionList.value = hydratedList;
@@ -183,6 +188,7 @@ export const useChatSessions = ({ proxy, route }) => {
     };
 
     const setChatSessionTop = (contactId, topType) => {
+        // 置顶先乐观更新本地列表，再通知主进程持久化，保证右键菜单反馈及时。
         const session = chatSessionList.value.find((item) => item.contactId == contactId);
         if (session) {
             session.topType = topType;
@@ -201,6 +207,7 @@ export const useChatSessions = ({ proxy, route }) => {
             return;
         }
 
+        // 抽屉里的群资料变更会回写当前会话，同时保持左侧列表排序规则一致。
         const session = chatSessionList.value.find((item) => item.contactId == sessionInfo.contactId);
         if (session) {
             Object.assign(session, sessionInfo);
@@ -215,6 +222,7 @@ export const useChatSessions = ({ proxy, route }) => {
         if (!contactId) {
             return;
         }
+        // 已读状态需要同步更新左侧列表、当前会话和 SQLite，避免红点在不同区域残留。
         const session = chatSessionList.value.find((item) => item.contactId == contactId);
         if (session) {
             session.noReadCount = 0;
@@ -232,6 +240,7 @@ export const useChatSessions = ({ proxy, route }) => {
     };
 
     const delChatSession = (contactId) => {
+        // 删除会话只是隐藏会话入口，消息记录仍由清空记录链路单独处理。
         delChatSessionList(contactId);
         currentChatSession.value = {};
         window.ipcRenderer.send('delChatSession', contactId);

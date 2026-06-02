@@ -12,6 +12,7 @@ import { updateNoReadCount } from './ChatSessionUserModel';
 
 
 const getClearInfoBySessionId = (sessionId) => {
+    // 清空聊天记录不只删除现有消息，还保存清空游标用于过滤之后补回来的旧消息。
     if (!sessionId) {
         return Promise.resolve(null);
     }
@@ -35,6 +36,7 @@ const saveClearInfoBySessionId = async (sessionId, clearMessageId) => {
         return 0;
     }
 
+    // 多次清空取更大的 messageId/time，避免旧清空游标覆盖新清空范围。
     const previousClearInfo = await getClearInfoBySessionId(sessionId);
     const nextClearMessageId = Math.max(Number(previousClearInfo?.clearMessageId || 0), Number(clearMessageId || 0));
     const nextClearTime = Math.max(Number(previousClearInfo?.clearTime || 0), Date.now());
@@ -48,6 +50,7 @@ const saveClearInfoBySessionId = async (sessionId, clearMessageId) => {
 };
 
 const isMessageBeforeClear = async (message = {}) => {
+    // WebSocket 初始化或历史补偿可能带来已清空前的消息，落库前统一拦截。
     const sessionId = message.sessionId;
     if (!sessionId) {
         return false;
@@ -70,6 +73,7 @@ const isMessageBeforeClear = async (message = {}) => {
 };
 
 const appendClearFilter = (sqlParts, params, clearInfo) => {
+    // 查询历史/搜索时也要套清空过滤，保证 UI 与落库过滤规则一致。
     const clearMessageId = Number(clearInfo?.clearMessageId || 0);
     const clearTime = Number(clearInfo?.clearTime || 0);
 
@@ -98,6 +102,7 @@ const saveMessage=async (data)=>{
 
 
 const saveMessageBatch=async(chatMeassageList)=>{
+        // 批量保存前先过滤被清空游标覆盖的消息，再统计真正可见的新未读数。
         const visibleMessageList = [];
         for (let item of chatMeassageList) {
             if (!(await isMessageBeforeClear(item))) {
@@ -133,6 +138,7 @@ const saveMessageBatch=async(chatMeassageList)=>{
 }
 
 const updateMessageStatus=(messageId,status=1)=>{
+    // 文件消息的上传回执只需要更新 status，不改消息正文和会话摘要。
     if(!messageId){
         return Promise.resolve();
     }
@@ -146,6 +152,7 @@ const updateMessageStatus=(messageId,status=1)=>{
 
 
 const getPageOffset=(pageNo=1,totalCount)=>{
+    // 聊天历史固定 20 条一页，renderer 会把新页 prepend 到已有列表前面。
     const pageSize=20;
     const pageTotal=totalCount%pageSize==0?totalCount/pageSize:Math.floor(totalCount/pageSize)+1;
     pageNo=pageNo<=1?1:pageNo;
@@ -168,6 +175,7 @@ const selectMesssageList = async (query = {}) => {
             };
         }
 
+        // maxMessageId 锁定首次加载时的消息上界，避免向上翻页时混入新消息。
         const clearInfo = await getClearInfoBySessionId(sessionId);
         const countSqlParts = ['select count(1) as total from chat_message where user_id=? and session_id=?'];
         const countParams = [store.getUserId(), sessionId];
@@ -208,6 +216,7 @@ const clearMessageBySessionId = async (sessionId) => {
         return Promise.resolve(0);
     }
 
+    // 先记录当前最大 messageId，再删除本地消息；未来小于等于该 id 的回补会被过滤。
     const maxMessageId = await getMaxMessageIdBySessionId(sessionId);
     await saveClearInfoBySessionId(sessionId, maxMessageId);
 
@@ -225,6 +234,7 @@ const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
             return [];
         }
 
+        // 搜索只在当前会话可见消息里查正文和文件名，最多返回最近 50 条。
         const clearInfo = await getClearInfoBySessionId(sessionId);
         const likeKeyword = `%${escapeLikeKeyword(searchKey)}%`;
         const sqlParts = [

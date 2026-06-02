@@ -1,4 +1,5 @@
 <template>
+    <!-- 左侧会话项展示会话快照：未读数、最后一条消息、置顶状态都来自本地会话表。 -->
     <div :class="['chat-session-item', currentSession ? 'active' : '']">
         <div class="avatar-wrap">
             <AvatarBase :userId="data.contactId" :width="45" :borderRadius="4"></AvatarBase>
@@ -36,6 +37,7 @@ const props = defineProps({
 });
 
 const unreadCount = computed(() => Number(props.data?.noReadCount || 0));
+// 列表项红点只负责展示，清零逻辑在 useChatSessions.markSessionRead 中同步到主进程。
 const unreadText = computed(() => unreadCount.value > 99 ? '99+' : String(unreadCount.value));
 </script>
 

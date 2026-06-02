@@ -1,4 +1,5 @@
 <template>
+    <!-- 视频预览弹窗展示下载进度、播放失败提示，并把下载/系统打开事件回传给 useFileTransfer。 -->
     <el-dialog
         :model-value="modelValue"
         width="760px"
@@ -84,6 +85,7 @@ defineEmits(['closed', 'download', 'openExternal', 'update:modelValue', 'videoEr
 const videoName = computed(() => Utils.getFileMessageName(props.message || {}));
 const safeProgress = computed(() => Math.min(100, Math.max(0, Number(props.progress) || 0)));
 const loadingText = computed(() => {
+    // progress 为 0 时使用不确定 loading，下载接口返回进度后再显示百分比。
     if (!props.loading) {
         return '';
     }

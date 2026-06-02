@@ -1,4 +1,5 @@
 <template>
+    <!-- 视频消息展示封面和状态，点击后把完整预览/下载流程交给 VideoPreviewDialog。 -->
     <div
         :class="['message-video-card', disabled ? 'message-video-card-disabled' : '']"
         @click="openVideo"
@@ -49,6 +50,7 @@ const emit = defineEmits(['loaded', 'open']);
 const disabled = computed(() => Utils.isVideoPreviewDisabled(props.message));
 
 const openVideo = () => {
+    // 上传失败或仍在上传的消息不允许预览，避免打开空的视频弹窗。
     if (disabled.value) {
         return;
     }

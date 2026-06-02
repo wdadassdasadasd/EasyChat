@@ -93,6 +93,7 @@ const changeMenu=(item)=>{
     router.push(item.path);
 }
 const handleChatUnreadCountChange=(event)=>{
+    // Chat.vue 根据会话列表聚合未读数后派发该事件，侧边栏只负责展示红点。
     chatUnreadCount.value=Number(event.detail?.count||0);
 }
 

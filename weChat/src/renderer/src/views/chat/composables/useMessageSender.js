@@ -10,10 +10,30 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     const fileLimit = 9;
     const pendingImageList = ref([]);
     const pendingFileList = ref([]);
+    let pendingMediaSeq = 0;
 
+    // 发送框只维护待发送草稿，真正的网络请求由 useChatMessageSender 接管。
     const canSend = computed(() => {
         return Boolean((msgContent.value || '').trim()) || pendingImageList.value.length > 0 || pendingFileList.value.length > 0;
     });
+
+    const pendingMediaList = computed(() => {
+        const images = pendingImageList.value.map((item) => ({
+            ...item,
+            mediaType: 'image'
+        }));
+        const files = pendingFileList.value.map((item) => ({
+            ...item,
+            mediaType: item.fileType === 1 ? 'video' : 'file'
+        }));
+
+        return [...images, ...files].sort((a, b) => a.order - b.order);
+    });
+
+    const nextPendingMediaOrder = () => {
+        pendingMediaSeq += 1;
+        return pendingMediaSeq;
+    };
 
     const openPopover = () => {};
 
@@ -42,6 +62,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     };
 
     const createImageCover = (file) => {
+        // 图片消息先生成轻量封面，发送时和原文件一起上传给后端。
         return new Promise((resolve) => {
             const image = new Image();
             const objectUrl = URL.createObjectURL(file);
@@ -87,6 +108,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     };
 
     const createVideoCover = (file) => {
+        // 视频封面取首段画面；失败时退化为通用文件封面，避免阻塞发送。
         return new Promise((resolve) => {
             const video = document.createElement('video');
             const objectUrl = URL.createObjectURL(file);
@@ -149,11 +171,13 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
             return;
         }
 
+        const order = nextPendingMediaOrder();
         const previewUrl = URL.createObjectURL(file);
         const cover = await createImageCover(file);
 
         pendingImageList.value.push({
             id: `${Date.now()}_${Math.random()}`,
+            order,
             file,
             cover,
             previewUrl,
@@ -172,8 +196,10 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
             return;
         }
 
+        const order = nextPendingMediaOrder();
         pendingFileList.value.push({
             id: `${Date.now()}_${Math.random()}`,
+            order,
             file,
             cover: fileType === 1 ? await createVideoCover(file) : await createFileCover(),
             fileType,
@@ -183,6 +209,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     };
 
     const addPendingMedia = async (file) => {
+        // 拖拽/选择文件共用这里，根据 MIME 和后缀拆成图片、视频、普通文件三类。
         if (isImageFile(file)) {
             await addPendingImage(file);
             return;
@@ -271,25 +298,23 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
 
         showSendMessagePopover.value = false;
 
-        pendingImageList.value.forEach((image) => {
-            emit('sendImageMessage', {
+        // 先把所有待发送媒体派发给父组件，再清空本地预览，避免同一文件重复发送。
+        pendingMediaList.value.forEach((media) => {
+            const eventName = media.mediaType === 'image'
+                ? 'sendImageMessage'
+                : media.fileType === 1
+                    ? 'sendVideoMessage'
+                    : 'sendFileMessage';
+
+            emit(eventName, {
                 contactId: currentChatSession.value.contactId,
                 contactType: currentChatSession.value.contactType,
-                file: image.file,
-                cover: image.cover
+                file: media.file,
+                cover: media.cover
             });
         });
 
         clearPendingImages();
-
-        pendingFileList.value.forEach((fileItem) => {
-            emit(fileItem.fileType === 1 ? 'sendVideoMessage' : 'sendFileMessage', {
-                contactId: currentChatSession.value.contactId,
-                contactType: currentChatSession.value.contactType,
-                file: fileItem.file,
-                cover: fileItem.cover
-            });
-        });
 
         clearPendingFiles();
 
@@ -320,6 +345,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         pasteHandler,
         pendingFileList,
         pendingImageList,
+        pendingMediaList,
         removePendingFile,
         removePendingImage,
         sendEmoji,
@@ -341,6 +367,7 @@ export const useChatMessageSender = ({
     proxy,
     scrollMessageToBottom
 }) => {
+    // 发送任务串行化，避免连续回车或批量媒体上传时服务端消息顺序和本地列表顺序错乱。
     let sendTaskQueue = Promise.resolve();
 
     const enqueueSendTask = (task) => {
@@ -355,6 +382,7 @@ export const useChatMessageSender = ({
     };
 
     const appendMessageIfMissing = (message) => {
+        // 服务端可能通过 WebSocket 回推同一条消息，追加前先按 messageId 去重。
         const exists = message.messageId
             ? messageList.value.some((item) => {
                 return item.messageId == message.messageId;
@@ -373,6 +401,7 @@ export const useChatMessageSender = ({
             return;
         }
 
+        // 文本消息先走 HTTP 拿到服务端 messageId，再通知主进程保存到本地 SQLite。
         const result = await proxy.Request({
             url: proxy.Api.sendMessage,
             params: {
@@ -402,6 +431,7 @@ export const useChatMessageSender = ({
     };
 
     const uploadMessageFile = async (message, file, cover) => {
+        // 媒体消息先创建消息记录，再异步上传文件；上传失败只改变该消息状态。
         const uploadResult = await proxy.Request({
             url: proxy.Api.uploadFile,
             params: {
@@ -439,6 +469,7 @@ export const useChatMessageSender = ({
             return;
         }
 
+        // 图片/视频/文件统一走 messageType=5，fileType 决定展示组件和预览能力。
         const result = await proxy.Request({
             url: proxy.Api.sendMessage,
             params: {
@@ -509,6 +540,7 @@ export const useChatMessageSender = ({
     };
 
     const handleFileUploadDone = (message) => {
+        // WebSocket 文件回执可能晚于本地上传请求结束，用 forceGet 触发封面重新拉取。
         const targetMessage = messageList.value.find((item) => {
             return item.messageId == message.messageId;
         });

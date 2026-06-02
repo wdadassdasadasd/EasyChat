@@ -2,6 +2,7 @@ import { nextTick, ref } from 'vue';
 
 export const useMessageScroll = ({ messageListRef } = {}) => {
     const messagePanelPhase = ref('ready');
+    // 这些阈值共同保证首屏加载、图片加载完成和用户主动滚动之间不会互相抢滚动位置。
     const BOTTOM_GAP_TOLERANCE = 2;
     const INITIAL_BOTTOM_LOCK_DURATION = 800;
     const MAX_BOTTOM_SETTLE_FRAMES = 8;
@@ -17,6 +18,7 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
     };
 
     const getMessagePanel = () => {
+        // 优先走 ChatMessageList 暴露的方法，旧结构不存在时再回退到 DOM id。
         const messageList = getMessageList();
         if (typeof messageList?.getMessagePanelElement === 'function') {
             return messageList.getMessagePanelElement();
@@ -51,6 +53,7 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
 
         const messagePanel = getMessagePanel();
         if (messagePanel) {
+            // 临时关闭平滑滚动，避免多帧贴底时动画造成底部抖动。
             const bottomScrollTop = Math.max(0, messagePanel.scrollHeight - messagePanel.clientHeight);
             const previousScrollBehavior = messagePanel.style.scrollBehavior;
             messagePanel.style.scrollBehavior = 'auto';
@@ -81,6 +84,7 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
     };
 
     const clearInitialBottomLock = () => {
+        // 用户手动滚动后解除首屏贴底锁，后续图片加载不再强行把视口拉回底部。
         initialBottomLockSeq = 0;
         if (initialBottomLockTimer) {
             window.clearTimeout(initialBottomLockTimer);
@@ -133,6 +137,7 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
     };
 
     const settleScrollToBottom = () => {
+        // 图片/视频封面加载完成会改变高度，只有首屏锁定或本来靠近底部时才继续贴底。
         if (isInitialBottomLocked() || isNearMessageBottom(360)) {
             scheduleBottomSettle();
         }
@@ -150,6 +155,7 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
             return;
         }
 
+        // 多等几帧，让图片占位、时间分割线和消息气泡完成布局后再宣布列表 ready。
         let stableFrames = 0;
         let previousState = null;
         for (let index = 0; index < MAX_BOTTOM_SETTLE_FRAMES; index++) {
@@ -185,6 +191,7 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
     };
 
     const startMessagePanelRender = () => {
+        // 每次切换会话都会递增序列，异步分页回包可据此判断是否已经过期。
         clearInitialBottomLock();
         clearPendingBottomSettleFrame();
         messagePanelRenderSeq++;

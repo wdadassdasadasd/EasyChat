@@ -23,6 +23,7 @@ export const useUserChatDrawer = ({ currentChatSession, proxy }) => {
             return;
         }
 
+        // 单聊详情也可能被快速切换，loadSeq 防止旧联系人资料覆盖新会话。
         const currentSeq = ++loadSeq;
         loading.value = true;
         const result = await proxy.Request({
@@ -48,6 +49,7 @@ export const useUserChatDrawer = ({ currentChatSession, proxy }) => {
             return;
         }
 
+        // 用户抽屉只服务单聊；群聊详情由 GroupChatDrawer 单独处理。
         visible.value = true;
         await loadUserInfo();
     };
@@ -62,6 +64,7 @@ export const useUserChatDrawer = ({ currentChatSession, proxy }) => {
             closeDrawer();
             return;
         }
+        // 换联系人时先清空旧资料，避免异步加载期间展示上一个人的信息。
         if (activeContactId !== currentChatSession.value?.contactId) {
             userInfo.value = {};
         }

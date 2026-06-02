@@ -15,6 +15,7 @@ const addChatSession=(sessionInfo)=>{
 }
 
 const updateChatSession=(sessionInfo)=>{
+    // 会话表按 userId + contactId 唯一，消息推送和发送成功都会刷新这条摘要记录。
     const paramData={
         userId:store.getUserId(),
         contactId:sessionInfo.contactId
@@ -26,6 +27,7 @@ const updateChatSession=(sessionInfo)=>{
 
 }
 const saveOrUpdateChatSessionBatch4Init=async (chatSessionList)=>{
+    // WebSocket 初始化、普通消息和发送成功都复用这里，统一新增或更新会话快照。
     for(let i=0;i<chatSessionList.length;i++)
     {
         const sessionInfo=chatSessionList[i];
@@ -41,6 +43,7 @@ const saveOrUpdateChatSessionBatch4Init=async (chatSessionList)=>{
 
 //更新未读数
 const updateNoReadCount=({contactId,noReadCount})=>{
+    // noReadCount=0 表示已读清零，其他数值表示在原未读数上累加。
     if(!contactId){
         return Promise.resolve(0);
     }
@@ -59,6 +62,7 @@ const markSessionRead=(contactId)=>{
 
 //查询用户会话列表
 const selectUserSessionList=()=>{
+    // renderer 只展示 status=1 的会话；删除会话会把 status 置为 0。
     let sql="select * from chat_session_user where user_id=? and status=1";
     return queryAll(sql,[store.getUserId()])
 
@@ -71,6 +75,7 @@ const selectUserSessionByContactId=(contactId)=>{
 }
 
 const delChatSession=(contactId)=>{
+    // 这里不物理删除会话，也不删除消息，方便后续重新打开聊天时继续使用历史记录。
     const paramData={
         userId:store.getUserId(),
         contactId

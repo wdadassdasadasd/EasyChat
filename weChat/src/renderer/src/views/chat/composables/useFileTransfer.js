@@ -15,6 +15,7 @@ export const useFileTransfer = ({ proxy }) => {
     let ownsVideoPreviewUrl = false;
 
     const getVideoMimeType = (fileName = '') => {
+        // 后端下载通常只返回 blob，前端按文件名补 MIME，帮助 video 标签识别格式。
         const suffix = String(fileName).split('.').pop()?.toLowerCase();
         const mimeMap = {
             mp4: 'video/mp4',
@@ -27,6 +28,7 @@ export const useFileTransfer = ({ proxy }) => {
     };
 
     const revokeVideoPreviewUrl = () => {
+        // 只释放当前模块创建的对象 URL，发送中的本地预览 URL 由消息模块负责释放。
         if (videoPreviewUrl.value && ownsVideoPreviewUrl) {
             URL.revokeObjectURL(videoPreviewUrl.value);
         }
@@ -46,6 +48,7 @@ export const useFileTransfer = ({ proxy }) => {
     };
 
     const parseBlobError = async (blob) => {
+        // 下载接口失败时也可能返回 JSON blob，这里尝试读出错误信息再决定是否回退。
         if (!blob) {
             return '';
         }
@@ -71,6 +74,7 @@ export const useFileTransfer = ({ proxy }) => {
     };
 
     const readLocalVideoBlob = async (message) => {
+        // 自己刚发送的视频优先从本地路径读取，避免服务器文件还没准备好时无法预览。
         const filePath = message?.filePath;
         if (!filePath || !window.electron?.ipcRenderer?.invoke) {
             return null;
@@ -110,6 +114,7 @@ export const useFileTransfer = ({ proxy }) => {
             return false;
         }
 
+        // 普通文件接收直接触发浏览器下载，不写入聊天消息列表状态。
         const blob = await proxy.Request({
             url: proxy.Api.downloadFile,
             params: {
@@ -138,6 +143,7 @@ export const useFileTransfer = ({ proxy }) => {
     };
 
     const fetchVideoBlob = async (message, { showError = true, allowLocalFallback = true } = {}) => {
+        // 视频预览和下载共用同一下载流程，失败时按需尝试本地文件回退。
         videoDownloadProgress.value = 0;
         videoPlaybackError.value = '';
         const blob = await proxy.Request({
@@ -217,6 +223,7 @@ export const useFileTransfer = ({ proxy }) => {
         if (!Utils.isVideoMessage(message) || Utils.isVideoPreviewDisabled(message)) {
             return;
         }
+        // 先打开弹窗再加载视频，保证大文件下载期间用户能看到 loading 和进度。
         selectedVideoMessage.value = message;
         showVideoPreviewDialog.value = true;
         revokeVideoPreviewUrl();
@@ -247,6 +254,7 @@ export const useFileTransfer = ({ proxy }) => {
             return;
         }
 
+        // 系统播放器优先打开本地原文件；没有本地路径时再下载到临时文件。
         if (selectedVideoMessage.value.filePath) {
             const result = await window.electron.ipcRenderer.invoke('openLocalVideoFile', {
                 filePath: selectedVideoMessage.value.filePath

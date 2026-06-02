@@ -1,4 +1,5 @@
 <template>
+    <!-- 文件消息卡片只展示元信息和接收状态，点击后由文件预览弹窗执行下载。 -->
     <div
         :class="['file-message-card', isSelf ? 'file-message-card-self' : '']"
         @click="$emit('open', message)"

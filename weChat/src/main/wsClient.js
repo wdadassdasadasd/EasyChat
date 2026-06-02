@@ -14,6 +14,7 @@ let needReconnect=null;
 let lockReconnect=false;
 let heartbeatTimer=null;
 const initWs=(config,sender)=>{
+    // 登录成功后由主进程持有 WebSocket，renderer 只通过 receiveMessage 接收整理后的事件。
     const domainKey = NODE_ENV!=='development' ? 'prodWsDomain' : 'devWsDomain';
     const wsDomain = store.getData(domainKey);
     if(!wsDomain){
@@ -27,6 +28,7 @@ const initWs=(config,sender)=>{
     createWs();
 }
 const closeWs=()=>{
+    // 主动退出登录时关闭重连开关，避免回到登录页后后台继续连旧 token。
     needReconnect=false;
     if(heartbeatTimer){
         clearInterval(heartbeatTimer);
@@ -49,6 +51,7 @@ const createWs=()=>{
         if(heartbeatTimer){
             clearInterval(heartbeatTimer);
         }
+        // 心跳保持服务端连接活性，断线后重连成功会重置最大重连次数。
         heartbeatTimer=setInterval(()=>{
             if(ws!=null&&ws.readyState===1){
                 console.log("发送心跳");
@@ -74,6 +77,7 @@ const createWs=()=>{
 
     switch (messageType) {
         case 0: {
+            // 初始化消息带会话和最近消息快照，先写入本地库，再通知 renderer 重新拉会话列表。
             // WebSocket 初始化消息
             const chatSessionList = (message.extendData?.chatSessionList || []).filter((item) => {
                 return item.contactName !== 'EasyChat';
@@ -97,12 +101,14 @@ const createWs=()=>{
         }
 
         case 6: {
+            // 文件上传完成/失败回执只更新已有消息状态，再让当前聊天窗口刷新对应媒体封面。
             await updateMessageStatus(message.messageId, message.status ?? 1);
             webContentsSender.send('receiveMessage', message);
             break;
         }
 
        default: {
+        // 普通聊天消息先落库并更新会话摘要，再推给 renderer 追加到当前消息列表。
         //把收到的消息存入本地 SQLite chat_message表 
         await saveMessageBatch([message]);
 
@@ -143,6 +149,7 @@ const createWs=()=>{
 
     }
     const reconnet=()=>{
+        // onclose 和 onerror 都会进入这里，用 lockReconnect 防止并发创建多个 WebSocket。
         if(!needReconnect){
             console.log("连接断开无需重连")
             return;
