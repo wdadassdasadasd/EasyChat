@@ -1,13 +1,16 @@
 import { computed, onBeforeUnmount, ref, toRaw } from 'vue';
 import { ElMessage } from 'element-plus';
 import Utils from '@/utils/Utils';
+import { CHAT_CONSTANTS } from '@/utils/ChatConstants';
+
+const { MAX_FILE_SELECT_COUNT } = CHAT_CONSTANTS;
 
 export const useMessageComposer = ({ currentChatSession, emit }) => {
     const msgContent = ref('');
     const showEmojiPopover = ref(false);
     const showSendMessagePopover = ref(false);
     const uploadRef = ref();
-    const fileLimit = 9;
+    const fileLimit = MAX_FILE_SELECT_COUNT;
     const pendingImageList = ref([]);
     const pendingFileList = ref([]);
     let pendingMediaSeq = 0;
@@ -34,8 +37,6 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         pendingMediaSeq += 1;
         return pendingMediaSeq;
     };
-
-    const openPopover = () => {};
 
     const closePopover = () => {
         showEmojiPopover.value = false;
@@ -341,7 +342,6 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         fileLimit,
         formatFileSize: Utils.formatFileSize,
         msgContent,
-        openPopover,
         pasteHandler,
         pendingFileList,
         pendingImageList,
@@ -362,16 +362,20 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
 export const useChatMessageSender = ({
     appendMessageIfMissing,
     currentChatSession,
+    currentUserId,
     isNearMessageBottom,
-    loadChatSession,
     messageList,
+    patchChatSessions,
     proxy,
+    replaceMessageById,
+    updateMessageById,
     scrollMessageToBottom
 }) => {
     // 发送任务串行化，避免连续回车或批量媒体上传时服务端消息顺序和本地列表顺序错乱。
     let sendTaskQueue = Promise.resolve();
 
     const maxUploadConcurrency = 3;
+    let localMessageSeq = -Date.now();
     const uploadTaskQueue = [];
     let activeUploadCount = 0;
 
@@ -398,17 +402,70 @@ export const useChatMessageSender = ({
     };
 
     const saveSendMessageToLocal = async (payload) => {
-        const ipcRenderer = window.ipcRenderer || window.electron?.ipcRenderer;
-        if (ipcRenderer?.invoke) {
-            return await ipcRenderer.invoke('saveSendMessage', payload);
-        }
+        return await window.ipcRenderer.invoke('saveSendMessage', payload);
+    };
 
-        return await new Promise((resolve) => {
-            ipcRenderer.once('saveSendMessageCallback', (e, result) => {
-                resolve(result);
-            });
-            ipcRenderer.send('saveSendMessage', payload);
+    const nextLocalMessageId = () => {
+        localMessageSeq -= 1;
+        return localMessageSeq;
+    };
+
+    const getCurrentSessionSnapshot = () => {
+        return { ...toRaw(currentChatSession.value) };
+    };
+
+    const getLocalSessionId = (contactId, contactType) => {
+        return currentChatSession.value.sessionId || `${contactType}_${contactId}`;
+    };
+
+    const stripTransientMessageFields = (message = {}) => {
+        const {
+            localPreviewUrl,
+            retryFile,
+            retryCover,
+            uploading,
+            forceGet,
+            ...dbMessage
+        } = message;
+        return dbMessage;
+    };
+
+    const patchSessionFromSaveResult = (saveResult) => {
+        if (saveResult?.session) {
+            patchChatSessions?.([saveResult.session]);
+        }
+    };
+
+    const persistPendingMessage = async (message) => {
+        const saveResult = await saveSendMessageToLocal({
+            mode: 'pending',
+            message: stripTransientMessageFields(message),
+            chatSession: getCurrentSessionSnapshot()
         });
+        patchSessionFromSaveResult(saveResult);
+        return saveResult;
+    };
+
+    const persistMessageStatus = async (message) => {
+        const saveResult = await saveSendMessageToLocal({
+            mode: 'status',
+            message: stripTransientMessageFields(message),
+            status: message.status,
+            chatSession: getCurrentSessionSnapshot()
+        });
+        patchSessionFromSaveResult(saveResult);
+        return saveResult;
+    };
+
+    const persistServerMessage = async (localMessageId, message) => {
+        const saveResult = await saveSendMessageToLocal({
+            mode: 'replace',
+            localMessageId,
+            message: stripTransientMessageFields(message),
+            chatSession: getCurrentSessionSnapshot()
+        });
+        patchSessionFromSaveResult(saveResult);
+        return saveResult;
     };
 
     const enqueueSendTask = (task) => {
@@ -437,9 +494,89 @@ export const useChatMessageSender = ({
         return appended;
     };
 
-    const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
+    const createPendingMessage = ({ contactId, contactType, messageType, messageContent, file, fileType, filePath }) => {
+        return {
+            messageId: nextLocalMessageId(),
+            sessionId: getLocalSessionId(contactId, contactType),
+            contactId,
+            contactType,
+            messageType,
+            messageContent,
+            fileSize: file?.size,
+            fileName: file?.name,
+            filePath,
+            fileType,
+            sendUserId: currentUserId?.value,
+            sendTime: Date.now(),
+            status: 2
+        };
+    };
+
+    const markMessageFailed = async (message, errorText) => {
+        Object.assign(message, {
+            status: 0,
+            uploading: false
+        });
+        updateMessageById?.(message.messageId, {
+            status: 0,
+            uploading: false
+        });
+        await persistMessageStatus(message).catch((error) => {
+            console.error('save failed message status failed', error);
+        });
+        if (errorText) {
+            proxy.Message.error(errorText);
+        }
+    };
+
+    const markMessageSending = async (message, patch = {}) => {
+        Object.assign(message, {
+            status: 2,
+            ...patch
+        });
+        updateMessageById?.(message.messageId, {
+            status: 2,
+            ...patch
+        });
+        await persistMessageStatus(message).catch((error) => {
+            console.error('save sending message status failed', error);
+        });
+    };
+
+    const replaceLocalWithServerMessage = async (localMessage, serverMessage, patch = {}) => {
+        const nextMessage = {
+            ...localMessage,
+            ...serverMessage,
+            ...patch,
+            status: patch.status ?? serverMessage.status ?? 1
+        };
+        const replaced = replaceMessageById?.(localMessage.messageId, nextMessage);
+        if (!replaced) {
+            appendSentMessageIfMissing(nextMessage);
+        }
+        await persistServerMessage(localMessage.messageId, nextMessage);
+        return nextMessage;
+    };
+
+    const sendChatMessage = async ({ contactId, contactType, messageContent }, retryMessage = null) => {
         if (!messageContent) {
             return;
+        }
+
+        const localMessage = retryMessage || createPendingMessage({
+            contactId,
+            contactType,
+            messageType: 2,
+            messageContent
+        });
+
+        if (retryMessage) {
+            await markMessageSending(localMessage);
+        } else {
+            appendSentMessageIfMissing(localMessage);
+            await persistPendingMessage(localMessage).catch((error) => {
+                console.error('save pending text message failed', error);
+            });
         }
 
         // 文本消息先走 HTTP 拿到服务端 messageId，再通知主进程保存到本地 SQLite。
@@ -455,11 +592,16 @@ export const useChatMessageSender = ({
         });
 
         if (!result) {
+            await markMessageFailed(localMessage, 'Message send failed. Retry after checking the network.');
+            return;
+            proxy.Message.error('消息发送失败，请检查网络后重试');
             return;
         }
 
         const message = result.data;
         if (message?.messageContent) {
+            await replaceLocalWithServerMessage(localMessage, message);
+            return;
             appendSentMessageIfMissing(message);
 
             const saveResult = await saveSendMessageToLocal({
@@ -470,9 +612,10 @@ export const useChatMessageSender = ({
                 proxy.Message.error('消息保存失败');
                 return;
             }
+            if (saveResult.session) {
+                patchChatSessions?.([saveResult.session]);
+            }
         }
-
-        loadChatSession();
     };
 
     const uploadMessageFile = async (message, file, cover) => {
@@ -489,9 +632,11 @@ export const useChatMessageSender = ({
         });
 
         if (!uploadResult) {
+            await markMessageFailed(message, 'File upload failed. The message can be retried.');
+            return;
             message.uploading = false;
             message.status = 0;
-            await saveSendMessageToLocal({
+            const saveResult = await saveSendMessageToLocal({
                 message: {
                     ...message,
                     localPreviewUrl: undefined,
@@ -499,14 +644,23 @@ export const useChatMessageSender = ({
                 },
                 chatSession: { ...toRaw(currentChatSession.value) }
             });
-            loadChatSession();
+            if (saveResult?.session) {
+                patchChatSessions?.([saveResult.session]);
+            }
+            proxy.Message.error('文件上传失败，消息将以未发送状态显示');
             return;
         }
 
         message.uploading = false;
         message.status = 1;
+        updateMessageById?.(message.messageId, {
+            uploading: false,
+            status: 1
+        });
+        await persistMessageStatus(message);
+        return;
 
-        await saveSendMessageToLocal({
+        const saveResult = await saveSendMessageToLocal({
             message: {
                 ...message,
                 localPreviewUrl: undefined,
@@ -514,13 +668,39 @@ export const useChatMessageSender = ({
             },
             chatSession: { ...toRaw(currentChatSession.value) }
         });
-
-        loadChatSession();
+        if (saveResult?.session) {
+            patchChatSessions?.([saveResult.session]);
+        }
     };
 
-    const sendMediaMessage = async ({ contactId, contactType, file, cover }, fileType) => {
+    const sendMediaMessage = async ({ contactId, contactType, file, cover }, fileType, retryMessage = null) => {
         if (!file) {
             return;
+        }
+
+        const filePath = file.path || window.api?.getPathForFile?.(file) || '';
+        const localMessage = retryMessage || createPendingMessage({
+            contactId,
+            contactType,
+            messageType: 5,
+            messageContent: file.name,
+            file,
+            fileType,
+            filePath
+        });
+        localMessage.retryFile = file;
+        localMessage.retryCover = cover;
+        if (!localMessage.localPreviewUrl && (fileType === 0 || fileType === 1)) {
+            localMessage.localPreviewUrl = URL.createObjectURL(file);
+        }
+
+        if (retryMessage) {
+            await markMessageSending(localMessage, { uploading: false });
+        } else {
+            appendSentMessageIfMissing(localMessage);
+            await persistPendingMessage(localMessage).catch((error) => {
+                console.error('save pending media message failed', error);
+            });
         }
 
         // 图片/视频/文件统一走 messageType=5，fileType 决定展示组件和预览能力。
@@ -539,18 +719,31 @@ export const useChatMessageSender = ({
         });
 
         if (!result) {
+            await markMessageFailed(localMessage, 'Media message send failed. Retry after checking the network.');
+            return;
+            proxy.Message.error('媒体消息发送失败，请检查网络后重试');
             return;
         }
 
         const message = result.data;
         if (!message?.messageId) {
+            await markMessageFailed(localMessage, 'Media message send failed. Missing message id.');
             return;
         }
 
-        const filePath = file.path || window.api?.getPathForFile?.(file) || '';
         if (filePath) {
             message.filePath = filePath;
         }
+
+        const serverMessage = await replaceLocalWithServerMessage(localMessage, message, {
+            localPreviewUrl: localMessage.localPreviewUrl,
+            retryFile: file,
+            retryCover: cover,
+            uploading: true,
+            status: 2
+        });
+        enqueueUploadTask(() => uploadMessageFile(serverMessage, file, cover));
+        return;
 
         if (fileType === 0) {
             message.localPreviewUrl = URL.createObjectURL(file);
@@ -576,7 +769,10 @@ export const useChatMessageSender = ({
     };
 
     const onSendChatMessage = (payload) => {
-        enqueueSendTask(() => sendChatMessage(payload));
+        // 文本消息无需排队，直接发送，不被媒体上传阻塞。
+        sendChatMessage(payload).catch((error) => {
+            console.error('send text message failed', error);
+        });
     };
 
     const onSendImageMessage = (payload) => {
@@ -601,8 +797,45 @@ export const useChatMessageSender = ({
             targetMessage.status = message.status ?? 1;
             targetMessage.forceGet = Date.now();
         }
+        // 文件回执不影响会话排序信息，不需要更新会话列表。
+    };
 
-        loadChatSession();
+    const retryFailedMessage = (message = {}) => {
+        if (message.status != 0) {
+            return;
+        }
+
+        if (message.messageType == 5) {
+            if (!message.retryFile) {
+                proxy.Message.warning('This file can only be retried before the app is restarted.');
+                return;
+            }
+            if (Number(message.messageId) > 0) {
+                markMessageSending(message, { uploading: true })
+                    .then(() => {
+                        enqueueUploadTask(() => uploadMessageFile(message, message.retryFile, message.retryCover));
+                    })
+                    .catch((error) => {
+                        console.error('retry media upload failed', error);
+                    });
+                return;
+            }
+            enqueueSendTask(() => sendMediaMessage({
+                contactId: message.contactId,
+                contactType: message.contactType,
+                file: message.retryFile,
+                cover: message.retryCover
+            }, message.fileType, message));
+            return;
+        }
+
+        sendChatMessage({
+            contactId: message.contactId,
+            contactType: message.contactType,
+            messageContent: message.messageContent
+        }, message).catch((error) => {
+            console.error('retry text message failed', error);
+        });
     };
 
     return {
@@ -610,6 +843,7 @@ export const useChatMessageSender = ({
         onSendChatMessage,
         onSendFileMessage,
         onSendImageMessage,
-        onSendVideoMessage
+        onSendVideoMessage,
+        retryFailedMessage
     };
 };

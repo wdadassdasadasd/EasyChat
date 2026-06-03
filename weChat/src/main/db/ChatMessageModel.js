@@ -9,6 +9,10 @@ import {
     run,
     update
 } from './ADB';
+import { MAX_SQL_IN_PARAMS } from '../constants';
+const MESSAGE_PAGE_SIZE = 20;
+const MESSAGE_CONTEXT_SIZE = 20;
+const MESSAGE_SEARCH_LIMIT = 50;
 
 const getClearInfoBySessionId = (sessionId) => {
     if (!sessionId) {
@@ -17,6 +21,28 @@ const getClearInfoBySessionId = (sessionId) => {
 
     const sql = 'select clear_message_id, clear_time from chat_session_clear where user_id=? and session_id=?';
     return queryOne(sql, [store.getUserId(), sessionId]);
+};
+
+const getClearInfoMapBySessionIds = async (sessionIds = []) => {
+    const ids = [...new Set(sessionIds.filter(Boolean))];
+    const clearInfoMap = new Map();
+    if (ids.length === 0) {
+        return clearInfoMap;
+    }
+
+    for (let offset = 0; offset < ids.length; offset += MAX_SQL_IN_PARAMS) {
+        const batch = ids.slice(offset, offset + MAX_SQL_IN_PARAMS);
+        const placeholders = batch.map(() => '?').join(',');
+        const sql = `select session_id, clear_message_id, clear_time from chat_session_clear where user_id=? and session_id in (${placeholders})`;
+        const rows = await queryAll(sql, [store.getUserId(), ...batch]);
+        rows.forEach((row) => {
+            if (row?.sessionId) {
+                clearInfoMap.set(row.sessionId, row);
+            }
+        });
+    }
+
+    return clearInfoMap;
 };
 
 const getMaxMessageIdBySessionId = async (sessionId) => {
@@ -46,75 +72,82 @@ const saveClearInfoBySessionId = async (sessionId, clearMessageId) => {
     return run(sql, [store.getUserId(), sessionId, nextClearMessageId, nextClearTime]);
 };
 
-const isMessageBeforeClear = async (message = {}) => {
-    const sessionId = message.sessionId;
-    if (!sessionId) {
-        return false;
-    }
-
-    const clearInfo = await getClearInfoBySessionId(sessionId);
-    if (!clearInfo) {
-        return false;
-    }
-
-    const clearMessageId = Number(clearInfo.clearMessageId || 0);
-    const messageId = Number(message.messageId || 0);
-    if (clearMessageId > 0 && messageId > 0) {
-        return messageId <= clearMessageId;
-    }
-
-    const clearTime = Number(clearInfo.clearTime || 0);
-    const sendTime = Number(message.sendTime || 0);
-    return clearTime > 0 && sendTime > 0 && sendTime <= clearTime;
-};
-
 const filterVisibleMessages = async (messageList = []) => {
-    const visibleMessageList = [];
-    if (!Array.isArray(messageList)) {
-        return visibleMessageList;
+    if (!Array.isArray(messageList) || messageList.length === 0) {
+        return [];
     }
 
-    for (let item of messageList) {
-        if (!(await isMessageBeforeClear(item))) {
-            visibleMessageList.push(item);
+    // 按 sessionId 分组，每个 session 只查一次清除游标，避免 N+1 查询。
+    const sessionIds = [...new Set(messageList.map((m) => m.sessionId).filter(Boolean))];
+    if (sessionIds.length === 0) {
+        return [...messageList];
+    }
+
+    const clearInfoMap = await getClearInfoMapBySessionIds(sessionIds);
+
+    return messageList.filter((message) => {
+        const clearInfo = clearInfoMap.get(message.sessionId);
+        if (!clearInfo) {
+            return true;
         }
-    }
-
-    return visibleMessageList;
+        const clearMessageId = Number(clearInfo.clearMessageId || 0);
+        const messageId = Number(message.messageId || 0);
+        if (clearMessageId > 0 && messageId > 0) {
+            return messageId > clearMessageId;
+        }
+        const clearTime = Number(clearInfo.clearTime || 0);
+        const sendTime = Number(message.sendTime || 0);
+        return !(clearTime > 0 && sendTime > 0 && sendTime <= clearTime);
+    });
 };
 
-const messageExists = async (messageId) => {
-    if (!messageId) {
-        return false;
+const queryExistingMessageIds = async (messageIds = []) => {
+    const numericIds = messageIds.map(Number).filter((id) => id > 0);
+    if (numericIds.length === 0) {
+        return new Set();
     }
 
-    const sql = 'select message_id from chat_message where user_id=? and message_id=? limit 1';
-    const result = await queryOne(sql, [store.getUserId(), messageId]);
-    return Boolean(result);
+    const existingIds = new Set();
+    // 分批查询避免 IN 子句参数过多导致 SQL 过长。
+    for (let offset = 0; offset < numericIds.length; offset += MAX_SQL_IN_PARAMS) {
+        const batch = numericIds.slice(offset, offset + MAX_SQL_IN_PARAMS);
+        const placeholders = batch.map(() => '?').join(',');
+        const sql = `select message_id from chat_message where user_id=? and message_id in (${placeholders})`;
+        const rows = await queryAll(sql, [store.getUserId(), ...batch]);
+        rows.forEach((row) => {
+            if (row.messageId != null) {
+                existingIds.add(String(row.messageId));
+            }
+        });
+    }
+
+    return existingIds;
 };
 
 const filterNewMessages = async (messageList = []) => {
-    const newMessageList = [];
-    const messageIdSet = new Set();
-    if (!Array.isArray(messageList)) {
-        return newMessageList;
+    if (!Array.isArray(messageList) || messageList.length === 0) {
+        return [];
     }
 
-    for (let item of messageList) {
+    const messageIds = messageList
+        .map((item) => item?.messageId)
+        .filter((id) => id != null);
+
+    const existingIdSet = await queryExistingMessageIds(messageIds);
+    const localDedupSet = new Set();
+
+    return messageList.filter((item) => {
         const messageId = item?.messageId;
         if (!messageId) {
-            newMessageList.push(item);
-            continue;
+            return true;
         }
         const messageKey = String(messageId);
-        if (messageIdSet.has(messageKey) || await messageExists(messageId)) {
-            continue;
+        if (localDedupSet.has(messageKey) || existingIdSet.has(messageKey)) {
+            return false;
         }
-        messageIdSet.add(messageKey);
-        newMessageList.push(item);
-    }
-
-    return newMessageList;
+        localDedupSet.add(messageKey);
+        return true;
+    });
 };
 
 const appendClearFilter = (sqlParts, params, clearInfo) => {
@@ -142,14 +175,100 @@ const incrementNoReadCountStrict = ({ contactId, noReadCount }) => {
 };
 
 const saveMessage = async (data) => {
-    if (await isMessageBeforeClear(data)) {
-        return 0;
-    }
     data.userId = store.getUserId();
     return insertOrReplace('chat_message', data);
 };
 
-const saveMessageBatch = async (chatMessageList) => {
+const toSendSessionInfo = ({ message = {}, chatSession = {} } = {}) => {
+    if (!chatSession?.contactId && !message?.contactId) {
+        return null;
+    }
+
+    return {
+        contactId: chatSession?.contactId || message.contactId,
+        contactType: chatSession?.contactType ?? message.contactType,
+        sessionId: message.sessionId || chatSession?.sessionId,
+        status: 1,
+        contactName: chatSession?.contactName || message.contactName,
+        lastMessage: message.messageContent,
+        lastReceiveTime: message.sendTime || Date.now(),
+        memberCount: chatSession?.memberCount,
+        noReadCount: 0,
+        topType: chatSession?.topType
+    };
+};
+
+const savePendingMessage = async ({ message, chatSession } = {}) => {
+    if (!message?.messageId) {
+        return {
+            success: false,
+            error: 'messageId is empty'
+        };
+    }
+
+    return runInTransaction(async () => {
+        const pendingMessage = {
+            ...message,
+            userId: store.getUserId(),
+            status: message.status ?? 2
+        };
+        await insertOrReplaceStrict('chat_message', pendingMessage);
+
+        const session = toSendSessionInfo({ message: pendingMessage, chatSession });
+        if (session) {
+            await insertOrReplaceStrict('chat_session_user', {
+                ...session,
+                userId: store.getUserId()
+            });
+        }
+
+        return {
+            success: true,
+            messageId: pendingMessage.messageId,
+            session
+        };
+    });
+};
+
+const replacePendingMessage = async ({ localMessageId, message, chatSession } = {}) => {
+    if (!message?.messageId) {
+        return {
+            success: false,
+            error: 'messageId is empty'
+        };
+    }
+
+    return runInTransaction(async () => {
+        if (localMessageId && String(localMessageId) !== String(message.messageId)) {
+            const deleteSql = 'delete from chat_message where user_id=? and message_id=?';
+            await runStrict(deleteSql, [store.getUserId(), localMessageId]);
+        }
+
+        const savedMessage = {
+            ...message,
+            userId: store.getUserId(),
+            status: message.status ?? 1
+        };
+        await insertOrReplaceStrict('chat_message', savedMessage);
+
+        const session = toSendSessionInfo({ message: savedMessage, chatSession });
+        if (session) {
+            await insertOrReplaceStrict('chat_session_user', {
+                ...session,
+                userId: store.getUserId()
+            });
+        }
+
+        return {
+            success: true,
+            messageId: savedMessage.messageId,
+            localMessageId,
+            session
+        };
+    });
+};
+
+const saveMessageBatch = async (chatMessageList, { sessionRows = [] } = {}) => {
     if (!Array.isArray(chatMessageList) || chatMessageList.length === 0) {
         return {
             savedCount: 0,
@@ -165,13 +284,24 @@ const saveMessageBatch = async (chatMessageList) => {
         };
     }
 
+    // SELECT 去重放在事务外，缩短写锁持有时间。
+    const newMessageList = await filterNewMessages(visibleMessageList);
+    if (newMessageList.length === 0) {
+        return {
+            savedCount: 0,
+            savedMessages: []
+        };
+    }
+
     return runInTransaction(async () => {
-        const newMessageList = await filterNewMessages(visibleMessageList);
-        if (newMessageList.length === 0) {
-            return {
-                savedCount: 0,
-                savedMessages: []
-            };
+        const resolvedSessionRows = typeof sessionRows === 'function'
+            ? sessionRows(newMessageList)
+            : sessionRows;
+        sessionRows = resolvedSessionRows || [];
+
+        // 会话表写入与消息表写入在同一事务中，防止会话摘要指向不存在的消息。
+        for (const row of sessionRows) {
+            await insertOrReplaceStrict('chat_session_user', { ...row, userId: store.getUserId(), status: 1 });
         }
 
         const chatSessionCountMap = {};
@@ -214,9 +344,40 @@ const updateMessageStatus = (messageId, status = 1) => {
     });
 };
 
-const selectMesssageList = async (query = {}) => {
+const updateLocalMessageStatus = async ({ messageId, status, chatSession } = {}) => {
+    if (!messageId) {
+        return {
+            success: false,
+            error: 'messageId is empty'
+        };
+    }
+
+    return runInTransaction(async () => {
+        await updateMessageStatus(messageId, status);
+
+        let session = null;
+        if (chatSession?.contactId) {
+            session = {
+                ...chatSession,
+                status: chatSession.status ?? 1
+            };
+            await insertOrReplaceStrict('chat_session_user', {
+                ...session,
+                userId: store.getUserId()
+            });
+        }
+
+        return {
+            success: true,
+            messageId,
+            status,
+            session
+        };
+    });
+};
+
+const selectMessageList = async (query = {}) => {
     const { sessionId, beforeMessageId } = query;
-    const pageSize = 20;
 
     if (!sessionId) {
         return {
@@ -236,14 +397,14 @@ const selectMesssageList = async (query = {}) => {
     }
 
     sqlParts.push('order by message_id desc limit ?');
-    params.push(pageSize);
+    params.push(MESSAGE_PAGE_SIZE);
 
     let dataList = await queryAll(sqlParts.join(' '), params);
     dataList = dataList.sort((a, b) => a.messageId - b.messageId);
 
     return {
         dataList,
-        hasMore: dataList.length === pageSize
+        hasMore: dataList.length === MESSAGE_PAGE_SIZE
     };
 };
 
@@ -252,19 +413,18 @@ const selectMessageContextByMessageId = async ({ sessionId, messageId } = {}) =>
         return [];
     }
 
-    const contextSize = 20;
     const clearInfo = await getClearInfoBySessionId(sessionId);
     const olderSqlParts = ['select * from chat_message where user_id=? and session_id=?'];
     const olderParams = [store.getUserId(), sessionId];
     appendClearFilter(olderSqlParts, olderParams, clearInfo);
     olderSqlParts.push('and message_id<=? order by message_id desc limit ?');
-    olderParams.push(messageId, contextSize);
+    olderParams.push(messageId, MESSAGE_CONTEXT_SIZE);
 
     const newerSqlParts = ['select * from chat_message where user_id=? and session_id=?'];
     const newerParams = [store.getUserId(), sessionId];
     appendClearFilter(newerSqlParts, newerParams, clearInfo);
     newerSqlParts.push('and message_id>? order by message_id asc limit ?');
-    newerParams.push(messageId, contextSize);
+    newerParams.push(messageId, MESSAGE_CONTEXT_SIZE);
 
     const olderMessages = await queryAll(olderSqlParts.join(' '), olderParams);
     const newerMessages = await queryAll(newerSqlParts.join(' '), newerParams);
@@ -283,11 +443,14 @@ const clearMessageBySessionId = async (sessionId) => {
         return Promise.resolve(0);
     }
 
-    const maxMessageId = await getMaxMessageIdBySessionId(sessionId);
-    await saveClearInfoBySessionId(sessionId, maxMessageId);
+    return runInTransaction(async () => {
+        const maxMessageId = await getMaxMessageIdBySessionId(sessionId);
+        // 清空游标写入和消息删除放在同一事务中，防止游标更新后删除失败导致数据不一致。
+        await saveClearInfoBySessionId(sessionId, maxMessageId);
 
-    const sql = 'delete from chat_message where user_id=? and session_id=?';
-    return run(sql, [store.getUserId(), sessionId]);
+        const sql = 'delete from chat_message where user_id=? and session_id=?';
+        return runStrict(sql, [store.getUserId(), sessionId]);
+    });
 };
 
 const escapeLikeKeyword = (keyword = '') => {
@@ -309,7 +472,8 @@ const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
     ];
     const params = [store.getUserId(), sessionId, likeKeyword, likeKeyword];
     appendClearFilter(sqlParts, params, clearInfo);
-    sqlParts.push('order by message_id desc limit 50');
+    sqlParts.push('order by message_id desc limit ?');
+    params.push(MESSAGE_SEARCH_LIMIT);
 
     const dataList = await queryAll(sqlParts.join(' '), params);
     return dataList || [];
@@ -319,10 +483,12 @@ export {
     filterNewMessages,
     filterVisibleMessages,
     saveMessage,
+    savePendingMessage,
+    replacePendingMessage,
     saveMessageBatch,
     updateMessageStatus,
-    selectMesssageList,
-    selectMesssageList as selectMessageList,
+    updateLocalMessageStatus,
+    selectMessageList,
     selectMessageContextByMessageId,
     clearMessageBySessionId,
     searchMessageBySessionId

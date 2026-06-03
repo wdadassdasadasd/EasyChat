@@ -6,6 +6,7 @@ export const useChatSessions = ({ proxy, route }) => {
     const currentChatSession = ref({});
     // Chat.vue 注入真正的选中会话处理函数；这里保持会话模块和消息模块解耦。
     let selectSession = () => {};
+    let loadSessionDataHandler = null;
 
     const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0);
 
@@ -174,17 +175,25 @@ export const useChatSessions = ({ proxy, route }) => {
     };
 
     const registerSessionListener = () => {
-        window.ipcRenderer.on('loadSessionDataCallback', async (e, dataList) => {
+        loadSessionDataHandler = async (e, dataList) => {
+            if (dataList && !Array.isArray(dataList) && dataList.success === false) {
+                proxy.Message.error(dataList.error || 'Load sessions failed');
+                return;
+            }
             // 主进程返回的是本地 SQLite 会话列表；renderer 补齐名称后再排序展示。
             const hydratedList = await hydrateSessionList(dataList || []);
             sortChatSessionList(hydratedList);
             chatSessionList.value = hydratedList;
             openChatFromRoute();
-        });
+        };
+        window.ipcRenderer.on('loadSessionDataCallback', loadSessionDataHandler);
     };
 
     const removeSessionListener = () => {
-        window.ipcRenderer.removeAllListeners('loadSessionDataCallback');
+        if (loadSessionDataHandler) {
+            window.ipcRenderer.removeListener('loadSessionDataCallback', loadSessionDataHandler);
+            loadSessionDataHandler = null;
+        }
     };
 
     const setChatSessionTop = (contactId, topType) => {
@@ -262,6 +271,7 @@ export const useChatSessions = ({ proxy, route }) => {
         }
         // 已读状态需要同步更新左侧列表、当前会话和 SQLite，避免红点在不同区域残留。
         const session = chatSessionList.value.find((item) => item.contactId == contactId);
+        const previousNoReadCount = session ? session.noReadCount : 0;
         if (session) {
             session.noReadCount = 0;
         }
@@ -270,6 +280,36 @@ export const useChatSessions = ({ proxy, route }) => {
                 noReadCount: 0
             });
         }
+
+        // 用 once 监听回调，主进程失败时恢复原来的未读数，防止红点状态不一致。
+        const restoreNoReadCount = () => {
+            const targetSession = chatSessionList.value.find((item) => item.contactId == contactId);
+            if (targetSession) {
+                targetSession.noReadCount = previousNoReadCount;
+            }
+            if (currentChatSession.value.contactId == contactId) {
+                currentChatSession.value = Object.assign({}, currentChatSession.value, {
+                    noReadCount: previousNoReadCount
+                });
+            }
+        };
+
+        const timeoutTimer = setTimeout(() => {
+            window.ipcRenderer.removeListener('markSessionReadCallback', callbackHandler);
+            restoreNoReadCount();
+        }, 5000);
+
+        const callbackHandler = (e, data) => {
+            if (data?.contactId !== contactId) {
+                window.ipcRenderer.once('markSessionReadCallback', callbackHandler);
+                return;
+            }
+            clearTimeout(timeoutTimer);
+            if (!data?.success) {
+                restoreNoReadCount();
+            }
+        };
+        window.ipcRenderer.once('markSessionReadCallback', callbackHandler);
         window.ipcRenderer.send('markSessionRead', contactId);
     };
 

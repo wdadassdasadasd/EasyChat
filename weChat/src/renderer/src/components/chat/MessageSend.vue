@@ -9,7 +9,6 @@
                 :teleported="false"
                 popper-class="emoji-popover"
                 :popper-style="{ padding: '10px 12px 12px', width: '490px' }"
-                @show="openPopover"
                 @hide="closePopover"
             >
                 <template #default>
@@ -98,7 +97,7 @@
                 rows="5"
                 type="textarea"
                 resize="none"
-                maxlength="500"
+                :maxlength="maxMessageLength"
                 show-word-limit
                 spellcheck="false"
                 input-style="background:#f5f5f5;border:none"
@@ -115,7 +114,6 @@
                 placement="top-end"
                 :teleported="false"
                 :popper-style="{ padding: '5px', 'min-width': '0px', width: '120px' }"
-                @show="openPopover"
                 @hide="closePopover"
             >
                 <template #default>
@@ -137,6 +135,7 @@
 import { ref, toRef } from 'vue';
 import emojiList from '@/utils/Emoji';
 import { useMessageComposer } from '@/views/chat/composables/useMessageSender';
+import { CHAT_CONSTANTS } from '@/utils/ChatConstants';
 
 const props = defineProps({
     currentChatSession: {
@@ -148,6 +147,7 @@ const props = defineProps({
 const emit = defineEmits(['sendMessage', 'sendImageMessage', 'sendFileMessage', 'sendVideoMessage']);
 
 const activeEmoji = ref(emojiList[0]?.name || '');
+const maxMessageLength = CHAT_CONSTANTS.MAX_MESSAGE_LENGTH;
 // useMessageComposer 聚合输入框、表情、粘贴、拖拽、文件选择等“编辑中”状态。
 const {
     canSend,
@@ -157,7 +157,6 @@ const {
     fileLimit,
     formatFileSize,
     msgContent,
-    openPopover,
     pasteHandler,
     pendingMediaList,
     removePendingFile,

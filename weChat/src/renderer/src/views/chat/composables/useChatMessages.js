@@ -73,6 +73,38 @@ export const useChatMessages = ({
         return true;
     };
 
+    const updateMessageById = (messageId, patch = {}) => {
+        const index = messageList.value.findIndex((message) => {
+            return String(message?.messageId) === String(messageId);
+        });
+        if (index === -1) {
+            return false;
+        }
+        messageList.value[index] = Object.assign({}, messageList.value[index], patch);
+        return true;
+    };
+
+    const replaceMessageById = (messageId, nextMessage) => {
+        const index = messageList.value.findIndex((message) => {
+            return String(message?.messageId) === String(messageId);
+        });
+        if (index === -1 || !nextMessage) {
+            return false;
+        }
+        const previousMessage = messageList.value[index];
+        if (previousMessage?.localPreviewUrl && previousMessage.localPreviewUrl !== nextMessage.localPreviewUrl) {
+            URL.revokeObjectURL(previousMessage.localPreviewUrl);
+        }
+        if (previousMessage?.messageId != null) {
+            messageIdSet.delete(String(previousMessage.messageId));
+        }
+        messageList.value[index] = nextMessage;
+        if (nextMessage.messageId != null) {
+            messageIdSet.add(String(nextMessage.messageId));
+        }
+        return true;
+    };
+
     const prependMessagesIfMissing = (messages = []) => {
         const prependList = [];
         messages.forEach((message) => {
@@ -135,20 +167,33 @@ export const useChatMessages = ({
         onSendChatMessage,
         onSendFileMessage,
         onSendImageMessage,
-        onSendVideoMessage
+        onSendVideoMessage,
+        retryFailedMessage
     } = useChatMessageSender({
         appendMessageIfMissing,
         currentChatSession,
+        currentUserId,
         isNearMessageBottom,
-        loadChatSession,
         messageList,
+        patchChatSessions,
         proxy,
+        replaceMessageById,
+        updateMessageById,
         scrollMessageToBottom
     });
+
+    const revokeMessagePreviewUrls = (messages = []) => {
+        messages.forEach((message) => {
+            if (message?.localPreviewUrl) {
+                URL.revokeObjectURL(message.localPreviewUrl);
+            }
+        });
+    };
 
     const clearCurrentMessages = () => {
         // 清空当前会话后主动标记无更多数据，避免滚动到顶部又触发旧消息分页加载。
         startMessagePanelRender();
+        revokeMessagePreviewUrls(messageList.value);
         messageList.value = [];
         messageIdSet.clear();
         messageLoadingMore.value = false;
@@ -159,6 +204,14 @@ export const useChatMessages = ({
     };
 
     const capturePrependScrollState = () => {
+        // 优先走 ChatMessageList 暴露的虚拟列表 getScrollState，获取虚拟总高度。
+        const messageList = messageListRef?.value;
+        if (messageList && typeof messageList.getScrollState === 'function') {
+            const state = messageList.getScrollState();
+            if (state) {
+                return state;
+            }
+        }
         const messagePanel = getMessagePanel();
         if (!messagePanel) {
             return null;
@@ -177,13 +230,17 @@ export const useChatMessages = ({
         }
 
         // 历史消息 prepend 后 scrollHeight 会变大，用高度差把视口还原到用户原来的阅读位置。
+        // 统一切换前后都走虚拟列表 getScrollState，避免虚拟高度和 DOM 高度混用导致偏移。
         await nextTick();
         await new Promise((resolve) => {
             window.requestAnimationFrame(() => {
-                const messagePanel = getMessagePanel();
-                if (messagePanel) {
-                    const heightDiff = messagePanel.scrollHeight - scrollState.scrollHeight;
-                    messagePanel.scrollTop = scrollState.scrollTop + heightDiff;
+                const currentState = capturePrependScrollState();
+                if (currentState) {
+                    const heightDiff = currentState.scrollHeight - scrollState.scrollHeight;
+                    const messagePanel = getMessagePanel();
+                    if (messagePanel) {
+                        messagePanel.scrollTop = scrollState.scrollTop + heightDiff;
+                    }
                 }
                 resolve();
             });
@@ -228,6 +285,7 @@ export const useChatMessages = ({
             const shouldLoadMessages = !currentChatSession.value.sessionId && item.sessionId;
             currentChatSession.value = Object.assign({}, currentChatSession.value, item);
             if (shouldLoadMessages) {
+                revokeMessagePreviewUrls(messageList.value);
                 messageList.value = [];
                 messageIdSet.clear();
                 messageLoadingMore.value = false;
@@ -242,6 +300,7 @@ export const useChatMessages = ({
         // 切换会话时重置分页游标和渲染序列，旧会话的滚动/分页状态不带入新会话。
         startMessagePanelRender();
         currentChatSession.value = Object.assign({}, item);
+        revokeMessagePreviewUrls(messageList.value);
         messageList.value = [];
         messageIdSet.clear();
         messageLoadingMore.value = false;
@@ -251,47 +310,52 @@ export const useChatMessages = ({
         loadChatMessage();
     };
 
-    const onLoadChatMessage = () => {
-        window.ipcRenderer.on('loadChatMessageCallback', async (e, { dataList, hasMore, loadMode, sessionId, loadSeq, targetMessageId }) => {
-            // 主进程分页回调必须同时校验会话和渲染序列，避免异步回包串会话。
-            const isExpiredLoad = loadSeq != null && loadSeq !== getActiveMessageLoadSeq();
-            const isWrongSession = sessionId != null && sessionId !== currentChatSession.value.sessionId;
-            if (isExpiredLoad || isWrongSession) {
-                messageLoadingMore.value = false;
-                pendingPrependScrollState = null;
-                return;
-            }
-            const loadedMessages = Array.isArray(dataList) ? dataList : [];
-            loadedMessages.sort((a, b) => {
-                return a.messageId - b.messageId;
-            });
-
-            if (loadMode === 'context') {
-                replaceMessageList(loadedMessages);
-                messageCountInfo.noData = false;
-                messageLoadingMore.value = false;
-                pendingPrependScrollState = null;
-                markMessagePanelReady();
-                const located = await scrollToMessageId(targetMessageId);
-                if (!located && targetMessageId) {
-                    proxy.Message.warning('该消息暂时无法定位');
-                }
-                return;
-            }
-
-            if (!hasMore || loadedMessages.length === 0) {
-                messageCountInfo.noData = true;
-            }
-            prependMessagesIfMissing(loadedMessages);
-            if (shouldScrollToBottomAfterLoad) {
-                shouldScrollToBottomAfterLoad = false;
-                // 首屏消息和图片封面可能异步撑高布局，交给滚动模块多帧贴底。
-                showMessagePanelAtBottom(getMessagePanelRenderSeq());
-            } else if (messageLoadingMore.value) {
-                await restorePrependScrollPosition();
-            }
+    const onLoadChatMessageCallback = async (e, payload = {}) => {
+        const { dataList, hasMore, loadMode, sessionId, loadSeq, targetMessageId } = payload;
+        if (payload?.success === false) {
             messageLoadingMore.value = false;
+            pendingPrependScrollState = null;
+            proxy.Message.error(payload.error || 'Load messages failed');
+            markMessagePanelReady();
+            return;
+        }
+        // 主进程分页回调必须同时校验会话和渲染序列，避免异步回包串会话。
+        const isExpiredLoad = loadSeq != null && loadSeq !== getActiveMessageLoadSeq();
+        const isWrongSession = sessionId != null && sessionId !== currentChatSession.value.sessionId;
+        if (isExpiredLoad || isWrongSession) {
+            messageLoadingMore.value = false;
+            pendingPrependScrollState = null;
+            return;
+        }
+        const loadedMessages = Array.isArray(dataList) ? dataList : [];
+        loadedMessages.sort((a, b) => {
+            return a.messageId - b.messageId;
         });
+
+        if (loadMode === 'context') {
+            replaceMessageList(loadedMessages);
+            messageCountInfo.noData = false;
+            messageLoadingMore.value = false;
+            pendingPrependScrollState = null;
+            markMessagePanelReady();
+            const located = await scrollToMessageId(targetMessageId);
+            if (!located && targetMessageId) {
+                proxy.Message.warning('该消息暂时无法定位');
+            }
+            return;
+        }
+
+        if (!hasMore || loadedMessages.length === 0) {
+            messageCountInfo.noData = true;
+        }
+        prependMessagesIfMissing(loadedMessages);
+        if (shouldScrollToBottomAfterLoad) {
+            shouldScrollToBottomAfterLoad = false;
+            showMessagePanelAtBottom(getMessagePanelRenderSeq());
+        } else if (messageLoadingMore.value) {
+            await restorePrependScrollPosition();
+        }
+        messageLoadingMore.value = false;
     };
 
     const locateChatMessage = async (message = {}) => {
@@ -338,32 +402,41 @@ export const useChatMessages = ({
             markSessionRead?.(contactId);
         });
 
-        if (typeof patchChatSessions === 'function') {
-            patchChatSessions(sessions, {
-                readContactIds: Array.from(readContactIds)
-            });
-        } else {
-            loadChatSession();
-        }
+        patchChatSessions(sessions, {
+            readContactIds: Array.from(readContactIds)
+        });
 
         if (appended) {
             scrollMessageToBottom({ force: shouldStickToBottom });
         }
     };
 
-    const onReceiveMessage = () => {
-        window.ipcRenderer.on('receiveMessage', (e, message) => {
+    // 保存监听器引用，便于精确移除而不影响其他窗口。
+    let receiveMessageHandler = null;
+    let receiveMessageBatchHandler = null;
+    let loadChatMessageHandler = null;
+
+    const registerMessageListeners = () => {
+        receiveMessageHandler = (e, message) => {
             console.log('收到消息', message);
             if (typeof message === 'string') {
-                message = JSON.parse(message);
+                try {
+                    message = JSON.parse(message);
+                } catch (error) {
+                    console.error('parse receiveMessage failed', error);
+                    proxy.Message.error('Receive message parse failed');
+                    return;
+                }
+            }
+            if (message?.success === false) {
+                proxy.Message.error(message.error || 'Receive message failed');
+                return;
             }
             if (message.messageType == 0) {
-                // 初始化消息只提示 renderer 重新拉会话列表，消息明细已经由主进程落库。
                 loadChatSession();
                 return;
             }
             if (message.messageType == 6) {
-                // 文件上传完成回执只更新本地消息状态，不重复插入一条消息。
                 handleFileUploadDone(message);
                 return;
             }
@@ -371,7 +444,6 @@ export const useChatMessages = ({
             const isCurrentSession = message.sessionId == currentChatSession.value.sessionId ||
                 receiveContactId == currentChatSession.value.contactId;
             if (isCurrentSession) {
-                // 当前会话收到消息时直接追加到内存列表，并按用户是否靠近底部决定是否自动滚动。
                 markSessionRead?.(receiveContactId);
                 const exists = message.messageId != null && messageIdSet.has(String(message.messageId));
                 if (!exists) {
@@ -380,32 +452,46 @@ export const useChatMessages = ({
                     scrollMessageToBottom({ force: shouldStickToBottom });
                 }
             }
-            loadChatSession();
-        });
-    };
+            const isSelfMsg = String(message.sendUserId) === String(currentUserId?.value);
+            patchChatSessions([{
+                contactId: receiveContactId,
+                contactType: message.contactType,
+                sessionId: message.sessionId,
+                lastMessage: message.messageContent || '',
+                lastReceiveTime: message.sendTime || Date.now(),
+                noReadCountDelta: isCurrentSession || isSelfMsg ? 0 : 1
+            }]);
+        };
+        window.ipcRenderer.on('receiveMessage', receiveMessageHandler);
 
-    const onReceiveMessageBatch = () => {
-        window.ipcRenderer.on('receiveMessageBatch', (e, payload = {}) => {
+        receiveMessageBatchHandler = (e, payload = {}) => {
+            if (payload?.success === false) {
+                proxy.Message.error(payload.error || 'Receive messages failed');
+                return;
+            }
             const messages = Array.isArray(payload.messages) ? payload.messages : [];
-            const sessions = Array.isArray(payload.sessions)
-                ? payload.sessions
-                : Array.isArray(payload.sessionPatches)
-                    ? payload.sessionPatches
-                    : [];
+            const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
             handleReceiveMessages(messages, sessions);
-        });
-    };
+        };
+        window.ipcRenderer.on('receiveMessageBatch', receiveMessageBatchHandler);
 
-    const registerMessageListeners = () => {
-        onReceiveMessage();
-        onReceiveMessageBatch();
-        onLoadChatMessage();
+        loadChatMessageHandler = onLoadChatMessageCallback;
+        window.ipcRenderer.on('loadChatMessageCallback', loadChatMessageHandler);
     };
 
     const removeMessageListeners = () => {
-        window.ipcRenderer.removeAllListeners('receiveMessage');
-        window.ipcRenderer.removeAllListeners('receiveMessageBatch');
-        window.ipcRenderer.removeAllListeners('loadChatMessageCallback');
+        if (receiveMessageHandler) {
+            window.ipcRenderer.removeListener('receiveMessage', receiveMessageHandler);
+            receiveMessageHandler = null;
+        }
+        if (receiveMessageBatchHandler) {
+            window.ipcRenderer.removeListener('receiveMessageBatch', receiveMessageBatchHandler);
+            receiveMessageBatchHandler = null;
+        }
+        if (loadChatMessageHandler) {
+            window.ipcRenderer.removeListener('loadChatMessageCallback', loadChatMessageHandler);
+            loadChatMessageHandler = null;
+        }
     };
 
     const cleanupChatMessages = () => {
@@ -437,6 +523,7 @@ export const useChatMessages = ({
         onSendImageMessage,
         onSendVideoMessage,
         registerMessageListeners,
+        retryFailedMessage,
         settleScrollToBottom
     };
 };

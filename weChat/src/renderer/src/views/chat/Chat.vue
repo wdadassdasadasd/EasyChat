@@ -33,6 +33,7 @@
                     <div class="title">
                         <span>{{ currentChatSessionTitle }}</span>
                         <span class="title-count" v-if="currentChatSession.contactType == 1">{{ currentChatSession.memberCount }}</span>
+                        <span class="ws-status" v-if="wsStatusText">{{ wsStatusText }}</span>
                     </div>
                     <div class="title-actions no-drag">
                         <WinOp
@@ -71,6 +72,7 @@
                             @loadMore="loadMoreChatMessage"
                             @openFilePreview="openFilePreviewDialog"
                             @openVideoPreview="openVideoPreviewDialog"
+                            @retryMessage="retryFailedMessage"
                             @userScroll="clearInitialBottomLock"
                         />
 
@@ -170,6 +172,7 @@ const groupDetailVisible = ref(false);
 const userDetailVisible = ref(false);
 const showGroupMemberNick = ref(true);
 const messageListRef = ref(null);
+const wsStatusText = ref('');
 
 const search = () => {};
 
@@ -212,6 +215,7 @@ const {
     onSendImageMessage,
     onSendVideoMessage,
     registerMessageListeners,
+    retryFailedMessage,
     settleScrollToBottom
 } = useChatMessages({
     currentChatSession,
@@ -249,6 +253,24 @@ const totalUnreadCount = computed(() => {
         return total + Number(item.noReadCount || 0);
     }, 0);
 });
+
+const wsStatusHandler = (_e, payload = {}) => {
+    if (payload.status === 'connected' || payload.status === 'closed') {
+        wsStatusText.value = '';
+        return;
+    }
+    if (payload.status === 'reconnecting') {
+        wsStatusText.value = `Reconnecting ${payload.retryLeft ?? ''}`.trim();
+        return;
+    }
+    if (payload.status === 'failed') {
+        wsStatusText.value = 'Connection failed';
+        return;
+    }
+    if (payload.status === 'connecting') {
+        wsStatusText.value = 'Connecting';
+    }
+};
 
 const showChatDetail = () => {
     // 单聊和群聊使用不同详情抽屉；每次只允许打开一个，避免右侧面板状态串线。
@@ -315,6 +337,7 @@ onMounted(() => {
     // 挂载时先注册 IPC 监听，再触发会话加载和路由打开，避免回调早于监听导致首屏丢消息。
     registerMessageListeners();//消息监听
     registerSessionListener();//会话监听
+    window.ipcRenderer.on('wsStatusChange', wsStatusHandler);
     loadChatSession();//会话加载
     openChatFromRoute();//路由跳转
 });
@@ -355,6 +378,7 @@ onUnmounted(() => {
     groupDetailVisible.value = false;
     userDetailVisible.value = false;
     removeSessionListener();
+    window.ipcRenderer.removeListener('wsStatusChange', wsStatusHandler);
     closeVideoPreviewDialog();
     cleanupChatMessages();
 });
@@ -415,6 +439,17 @@ onUnmounted(() => {
 .title-count {
     font-size: 14px;
     color: #7a7a7a;
+    font-weight: 400;
+}
+
+.ws-status {
+    flex: 0 0 auto;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #d97706;
+    font-size: 12px;
     font-weight: 400;
 }
 

@@ -1,24 +1,36 @@
 import { nextTick, ref } from 'vue';
+import { CHAT_CONSTANTS } from '@/utils/ChatConstants';
+
+const {
+    BOTTOM_GAP_TOLERANCE,
+    INITIAL_BOTTOM_LOCK_DURATION,
+    MAX_BOTTOM_SETTLE_FRAMES,
+    STABLE_FRAME_COUNT,
+    NEAR_BOTTOM_THRESHOLD,
+    IMAGE_LOADED_BOTTOM_TOLERANCE
+} = CHAT_CONSTANTS;
+
+/**
+ * 滚动状态机。
+ * 将所有散落的序列号、计时器和标志位收敛到一个对象中，统一清理和检查。
+ */
+const createScrollState = () => {
+    return {
+        renderSeq: 0,        // 当前面板渲染序列，会话切换时递增
+        loadSeq: 0,          // 当前分页加载序列，等于起始时的 renderSeq
+        bottomLockSeq: 0,    // 首屏贴底锁序列，0 表示已解锁
+        bottomLockTimer: null,  // 锁超时 handle
+        bottomSettleFrame: null, // rAF handle，用于延迟贴底
+    };
+};
 
 export const useMessageScroll = ({ messageListRef } = {}) => {
     const messagePanelPhase = ref('ready');
-    // 这些阈值共同保证首屏加载、图片加载完成和用户主动滚动之间不会互相抢滚动位置。
-    const BOTTOM_GAP_TOLERANCE = 2;
-    const INITIAL_BOTTOM_LOCK_DURATION = 800;
-    const MAX_BOTTOM_SETTLE_FRAMES = 8;
-    const STABLE_FRAME_COUNT = 2;
-    let messagePanelRenderSeq = 0;
-    let activeMessageLoadSeq = 0;
-    let initialBottomLockSeq = 0;
-    let initialBottomLockTimer = null;
-    let pendingBottomSettleFrame = null;
+    const state = createScrollState();
 
-    const getMessageList = () => {
-        return messageListRef?.value || null;
-    };
+    const getMessageList = () => messageListRef?.value || null;
 
     const getMessagePanel = () => {
-        // 优先走 ChatMessageList 暴露的方法，旧结构不存在时再回退到 DOM id。
         const messageList = getMessageList();
         if (typeof messageList?.getMessagePanelElement === 'function') {
             return messageList.getMessagePanelElement();
@@ -31,16 +43,13 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
         if (typeof messageList?.getScrollState === 'function') {
             return messageList.getScrollState();
         }
-
-        const messagePanel = getMessagePanel();
-        if (!messagePanel) {
-            return null;
-        }
+        const panel = getMessagePanel();
+        if (!panel) return null;
         return {
-            scrollHeight: messagePanel.scrollHeight,
-            scrollTop: messagePanel.scrollTop,
-            clientHeight: messagePanel.clientHeight,
-            bottomGap: Math.max(0, messagePanel.scrollHeight - messagePanel.scrollTop - messagePanel.clientHeight)
+            scrollHeight: panel.scrollHeight,
+            scrollTop: panel.scrollTop,
+            clientHeight: panel.clientHeight,
+            bottomGap: Math.max(0, panel.scrollHeight - panel.scrollTop - panel.clientHeight)
         };
     };
 
@@ -50,20 +59,14 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
             messageList.scrollToBottom();
             return;
         }
-
-        const messagePanel = getMessagePanel();
-        if (messagePanel) {
-            // 临时关闭平滑滚动，避免多帧贴底时动画造成底部抖动。
-            const bottomScrollTop = Math.max(0, messagePanel.scrollHeight - messagePanel.clientHeight);
-            const previousScrollBehavior = messagePanel.style.scrollBehavior;
-            messagePanel.style.scrollBehavior = 'auto';
-            messagePanel.scrollTop = bottomScrollTop;
-            if (previousScrollBehavior) {
-                messagePanel.style.scrollBehavior = previousScrollBehavior;
-            } else {
-                messagePanel.style.removeProperty('scroll-behavior');
-            }
-        }
+        const panel = getMessagePanel();
+        if (!panel) return;
+        const bottom = Math.max(0, panel.scrollHeight - panel.clientHeight);
+        const prev = panel.style.scrollBehavior;
+        panel.style.scrollBehavior = 'auto';
+        panel.scrollTop = bottom;
+        if (prev) { panel.style.scrollBehavior = prev; }
+        else { panel.style.removeProperty('scroll-behavior'); }
     };
 
     const getBottomGap = () => {
@@ -71,150 +74,117 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
         if (typeof messageList?.getBottomGap === 'function') {
             return messageList.getBottomGap();
         }
-
         const scrollState = getScrollState();
         return scrollState ? scrollState.bottomGap : 0;
     };
 
-    const clearPendingBottomSettleFrame = () => {
-        if (pendingBottomSettleFrame) {
-            window.cancelAnimationFrame(pendingBottomSettleFrame);
-            pendingBottomSettleFrame = null;
+    // —— 锁管理 ——
+
+    const cancelSettleFrame = () => {
+        if (state.bottomSettleFrame) {
+            cancelAnimationFrame(state.bottomSettleFrame);
+            state.bottomSettleFrame = null;
         }
     };
 
     const clearInitialBottomLock = () => {
-        // 用户手动滚动后解除首屏贴底锁，后续图片加载不再强行把视口拉回底部。
-        initialBottomLockSeq = 0;
-        if (initialBottomLockTimer) {
-            window.clearTimeout(initialBottomLockTimer);
-            initialBottomLockTimer = null;
+        state.bottomLockSeq = 0;
+        if (state.bottomLockTimer) {
+            clearTimeout(state.bottomLockTimer);
+            state.bottomLockTimer = null;
         }
-        clearPendingBottomSettleFrame();
+        cancelSettleFrame();
     };
 
     const keepInitialBottomLock = (renderSeq) => {
         clearInitialBottomLock();
-        initialBottomLockSeq = renderSeq;
-        initialBottomLockTimer = window.setTimeout(() => {
-            if (initialBottomLockSeq === renderSeq) {
-                initialBottomLockSeq = 0;
-            }
-            initialBottomLockTimer = null;
+        state.bottomLockSeq = renderSeq;
+        state.bottomLockTimer = setTimeout(() => {
+            if (state.bottomLockSeq === renderSeq) state.bottomLockSeq = 0;
+            state.bottomLockTimer = null;
         }, INITIAL_BOTTOM_LOCK_DURATION);
     };
 
-    const isInitialBottomLocked = () => {
-        return initialBottomLockSeq !== 0 && initialBottomLockSeq === messagePanelRenderSeq;
-    };
+    const isInitialBottomLocked = () =>
+        state.bottomLockSeq !== 0 && state.bottomLockSeq === state.renderSeq;
 
     const scheduleBottomSettle = () => {
-        if (pendingBottomSettleFrame) {
-            return;
-        }
-
-        pendingBottomSettleFrame = window.requestAnimationFrame(() => {
-            pendingBottomSettleFrame = null;
+        if (state.bottomSettleFrame) return;
+        state.bottomSettleFrame = requestAnimationFrame(() => {
+            state.bottomSettleFrame = null;
             setMessagePanelToBottom();
         });
     };
 
-    const isNearMessageBottom = (threshold = 120) => {
+    // —— 公开 API ——
+
+    const isNearMessageBottom = (threshold = NEAR_BOTTOM_THRESHOLD) => {
         const scrollState = getScrollState();
-        if (!scrollState) {
-            return true;
-        }
+        if (!scrollState) return true;
         return scrollState.bottomGap < threshold;
     };
 
     const scrollMessageToBottom = async ({ force = false } = {}) => {
-        if (!force && !isNearMessageBottom()) {
-            return;
-        }
-
+        if (!force && !isNearMessageBottom()) return;
         await nextTick();
         setMessagePanelToBottom();
     };
 
     const settleScrollToBottom = () => {
-        // 图片/视频封面加载完成会改变高度，只有首屏锁定或本来靠近底部时才继续贴底。
-        if (isInitialBottomLocked() || isNearMessageBottom(360)) {
+        if (isInitialBottomLocked() || isNearMessageBottom(IMAGE_LOADED_BOTTOM_TOLERANCE)) {
             scheduleBottomSettle();
         }
     };
 
-    const waitForNextFrame = () => {
-        return new Promise((resolve) => {
-            window.requestAnimationFrame(resolve);
-        });
-    };
+    const waitNextFrame = () =>
+        new Promise((resolve) => requestAnimationFrame(resolve));
 
-    const showMessagePanelAtBottom = async (renderSeq = messagePanelRenderSeq) => {
+    const showMessagePanelAtBottom = async (renderSeq = state.renderSeq) => {
         await nextTick();
-        if (renderSeq !== messagePanelRenderSeq) {
-            return;
-        }
+        if (renderSeq !== state.renderSeq) return;
 
-        // 多等几帧，让图片占位、时间分割线和消息气泡完成布局后再宣布列表 ready。
         let stableFrames = 0;
         let previousState = null;
-        for (let index = 0; index < MAX_BOTTOM_SETTLE_FRAMES; index++) {
+        for (let idx = 0; idx < MAX_BOTTOM_SETTLE_FRAMES; idx++) {
             setMessagePanelToBottom();
-            await waitForNextFrame();
-            if (renderSeq !== messagePanelRenderSeq) {
-                return;
-            }
+            await waitNextFrame();
+            if (renderSeq !== state.renderSeq) return;
 
             const scrollState = getScrollState();
-            if (!scrollState) {
-                break;
-            }
+            if (!scrollState) break;
 
-            const isBottomPinned = getBottomGap() <= BOTTOM_GAP_TOLERANCE;
-            const isLayoutStable = previousState &&
+            const pinned = getBottomGap() <= BOTTOM_GAP_TOLERANCE;
+            const stable = previousState &&
                 Math.abs(scrollState.scrollHeight - previousState.scrollHeight) <= 1 &&
                 Math.abs(scrollState.scrollTop - previousState.scrollTop) <= 1;
-            stableFrames = isBottomPinned && isLayoutStable ? stableFrames + 1 : 0;
+            stableFrames = pinned && stable ? stableFrames + 1 : 0;
             previousState = scrollState;
 
-            if (stableFrames >= STABLE_FRAME_COUNT) {
-                break;
-            }
+            if (stableFrames >= STABLE_FRAME_COUNT) break;
         }
 
         setMessagePanelToBottom();
-        if (renderSeq !== messagePanelRenderSeq) {
-            return;
-        }
+        if (renderSeq !== state.renderSeq) return;
         messagePanelPhase.value = 'ready';
         keepInitialBottomLock(renderSeq);
     };
 
     const startMessagePanelRender = () => {
-        // 每次切换会话都会递增序列，异步分页回包可据此判断是否已经过期。
         clearInitialBottomLock();
-        clearPendingBottomSettleFrame();
-        messagePanelRenderSeq++;
-        activeMessageLoadSeq = messagePanelRenderSeq;
+        cancelSettleFrame();
+        state.renderSeq++;
+        state.loadSeq = state.renderSeq;
         messagePanelPhase.value = 'preparing';
-        return messagePanelRenderSeq;
+        return state.renderSeq;
     };
 
-    const markMessagePanelReady = () => {
-        messagePanelPhase.value = 'ready';
-    };
-
-    const getMessagePanelRenderSeq = () => {
-        return messagePanelRenderSeq;
-    };
-
-    const getActiveMessageLoadSeq = () => {
-        return activeMessageLoadSeq;
-    };
+    const markMessagePanelReady = () => { messagePanelPhase.value = 'ready'; };
+    const getMessagePanelRenderSeq = () => state.renderSeq;
+    const getActiveMessageLoadSeq = () => state.loadSeq;
 
     const cleanupMessageScroll = () => {
         clearInitialBottomLock();
-        clearPendingBottomSettleFrame();
+        cancelSettleFrame();
     };
 
     return {

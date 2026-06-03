@@ -57,6 +57,20 @@ if (typeof db.configure === 'function') {
     db.configure('busyTimeout', 5000)
 }
 
+let writeQueue = Promise.resolve()
+let transactionDepth = 0
+
+const enqueueDbWrite = (task) => {
+    if (transactionDepth > 0) {
+        return task()
+    }
+    const nextTask = writeQueue
+        .catch(() => {})
+        .then(task)
+    writeQueue = nextTask
+    return nextTask
+}
+
 const runRawSql = (sql) => {
     return new Promise((resolve) => {
         db.run(sql, (err) => {
@@ -128,7 +142,7 @@ const queryCount = (sql, params = []) => {
     })
 }
 
-const runStrict = (sql, params = []) => {
+const runStrictNow = (sql, params = []) => {
     return new Promise((resolve, reject) => {
         const stmt = db.prepare(sql)
         stmt.run(params, function (err) {
@@ -143,20 +157,29 @@ const runStrict = (sql, params = []) => {
     })
 }
 
+const runStrict = (sql, params = []) => {
+    return enqueueDbWrite(() => runStrictNow(sql, params))
+}
+
 const run = (sql, params = []) => {
     return runStrict(sql, params).catch(() => 0)
 }
 
 const runInTransaction = async (callback) => {
-    await runStrict('begin immediate transaction', [])
-    try {
-        const result = await callback()
-        await runStrict('commit', [])
-        return result
-    } catch (error) {
-        await runStrict('rollback', []).catch(() => {})
-        throw error
-    }
+    return enqueueDbWrite(async () => {
+        await runStrictNow('begin immediate transaction', [])
+        transactionDepth += 1
+        try {
+            const result = await callback()
+            transactionDepth -= 1
+            await runStrictNow('commit', [])
+            return result
+        } catch (error) {
+            transactionDepth = Math.max(0, transactionDepth - 1)
+            await runStrictNow('rollback', []).catch(() => {})
+            throw error
+        }
+    })
 }
 
 const runPragma = () => {

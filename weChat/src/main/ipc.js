@@ -4,8 +4,8 @@ import path from 'path'
 import {initWs, closeWs} from './wsClient.js'
 import store from './store.js'
 import { addUserSetting, getLocalFileFolder, resetLocalFileFolder, updateLocalFileFolder } from './db/UserSettingModel.js';
-import { selectUserSessionList,delChatSession,markSessionRead,topChatSession,saveOrUpdateChatSessionBatch4Init,clearChatSessionSummaryBySessionId} from './db/ChatSessionUserModel.js';
-import { clearMessageBySessionId, searchMessageBySessionId, selectMessageContextByMessageId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
+import { selectUserSessionList,delChatSession,markSessionRead,topChatSession,clearChatSessionSummaryBySessionId} from './db/ChatSessionUserModel.js';
+import { clearMessageBySessionId, replacePendingMessage, savePendingMessage, searchMessageBySessionId, selectMessageContextByMessageId, selectMessageList, updateLocalMessageStatus } from './db/ChatMessageModel.js';
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister=(mainWindow, callback)=>{
       ipcMain.on("loginOrRegister",(e,isLogin)=>{
@@ -29,6 +29,33 @@ const winTitleOp=(callback)=>{
         callback(e,data);
     })
 }
+
+const getErrorMessage = (error) => {
+    return error?.message || String(error || 'unknown error');
+};
+
+const sendIpcError = (sender, callbackChannel, error, payload = {}) => {
+    if (!sender || sender.isDestroyed?.()) {
+        return;
+    }
+    sender.send(callbackChannel, {
+        ...payload,
+        success: false,
+        channel: callbackChannel,
+        error: getErrorMessage(error)
+    });
+};
+
+const registerSafeIpcOn = (channel, callbackChannel, handler) => {
+    ipcMain.on(channel, async (e, data) => {
+        try {
+            await handler(e, data);
+        } catch (error) {
+            console.error(`IPC ${channel} failed`, error);
+            sendIpcError(e.sender, callbackChannel, error, data && typeof data === 'object' ? data : {});
+        }
+    });
+};
 
 //存数据到主进程store
 const onSetLocalStore=()=>{
@@ -54,7 +81,7 @@ const onGetLocalStore=()=>{
 
 //查询本地会话列表
 const onLoadSessionData=()=>{
-    ipcMain.on("loadSessionData",async (e)=>{
+    registerSafeIpcOn("loadSessionData", "loadSessionDataCallback", async (e)=>{
         // renderer 左侧会话列表只读本地 SQLite，WebSocket/发送链路负责提前把会话写入表。
         const result=await selectUserSessionList();
         e.sender.send("loadSessionDataCallback",result);
@@ -80,7 +107,7 @@ const onTopChatSession=()=>{
 
 //分页查询聊天消息
 const onLoadChatMessage=()=>{
-    ipcMain.on("loadChatMessage",async (e,data)=>{
+    registerSafeIpcOn("loadChatMessage", "loadChatMessageCallback", async (e,data)=>{
         // 历史消息分页在主进程完成，sessionId/loadSeq 原样带回给 renderer 做防串线校验。
         const result=data?.targetMessageId
             ? {
@@ -103,7 +130,7 @@ const onLoadChatMessage=()=>{
 }
 
 const onMarkSessionRead=()=>{
-    ipcMain.on("markSessionRead",async (e,contactId)=>{
+    registerSafeIpcOn("markSessionRead", "markSessionReadCallback", async (e,contactId)=>{
         // 已读会同步清零本地会话未读数，renderer 收到新会话列表后红点也会随之刷新。
         await markSessionRead(contactId);
         e.sender.send("markSessionReadCallback",{
@@ -132,7 +159,7 @@ const onResetToLogin=(_mainWindow, callback)=>{
 
 
 //保存发送的消息到本地，并更新会话
-const saveSendMessageToLocal = async ({ message, chatSession } = {}) => {
+const saveSendMessageToLocal = async ({ message, chatSession, localMessageId, mode, status } = {}) => {
     if (!message) {
         return {
             success: false,
@@ -140,27 +167,23 @@ const saveSendMessageToLocal = async ({ message, chatSession } = {}) => {
         };
     }
 
-    await saveMessage(message);
+    if (mode === 'pending') {
+        return await savePendingMessage({ message, chatSession });
+    }
 
-    const sessionInfo = {
-        contactId: chatSession?.contactId || message.contactId,
-        contactType: chatSession?.contactType ?? message.contactType,
-        sessionId: message.sessionId || chatSession?.sessionId,
-        status: 1,
-        contactName: chatSession?.contactName || message.contactName,
-        lastMessage: message.messageContent,
-        lastReceiveTime: message.sendTime || Date.now(),
-        memberCount: chatSession?.memberCount,
-        noReadCount: 0
-    };
+    if (mode === 'status') {
+        return await updateLocalMessageStatus({
+            messageId: message.messageId,
+            status: status ?? message.status,
+            chatSession
+        });
+    }
 
-    await saveOrUpdateChatSessionBatch4Init([sessionInfo]);
-
-    return {
-        success: true,
-        messageId: message.messageId,
-        session: sessionInfo
-    };
+    return await replacePendingMessage({
+        localMessageId,
+        message,
+        chatSession
+    });
 };
 
 const onSaveSendMessage = () => {
@@ -170,24 +193,15 @@ const onSaveSendMessage = () => {
         } catch (error) {
             return {
                 success: false,
-                error: error?.message || String(error)
+                channel: 'saveSendMessage',
+                error: getErrorMessage(error)
             };
         }
-    });
-
-    ipcMain.on('saveSendMessage', async (e, payload) => {
-        const result = await saveSendMessageToLocal(payload).catch((error) => {
-            return {
-                success: false,
-                error: error?.message || String(error)
-            };
-        });
-        e.sender.send('saveSendMessageCallback', result);
     });
 };
 
 const onClearChatMessage = () => {
-    ipcMain.on('clearChatMessage', async (e, { sessionId } = {}) => {
+    registerSafeIpcOn('clearChatMessage', 'clearChatMessageCallback', async (e, { sessionId } = {}) => {
         try {
             // 清空记录写入 clear 游标后删除当前本地消息，后续旧 WebSocket 回补会被过滤。
             await clearMessageBySessionId(sessionId);
@@ -208,7 +222,7 @@ const onClearChatMessage = () => {
 };
 
 const onSearchChatMessage = () => {
-    ipcMain.on('searchChatMessage', async (e, data = {}) => {
+    registerSafeIpcOn('searchChatMessage', 'searchChatMessageCallback', async (e, data = {}) => {
         // 搜索只查当前 session 的本地消息，并把 searchSeq 带回 renderer 丢弃过期结果。
         const dataList = await searchMessageBySessionId(data);
         e.sender.send('searchChatMessageCallback', {
@@ -288,7 +302,8 @@ const onOpenTempVideoFile = () => {
             };
         }
 
-        const buffer = fs.readFileSync(filePath);
+        // 大视频文件异步读取，避免阻塞主进程事件循环。
+        const buffer = await fs.promises.readFile(filePath);
         const arrayBuffer = buffer.buffer.slice(
             buffer.byteOffset,
             buffer.byteOffset + buffer.byteLength

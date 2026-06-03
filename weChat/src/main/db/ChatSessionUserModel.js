@@ -1,44 +1,28 @@
 import store from '../store';
 import {
-    insertOrIgnore,
+    insertOrReplaceStrict,
     queryAll,
     queryOne,
     run,
+    runInTransaction,
     update
 
 } from './ADB';
 
 
-const addChatSession=(sessionInfo)=>{
-    sessionInfo.userId=store.getUserId();
-    return insertOrIgnore("chat_session_user",sessionInfo)
-}
-
-const updateChatSession=(sessionInfo)=>{
-    // 会话表按 userId + contactId 唯一，消息推送和发送成功都会刷新这条摘要记录。
-    const paramData={
-        userId:store.getUserId(),
-        contactId:sessionInfo.contactId
-    }
-    const updateInfo=Object.assign({},sessionInfo);
-    updateInfo.userId=paramData.userId;
-    updateInfo.contactId=paramData.contactId;
-    return update("chat_session_user",updateInfo,paramData);
-
-}
 const saveOrUpdateChatSessionBatch4Init=async (chatSessionList)=>{
-    // WebSocket 初始化、普通消息和发送成功都复用这里，统一新增或更新会话快照。
-    for(let i=0;i<chatSessionList.length;i++)
-    {
-        const sessionInfo=chatSessionList[i];
-        sessionInfo.status=1;
-        let sessionData=await selectUserSessionByContactId(sessionInfo.contactId)
-        if(sessionData){
-            await updateChatSession(sessionInfo)
-        }else{
-            await addChatSession(sessionInfo);
-        }
+    // WebSocket 初始化、普通消息和发送成功统一使用 INSERT OR REPLACE 批量 upsert。
+    if (!Array.isArray(chatSessionList) || chatSessionList.length === 0) {
+        return;
     }
+    const userId = store.getUserId();
+    return runInTransaction(async () => {
+        for(let i=0;i<chatSessionList.length;i++)
+        {
+            const sessionInfo={...chatSessionList[i],userId,status:1};
+            await insertOrReplaceStrict('chat_session_user', sessionInfo);
+        }
+    });
 }
 
 //更新未读数
@@ -65,12 +49,6 @@ const selectUserSessionList=()=>{
     // renderer 只展示 status=1 的会话；删除会话会把 status 置为 0。
     let sql="select * from chat_session_user where user_id=? and status=1";
     return queryAll(sql,[store.getUserId()])
-
-}
-
-const selectUserSessionByContactId=(contactId)=>{
-    let sql="select * from chat_session_user where user_id=? and contact_id=?";
-    return queryOne(sql,[store.getUserId(),contactId])
 
 }
 

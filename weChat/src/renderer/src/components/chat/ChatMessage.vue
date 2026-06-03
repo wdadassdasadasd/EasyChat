@@ -35,6 +35,15 @@
                     {{ message.messageContent }}
                 </template>
             </div>
+            <div v-if="isSelf && showSendState" class="message-send-state">
+                <span v-if="message.status == 2">Sending...</span>
+                <button
+                    v-else-if="message.status == 0"
+                    class="message-retry-btn"
+                    type="button"
+                    @click="$emit('retryMessage', message)"
+                >Retry</button>
+            </div>
         </div>
         <AvatarBase
             v-if="isSelf"
@@ -73,7 +82,7 @@ const props = defineProps({
     }
 });
 
-defineEmits(['imageLoaded', 'openFilePreview', 'openVideoPreview']);
+defineEmits(['imageLoaded', 'openFilePreview', 'openVideoPreview', 'retryMessage']);
 
 const isSelf = computed(() => {
     // 自己发送的消息右对齐，别人消息左对齐；群聊昵称展示也依赖这个判断。
@@ -83,6 +92,10 @@ const isSelf = computed(() => {
 const isMediaMessage = computed(() => {
     // 图片和视频不使用普通气泡 padding，避免媒体预览被白底包裹。
     return Utils.isImageMessage(props.message) || Utils.isVideoMessage(props.message);
+});
+
+const showSendState = computed(() => {
+    return props.message?.status == 0 || props.message?.status == 2;
 });
 </script>
 
@@ -146,5 +159,22 @@ const isMediaMessage = computed(() => {
     padding: 0;
     background: transparent;
     box-shadow: none;
+}
+
+.message-send-state {
+    margin-top: 4px;
+    color: #8a8a8a;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+.message-retry-btn {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #d93026;
+    font-size: 12px;
+    line-height: 18px;
+    cursor: pointer;
 }
 </style>
