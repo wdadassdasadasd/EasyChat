@@ -313,10 +313,15 @@ export const useChatSessions = ({ proxy, route }) => {
 
     const restoreNoReadCount = () => {
       const targetSession = chatSessionList.value.find((item) => item.contactId == contactId)
-      if (targetSession) {
+      // 仅在当前未读数仍为 0（未被 patchChatSessions 更新过）时才回滚，
+      // 防止把主进程推送的更新值覆盖回旧值。
+      if (targetSession && targetSession.noReadCount === 0) {
         targetSession.noReadCount = previousNoReadCount
       }
-      if (currentChatSession.value.contactId == contactId) {
+      if (
+        currentChatSession.value.contactId == contactId &&
+        currentChatSession.value.noReadCount === 0
+      ) {
         currentChatSession.value = Object.assign({}, currentChatSession.value, {
           noReadCount: previousNoReadCount
         })

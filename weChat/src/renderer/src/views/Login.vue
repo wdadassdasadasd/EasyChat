@@ -96,6 +96,8 @@ const changeCheckCode=async()=>{
     url:proxy.Api.checkCode,
   })
   if(!result){
+    showLoading.value = false;
+    changeCheckCode();
     return;
   }
   checkCodeUrl.value=result.data.checkCode
@@ -168,12 +170,13 @@ const submit=async()=>{
     errorMsg.value=response?.info || response?.msg || `登录失败(${response?.code || 'unknown'})`;
   }
 })
-  if(!result){
-    return;
+  if (!result) {
+    showLoading.value = false
+    changeCheckCode()
+    return
   }
   if(isLogin.value){
     userInfoStore.setUserInfo(result.data);
-    localStorage.setItem('token',result.data.token);
     router.push('/main');
 
     const screenWidth=window.screen.width;

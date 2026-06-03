@@ -1,19 +1,19 @@
 //联系人列表刷新控制
-import {defineStore} from 'pinia';
+import { defineStore } from 'pinia'
 
-export const useContactStateStore=defineStore('contactStateInfo',{
-    state:()=>{
-        return {
-            contactReload:null,
-            delContactId:null,
-        }
+export const useContactStateStore = defineStore('contactStateInfo', {
+  state: () => {
+    return {
+      contactReload: null,
+      delContactId: null
+    }
+  },
+  actions: {
+    setContactReload(contactReload) {
+      this.contactReload = contactReload
     },
-    actions:{
-        setContactReload(contactReload){
-            this.contactReload=contactReload;
-        },
-       setDelContactId(contactId){
-            this.delContactId=contactId;
-        }}
-
+    setDelContactId(contactId) {
+      this.delContactId = contactId
+    }
+  }
 })

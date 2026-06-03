@@ -136,21 +136,8 @@ const resetFolder = async () => {
 };
 
 const formatFileSize = (size) => {
-    if (proxy.Utils?.formatFileSize) {
-        return proxy.Utils.formatFileSize(size || 0);
-    }
-    if (!size) {
-        return '0 B';
-    }
-    const units = ['B', 'KB', 'MB', 'GB'];
-    let value = size;
-    let unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) {
-        value = value / 1024;
-        unitIndex++;
-    }
-    return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-};
+  return proxy.Utils.formatFileSize(size || 0)
+}
 
 loadFolderInfo();
 </script>

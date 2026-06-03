@@ -1,379 +1,404 @@
-import { WebSocket } from "ws";
+import { WebSocket } from 'ws'
 import { saveOrUpdateChatSessionBatch4Init } from './db/ChatSessionUserModel'
-import store from "./store.js";
+import store from './store.js'
 import { saveMessageBatch, updateMessageStatus } from './db/ChatMessageModel'
 import { updateNoReadCount } from './db/UserSettingModel'
-import { WS_SYSTEM_CONTACT_FILTER, HEARTBEAT_INTERVAL, RECEIVE_FLUSH_DELAY, RECEIVE_FLUSH_MAX, WS_RECONNECT_DELAY, WS_MAX_RECONNECT_TIMES } from './constants';
+import {
+  WS_SYSTEM_CONTACT_FILTER,
+  HEARTBEAT_INTERVAL,
+  RECEIVE_FLUSH_DELAY,
+  RECEIVE_FLUSH_MAX,
+  WS_RECONNECT_DELAY,
+  WS_MAX_RECONNECT_TIMES
+} from './constants'
 
 const NODE_ENV = process.env.NODE_ENV
 
-let ws = null;
-let maxReConnectTimes = null;
-let wsUrl = null;
-let webContentsSender = null;
-let needReconnect = null;
-let lockReconnect = false;
-let heartbeatTimer = null;
-let reconnectTimer = null;
-let receiveQueue = [];
-let receiveFlushTimer = null;
-let receiveFlushing = false;
-const RECEIVE_SAVE_MAX_RETRY = 3;
+let ws = null
+let maxReConnectTimes = null
+let wsUrl = null
+let webContentsSender = null
+let needReconnect = null
+let lockReconnect = false
+let heartbeatTimer = null
+let reconnectTimer = null
+let receiveQueue = []
+let receiveFlushTimer = null
+let receiveFlushing = false
+let wsRuntimeGeneration = 0
+const RECEIVE_SAVE_MAX_RETRY = 3
 
 const clearHeartbeatTimer = () => {
-    if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-    }
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
 }
 
 const clearReconnectTimer = () => {
-    if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-    }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
 }
 
 const clearReceiveFlushTimer = () => {
-    if (receiveFlushTimer) {
-        clearTimeout(receiveFlushTimer);
-        receiveFlushTimer = null;
-    }
+  if (receiveFlushTimer) {
+    clearTimeout(receiveFlushTimer)
+    receiveFlushTimer = null
+  }
 }
 
 const closeCurrentSocket = () => {
-    if (!ws) {
-        return;
-    }
-    ws.onopen = null;
-    ws.onmessage = null;
-    ws.onclose = null;
-    ws.onerror = null;
-    try {
-        ws.close();
-    } catch (error) {
-        console.error('failed to close WebSocket', error);
-    }
-    ws = null;
+  if (!ws) {
+    return
+  }
+  ws.onopen = null
+  ws.onmessage = null
+  ws.onclose = null
+  ws.onerror = null
+  try {
+    ws.close()
+  } catch (error) {
+    console.error('failed to close WebSocket', error)
+  }
+  ws = null
 }
 
 const resetWsRuntime = () => {
-    clearHeartbeatTimer();
-    clearReconnectTimer();
-    clearReceiveFlushTimer();
-    receiveQueue = [];
-    receiveFlushing = false;
-    lockReconnect = false;
-    closeCurrentSocket();
+  clearHeartbeatTimer()
+  clearReconnectTimer()
+  clearReceiveFlushTimer()
+  receiveQueue = []
+  receiveFlushing = false
+  lockReconnect = false
+  wsRuntimeGeneration += 1
+  closeCurrentSocket()
 }
 
 const getMessageContactId = (message = {}) => {
-    if (message.contactType == 1) {
-        return message.contactId;
-    }
-    return message.sendUserId == store.getUserId() ? message.contactId : message.sendUserId;
+  if (message.contactType == 1) {
+    return message.contactId
+  }
+  return message.sendUserId == store.getUserId() ? message.contactId : message.sendUserId
 }
 
 const toSessionInfo = (message = {}) => {
-    const contactId = getMessageContactId(message);
-    return {
-        contactId,
-        contactType: message.contactType,
-        sessionId: message.sessionId,
-        status: 1,
-        contactName: message.contactName || message.groupName || message.sendUserNickName,
-        lastMessage: message.messageContent,
-        lastReceiveTime: message.sendTime || Date.now(),
-        memberCount: message.memberCount,
-        noReadCountDelta: message.sendUserId == store.getUserId() ? 0 : 1
-    }
+  const contactId = getMessageContactId(message)
+  return {
+    contactId,
+    contactType: message.contactType,
+    sessionId: message.sessionId,
+    status: 1,
+    contactName: message.contactName || message.groupName || message.sendUserNickName,
+    lastMessage: message.messageContent,
+    lastReceiveTime: message.sendTime || Date.now(),
+    memberCount: message.memberCount,
+    noReadCountDelta: message.sendUserId == store.getUserId() ? 0 : 1
+  }
 }
 
 const getLatestSessionList = (messages = []) => {
-    const sessionMap = new Map();
-    messages.forEach((message) => {
-        const sessionInfo = toSessionInfo(message);
-        if (!sessionInfo.contactId) {
-            return;
-        }
-        const previous = sessionMap.get(sessionInfo.contactId);
-        if (!previous || Number(sessionInfo.lastReceiveTime || 0) >= Number(previous.lastReceiveTime || 0)) {
-            sessionMap.set(sessionInfo.contactId, sessionInfo);
-        } else {
-            previous.noReadCountDelta += sessionInfo.noReadCountDelta;
-        }
-    });
+  const sessionMap = new Map()
+  messages.forEach((message) => {
+    const sessionInfo = toSessionInfo(message)
+    if (!sessionInfo.contactId) {
+      return
+    }
+    const previous = sessionMap.get(sessionInfo.contactId)
+    if (
+      !previous ||
+      Number(sessionInfo.lastReceiveTime || 0) >= Number(previous.lastReceiveTime || 0)
+    ) {
+      sessionInfo.noReadCountDelta += Number(previous?.noReadCountDelta || 0)
+      sessionMap.set(sessionInfo.contactId, sessionInfo)
+    } else {
+      previous.noReadCountDelta += sessionInfo.noReadCountDelta
+    }
+  })
 
-    return Array.from(sessionMap.values());
+  return Array.from(sessionMap.values())
 }
 
 const sendToRenderer = (channel, payload) => {
-    if (!webContentsSender || webContentsSender.isDestroyed?.()) {
-        return;
-    }
-    webContentsSender.send(channel, payload);
+  if (!webContentsSender || webContentsSender.isDestroyed?.()) {
+    return
+  }
+  webContentsSender.send(channel, payload)
 }
 
 const publishWsStatus = (payload) => {
-    sendToRenderer('wsStatusChange', payload);
+  sendToRenderer('wsStatusChange', payload)
 }
 
 const saveAndPublishMessageBatch = async (messages) => {
-    if (!messages.length) {
-        return;
-    }
+  if (!messages.length) {
+    return
+  }
 
-    const { savedMessages = [] } = await saveMessageBatch(messages, {
-        sessionRows: (newMessages) => {
-            return getLatestSessionList(newMessages).map(({ noReadCountDelta, ...sessionInfo }) => sessionInfo);
-        }
-    });
-    if (!savedMessages.length) {
-        return;
+  const genAtStart = wsRuntimeGeneration
+  const { savedMessages = [] } = await saveMessageBatch(messages, {
+    sessionRows: (newMessages) => {
+      return getLatestSessionList(newMessages).map((sessionInfo) => {
+        const clean = { ...sessionInfo }
+        delete clean.noReadCountDelta
+        return clean
+      })
     }
+  })
+  // 如果 saveMessageBatch 期间触发了 resetWsRuntime（登出/重连等），
+  // 放弃向可能已销毁的渲染窗口推送过期会话数据。
+  if (wsRuntimeGeneration !== genAtStart) {
+    return
+  }
+  if (!savedMessages.length) {
+    return
+  }
 
-    const sessionPatches = getLatestSessionList(savedMessages);
-    sendToRenderer('receiveMessageBatch', {
-        messageType: 'batch',
-        messages: savedMessages,
-        sessions: sessionPatches,
-        stats: {
-            receivedCount: messages.length,
-            savedCount: savedMessages.length,
-            filteredCount: messages.length - savedMessages.length
-        }
-    });
+  const sessionPatches = getLatestSessionList(savedMessages)
+  sendToRenderer('receiveMessageBatch', {
+    messageType: 'batch',
+    messages: savedMessages,
+    sessions: sessionPatches,
+    stats: {
+      receivedCount: messages.length,
+      savedCount: savedMessages.length,
+      filteredCount: messages.length - savedMessages.length
+    }
+  })
 }
 
 const scheduleReceiveFlush = () => {
-    if (receiveQueue.length >= RECEIVE_FLUSH_MAX) {
-        flushReceiveQueue();
-        return;
-    }
-    if (!receiveFlushTimer) {
-        receiveFlushTimer = setTimeout(flushReceiveQueue, RECEIVE_FLUSH_DELAY);
-    }
+  if (receiveQueue.length >= RECEIVE_FLUSH_MAX) {
+    flushReceiveQueue()
+    return
+  }
+  if (!receiveFlushTimer) {
+    receiveFlushTimer = setTimeout(flushReceiveQueue, RECEIVE_FLUSH_DELAY)
+  }
 }
 
 const flushReceiveQueue = async () => {
-    clearReceiveFlushTimer();
-    if (receiveFlushing) {
-        return;
-    }
-    receiveFlushing = true;
+  clearReceiveFlushTimer()
+  if (receiveFlushing) {
+    return
+  }
+  receiveFlushing = true
 
-    try {
-        while (receiveQueue.length > 0) {
-            const messages = receiveQueue.slice(0, RECEIVE_FLUSH_MAX);
-            try {
-                await saveAndPublishMessageBatch(messages);
-                receiveQueue.splice(0, messages.length);
-            } catch (error) {
-                console.error('failed to save received WebSocket messages', error);
-                messages.forEach((message) => {
-                    message.__receiveRetry = Number(message.__receiveRetry || 0) + 1;
-                });
-                const failedMessages = messages.filter((message) => {
-                    return Number(message.__receiveRetry || 0) >= RECEIVE_SAVE_MAX_RETRY;
-                });
-                if (failedMessages.length > 0) {
-                    const failedSet = new Set(failedMessages);
-                    receiveQueue = receiveQueue.filter((message) => {
-                        return !failedSet.has(message);
-                    });
-                    sendToRenderer('receiveMessageBatch', {
-                        success: false,
-                        messageType: 'batch',
-                        messages: [],
-                        sessions: [],
-                        error: error?.message || String(error),
-                        stats: {
-                            failedCount: failedMessages.length
-                        }
-                    });
-                }
-                break;
+  try {
+    while (receiveQueue.length > 0) {
+      const messages = receiveQueue.slice(0, RECEIVE_FLUSH_MAX)
+      try {
+        await saveAndPublishMessageBatch(messages)
+        receiveQueue.splice(0, messages.length)
+      } catch (error) {
+        console.error('failed to save received WebSocket messages', error)
+        messages.forEach((message) => {
+          message.__receiveRetry = Number(message.__receiveRetry || 0) + 1
+        })
+        const failedMessages = messages.filter((message) => {
+          return Number(message.__receiveRetry || 0) >= RECEIVE_SAVE_MAX_RETRY
+        })
+        if (failedMessages.length > 0) {
+          const failedSet = new Set(failedMessages)
+          receiveQueue = receiveQueue.filter((message) => {
+            return !failedSet.has(message)
+          })
+          sendToRenderer('receiveMessageBatch', {
+            success: false,
+            messageType: 'batch',
+            messages: [],
+            sessions: [],
+            error: error?.message || String(error),
+            stats: {
+              failedCount: failedMessages.length
             }
+          })
         }
-    } finally {
-        receiveFlushing = false;
-        if (receiveQueue.length > 0) {
-            scheduleReceiveFlush();
-        }
+        break
+      }
     }
+  } finally {
+    receiveFlushing = false
+    if (receiveQueue.length > 0) {
+      scheduleReceiveFlush()
+    }
+  }
 }
 
 const enqueueReceiveMessage = (message) => {
-    receiveQueue.push(message);
-    scheduleReceiveFlush();
+  receiveQueue.push(message)
+  scheduleReceiveFlush()
 }
 
 const startHeartbeat = () => {
-    clearHeartbeatTimer();
-    if (ws?.readyState === WebSocket.OPEN) {
-        try {
-            ws.send("heart beat");
-        } catch (error) {
-            console.error('failed to send heartbeat', error);
-        }
+  clearHeartbeatTimer()
+  if (ws?.readyState === WebSocket.OPEN) {
+    try {
+      ws.send('heart beat')
+    } catch (error) {
+      console.error('failed to send heartbeat', error)
     }
-    heartbeatTimer = setInterval(() => {
-        if (ws?.readyState === WebSocket.OPEN) {
-            console.log("send heartbeat");
-            try {
-                ws.send("heart beat");
-            } catch (error) {
-                console.error('failed to send heartbeat', error);
-                reconnect();
-            }
-        }
-    }, HEARTBEAT_INTERVAL);
+  }
+  heartbeatTimer = setInterval(() => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      console.log('send heartbeat')
+      try {
+        ws.send('heart beat')
+      } catch (error) {
+        console.error('failed to send heartbeat', error)
+        reconnect()
+      }
+    }
+  }, HEARTBEAT_INTERVAL)
 }
 
 const initWs = (config, sender) => {
-    const domainKey = NODE_ENV !== 'development' ? 'prodWsDomain' : 'devWsDomain';
-    const wsDomain = store.getData(domainKey);
-    if (!wsDomain) {
-        console.log(`missing ${domainKey}, skip WebSocket connect`);
-        return;
-    }
-    resetWsRuntime();
-    wsUrl = `${wsDomain}?token=${config.token}`
-    webContentsSender = sender;
-    needReconnect = true;
-    maxReConnectTimes = WS_MAX_RECONNECT_TIMES;
-    publishWsStatus({ status: 'connecting', retryLeft: maxReConnectTimes });
-    createWs();
+  const domainKey = NODE_ENV !== 'development' ? 'prodWsDomain' : 'devWsDomain'
+  const wsDomain = store.getData(domainKey)
+  if (!wsDomain) {
+    console.log(`missing ${domainKey}, skip WebSocket connect`)
+    return
+  }
+  resetWsRuntime()
+  wsUrl = `${wsDomain}?token=${config.token}`
+  webContentsSender = sender
+  needReconnect = true
+  maxReConnectTimes = WS_MAX_RECONNECT_TIMES
+  publishWsStatus({ status: 'connecting', retryLeft: maxReConnectTimes })
+  createWs()
 }
 
 const closeWs = () => {
-    needReconnect = false;
-    resetWsRuntime();
-    publishWsStatus({ status: 'closed' });
+  needReconnect = false
+  resetWsRuntime()
+  publishWsStatus({ status: 'closed' })
+  webContentsSender = null
 }
 
 const handleWsMessage = async (message) => {
-    const messageType = message.messageType;
+  const messageType = message.messageType
 
-    switch (messageType) {
-        case 0: {
-            await flushReceiveQueue();
-            const chatSessionList = (message.extendData?.chatSessionList || []).filter((item) => {
-                return item.contactName !== WS_SYSTEM_CONTACT_FILTER;
-            });
+  switch (messageType) {
+    case 0: {
+      await flushReceiveQueue()
+      const chatSessionList = (message.extendData?.chatSessionList || []).filter((item) => {
+        return item.contactName !== WS_SYSTEM_CONTACT_FILTER
+      })
 
-            await saveOrUpdateChatSessionBatch4Init(chatSessionList);
+      await saveOrUpdateChatSessionBatch4Init(chatSessionList)
 
-            const chatMessageList = message.extendData?.chatMessageList || [];
-            await saveMessageBatch(chatMessageList);
-            await updateNoReadCount(store.getUserId(), message.extendData?.contact?.applyCount || 0);
+      const chatMessageList = message.extendData?.chatMessageList || []
+      await saveMessageBatch(chatMessageList)
+      await updateNoReadCount(store.getUserId(), message.extendData?.contact?.applyCount || 0)
 
-            sendToRenderer('receiveMessage', {
-                messageType: message.messageType
-            });
-            break;
-        }
-
-        case 6: {
-            await flushReceiveQueue();
-            await updateMessageStatus(message.messageId, message.status ?? 1);
-            sendToRenderer('receiveMessage', message);
-            break;
-        }
-
-        default: {
-            enqueueReceiveMessage(message);
-            break;
-        }
+      sendToRenderer('receiveMessage', {
+        messageType: message.messageType
+      })
+      break
     }
+
+    case 6: {
+      await flushReceiveQueue()
+      await updateMessageStatus(message.messageId, message.status ?? 1)
+      sendToRenderer('receiveMessage', message)
+      break
+    }
+
+    default: {
+      enqueueReceiveMessage(message)
+      break
+    }
+  }
 }
 
 const createWs = () => {
-    if (wsUrl == null) {
-        return;
-    }
+  if (wsUrl == null) {
+    return
+  }
 
-    clearHeartbeatTimer();
-    closeCurrentSocket();
+  clearHeartbeatTimer()
+  closeCurrentSocket()
+  try {
+    ws = new WebSocket(wsUrl)
+  } catch (error) {
+    console.error('failed to create WebSocket', error)
+    lockReconnect = false
+    reconnect()
+    return
+  }
+
+  ws.onopen = function () {
+    console.log('WebSocket connected')
+    lockReconnect = false
+    maxReConnectTimes = WS_MAX_RECONNECT_TIMES
+    publishWsStatus({ status: 'connected', retryLeft: maxReConnectTimes })
+    startHeartbeat()
+  }
+
+  ws.onmessage = async function (e) {
+    console.log('received WebSocket message', e.data)
+
+    let message = null
     try {
-        ws = new WebSocket(wsUrl);
+      message = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
     } catch (error) {
-        console.error('failed to create WebSocket', error);
-        lockReconnect = false;
-        reconnect();
-        return;
+      console.error('failed to parse WebSocket message', error)
+      return
     }
 
-    ws.onopen = function () {
-        console.log("WebSocket connected");
-        lockReconnect = false;
-        maxReConnectTimes = WS_MAX_RECONNECT_TIMES;
-        publishWsStatus({ status: 'connected', retryLeft: maxReConnectTimes });
-        startHeartbeat();
+    try {
+      await handleWsMessage(message)
+    } catch (error) {
+      console.error('failed to handle WebSocket message', error)
     }
+  }
 
-    ws.onmessage = async function (e) {
-        console.log('received WebSocket message', e.data);
+  ws.onclose = function () {
+    console.log('WebSocket closed, reconnecting')
+    clearHeartbeatTimer()
+    reconnect()
+  }
 
-        let message = null;
-        try {
-            message = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
-        } catch (error) {
-            console.error('failed to parse WebSocket message', error);
-            return;
-        }
-
-        try {
-            await handleWsMessage(message);
-        } catch (error) {
-            console.error('failed to handle WebSocket message', error);
-        }
-    };
-
-    ws.onclose = function () {
-        console.log("WebSocket closed, reconnecting")
-        clearHeartbeatTimer();
-        reconnect();
-    }
-
-    ws.onerror = function (error) {
-        console.log("WebSocket error, reconnecting")
-        publishWsStatus({ status: 'reconnecting', retryLeft: maxReConnectTimes, error: error?.message || String(error) });
-        clearHeartbeatTimer();
-        reconnect();
-    }
+  ws.onerror = function (error) {
+    console.log('WebSocket error, reconnecting')
+    publishWsStatus({
+      status: 'reconnecting',
+      retryLeft: maxReConnectTimes,
+      error: error?.message || String(error)
+    })
+    clearHeartbeatTimer()
+    reconnect()
+  }
 }
 
 const reconnect = () => {
-    if (!needReconnect) {
-        console.log("WebSocket closed intentionally")
-        return;
-    }
-    if (lockReconnect) {
-        return;
-    }
-    lockReconnect = true;
+  if (!needReconnect) {
+    console.log('WebSocket closed intentionally')
+    return
+  }
+  if (lockReconnect) {
+    return
+  }
+  lockReconnect = true
 
-    closeCurrentSocket();
+  closeCurrentSocket()
 
-    if (maxReConnectTimes > 0) {
-        console.log("prepare reconnect, remaining times: " + maxReConnectTimes, new Date().getTime())
-        publishWsStatus({ status: 'reconnecting', retryLeft: maxReConnectTimes });
-        maxReConnectTimes--;
-        clearReconnectTimer();
-        reconnectTimer = setTimeout(() => {
-            reconnectTimer = null;
-            lockReconnect = false;
-            createWs();
-        }, WS_RECONNECT_DELAY);
-    } else {
-        lockReconnect = false;
-        console.log("WebSocket reconnect timeout")
-        publishWsStatus({ status: 'failed', retryLeft: 0 });
-    }
+  if (maxReConnectTimes > 0) {
+    console.log('prepare reconnect, remaining times: ' + maxReConnectTimes, new Date().getTime())
+    publishWsStatus({ status: 'reconnecting', retryLeft: maxReConnectTimes })
+    maxReConnectTimes--
+    clearReconnectTimer()
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      lockReconnect = false
+      createWs()
+    }, WS_RECONNECT_DELAY)
+  } else {
+    lockReconnect = false
+    console.log('WebSocket reconnect timeout')
+    publishWsStatus({ status: 'failed', retryLeft: 0 })
+  }
 }
 
-export {
-    initWs,
-    closeWs
-}
+export { initWs, closeWs }

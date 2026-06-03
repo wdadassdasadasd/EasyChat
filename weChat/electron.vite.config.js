@@ -16,16 +16,16 @@ export default defineConfig({
       }
     },
     plugins: [vue()],
-    server:{
-      hmr:true,
-      port:5173,
-      proxy:{
-        "/api":{
-          target:"http://localhost:5050",
-          changeOrigin:true,
-         pathRewrite:{
-            "^/api":"/api"
-         }
+    server: {
+      hmr: true,
+      port: 5173,
+      proxy: {
+        '/api': {
+          target: 'http://localhost:5050',
+          changeOrigin: true,
+          pathRewrite: {
+            '^/api': '/api'
+          }
         }
       }
     }

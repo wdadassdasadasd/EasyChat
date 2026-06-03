@@ -26,7 +26,7 @@
 </template>
 
 <script setup>
-import {ref, onMounted} from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 const props=defineProps({
     mode:{
         type:String,
@@ -58,9 +58,24 @@ const emit=defineEmits(['closeCallback'])
 const isMax=ref(false);
 const isTop=ref(false);
 
+let winStateHandler = null;
+
 onMounted(()=>{
     isMax.value=false;
-    
+    // 监听主进程窗口状态变更（如 Win+↑/↓ 快捷键、拖拽标题栏等），保持按钮图标同步。
+    winStateHandler = (_e, payload) => {
+        if (payload && typeof payload.maximized === 'boolean') {
+            isMax.value = payload.maximized;
+        }
+    };
+    window.ipcRenderer.on('winStateChange', winStateHandler);
+})
+
+onUnmounted(() => {
+    if (winStateHandler) {
+        window.ipcRenderer.removeListener('winStateChange', winStateHandler);
+        winStateHandler = null;
+    }
 })
 
 const winOp=(action,data)=>{

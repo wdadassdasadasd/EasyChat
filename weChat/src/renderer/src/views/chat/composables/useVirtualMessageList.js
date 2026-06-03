@@ -24,6 +24,9 @@ export const useVirtualMessageList = (messageList, { estimateHeight = 76, oversc
   // 消息高度缓存：key → 测量高度（px）。shallowRef + version 避免全量 reactive 开销。
   const heightMap = shallowRef(new Map())
   const heightVersion = ref(0)
+  // 增量更新：记录最早被修改高度的索引，accumulatedHeights 只从该位置开始重算前缀和。
+  let heightDirtyFrom = -1
+  let prevAcc = []
 
   const scrollTop = ref(0)
   const viewportHeight = ref(0)
@@ -36,8 +39,12 @@ export const useVirtualMessageList = (messageList, { estimateHeight = 76, oversc
   const setMessageHeight = (message, index, height) => {
     const key = getMessageKey(message, index)
     const map = heightMap.value
-    if (map.get(key) !== height) {
+    const prev = map.get(key)
+    if (prev !== height) {
       map.set(key, height)
+      if (heightDirtyFrom < 0 || index < heightDirtyFrom) {
+        heightDirtyFrom = index
+      }
       notifyHeightChange()
     }
   }
@@ -51,15 +58,31 @@ export const useVirtualMessageList = (messageList, { estimateHeight = 76, oversc
   }
 
   // 累积高度数组：acc[i] = 前 i 条消息的虚拟高度（acc[0] = 0）。
+  // 通过 heightDirtyFrom 实现增量更新，避免每次测量都 O(N) 全量重算。
   const accumulatedHeights = computed(() => {
     void heightVersion.value // 消费版本号以触发重新计算
     const list = messageList.value
-    const acc = new Array(list.length + 1)
-    acc[0] = 0
-    for (let i = 0; i < list.length; i++) {
-      acc[i + 1] = acc[i] + getHeight(i)
+    const n = list.length
+
+    if (prevAcc.length !== n + 1 || heightDirtyFrom < 0) {
+      // 消息数量变化或未跟踪到脏索引时全量重算。
+      const acc = new Array(n + 1)
+      acc[0] = 0
+      for (let i = 0; i < n; i++) {
+        acc[i + 1] = acc[i] + getHeight(i)
+      }
+      prevAcc = acc
+      heightDirtyFrom = -1
+      return acc
     }
-    return acc
+
+    // 增量更新：从最早的脏索引处开始重算，之前的前缀和直接复用。
+    const start = Math.max(0, heightDirtyFrom)
+    for (let i = start; i < n; i++) {
+      prevAcc[i + 1] = prevAcc[i] + getHeight(i)
+    }
+    heightDirtyFrom = -1
+    return prevAcc
   })
 
   const totalHeight = computed(() => {

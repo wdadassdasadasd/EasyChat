@@ -31,7 +31,7 @@
         </div>
         <div class="right-container">
             <router-view v-slot="{Component}">
-                <keep-alive include="chat">
+                <keep-alive include="Chat">
                     <component :is="Component" ref="componentRef"></component>
                 </keep-alive>
             </router-view>

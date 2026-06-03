@@ -18,7 +18,9 @@ export const useChatMessages = ({
   const messageLoadingMore = ref(false)
   const messageIdSet = new Set()
   // 首屏加载需要自动贴底；向上翻页则要保持用户当前阅读位置。
+  // 使用 loadSeq 绑定，防止快速切换会话时旧回包错误消费贴底标志。
   let shouldScrollToBottomAfterLoad = false
+  let shouldScrollToBottomLoadSeq = null
   let pendingPrependScrollState = null
 
   const {
@@ -203,6 +205,8 @@ export const useChatMessages = ({
     messageIdSet.clear()
     messageLoadingMore.value = false
     pendingPrependScrollState = null
+    shouldScrollToBottomAfterLoad = false
+    shouldScrollToBottomLoadSeq = null
     resetMessageCountInfo()
     messageCountInfo.noData = true
     resetVirtualHeightMap()
@@ -267,15 +271,16 @@ export const useChatMessages = ({
       messageCountInfo.noData = true
       return false
     }
+    // loadSeq 用来识别过期分页回包，防止快速切换会话时旧回包写入新会话。
+    const loadSeq = getActiveMessageLoadSeq()
     if (keepScrollPosition) {
       pendingPrependScrollState = capturePrependScrollState()
       messageLoadingMore.value = true
     }
-    // loadSeq 用来识别过期分页回包，防止快速切换会话时旧回包写入新会话。
     window.ipcRenderer.send('loadChatMessage', {
       sessionId: currentChatSession.value.sessionId,
       beforeMessageId,
-      loadSeq: getActiveMessageLoadSeq()
+      loadSeq
     })
     return true
   }
@@ -299,6 +304,7 @@ export const useChatMessages = ({
         resetMessageCountInfo()
         resetVirtualHeightMap()
         shouldScrollToBottomAfterLoad = true
+        shouldScrollToBottomLoadSeq = getActiveMessageLoadSeq()
         loadChatMessage()
       }
       return
@@ -315,6 +321,7 @@ export const useChatMessages = ({
     resetMessageCountInfo()
     resetVirtualHeightMap()
     shouldScrollToBottomAfterLoad = true
+    shouldScrollToBottomLoadSeq = getActiveMessageLoadSeq()
     loadChatMessage()
   }
 
@@ -333,6 +340,7 @@ export const useChatMessages = ({
     if (isExpiredLoad || isWrongSession) {
       messageLoadingMore.value = false
       pendingPrependScrollState = null
+      // 仅过期回包不清除贴底标志，让当前活跃请求的 loadSeq 负责消费。
       return
     }
     const loadedMessages = Array.isArray(dataList) ? dataList : []
@@ -357,8 +365,9 @@ export const useChatMessages = ({
       messageCountInfo.noData = true
     }
     prependMessagesIfMissing(loadedMessages)
-    if (shouldScrollToBottomAfterLoad) {
+    if (shouldScrollToBottomAfterLoad && shouldScrollToBottomLoadSeq === loadSeq) {
       shouldScrollToBottomAfterLoad = false
+      shouldScrollToBottomLoadSeq = null
       showMessagePanelAtBottom(getMessagePanelRenderSeq())
     } else if (messageLoadingMore.value) {
       await restorePrependScrollPosition()
@@ -511,6 +520,8 @@ export const useChatMessages = ({
     cleanupMessageScroll()
     messageLoadingMore.value = false
     pendingPrependScrollState = null
+    shouldScrollToBottomAfterLoad = false
+    shouldScrollToBottomLoadSeq = null
     messageIdSet.clear()
     messageList.value.forEach((message) => {
       if (message.localPreviewUrl) {

@@ -31,10 +31,11 @@
 
 <script setup>
 import { ref, computed, getCurrentInstance } from 'vue';
+import { useRouter } from 'vue-router';
 import { useUserInfoStore } from '@/stores/UserInfoStore';
 import SearchAdd from './SearchAdd.vue';
 
-
+const router = useRouter();
 const { proxy } = getCurrentInstance();
 const userInfoStore = useUserInfoStore();
 const contactId = ref('');
@@ -78,7 +79,20 @@ const search = async () => {
 }
 
 const sendMessage = () => {
-    proxy.Message.info('发消息功能开发中');
+  if (!searchResult.value) return
+
+  const contact = searchResult.value
+  const contactId = contact.contactId
+  const contactType = contact.contactType === 'USER' ? 'USER' : 'GROUP'
+
+  router.push({
+    path: '/chat',
+    query: {
+      chatId: contactId,
+      type: contactType,
+      contactName: contact.contactName || contact.nickName || contact.groupName || contactId
+    }
+  })
 }
 
 const searchAddRef = ref();

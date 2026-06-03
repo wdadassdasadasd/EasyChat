@@ -18,7 +18,7 @@ const router = createRouter({
       redirect: '/chat',
       name: '主页面',
       component: () => import('@/views/Main.vue'),
-      children:[
+      children: [
         {
           path: '/chat',
           name: '聊天',
@@ -33,33 +33,33 @@ const router = createRouter({
             {
               path: '/contact/Blank',
               name: '空白页',
-              component: () => import('@/views/contact/BlankPage.vue'),
+              component: () => import('@/views/contact/BlankPage.vue')
             },
             {
               path: '/contact/search',
               name: '搜好友',
-              component: () => import('@/views/contact/Search.vue'),
+              component: () => import('@/views/contact/Search.vue')
             },
             {
               path: '/contact/contactNotice',
               name: '新的朋友',
-              component: () => import('@/views/contact/ContactApply.vue'),
+              component: () => import('@/views/contact/ContactApply.vue')
             },
             {
               path: '/contact/createGroup',
               name: '新建群聊',
-              component: () => import('@/views/contact/GroupEditForm.vue'),
+              component: () => import('@/views/contact/GroupEditForm.vue')
             },
             {
               path: '/contact/groupDetail',
               name: '群组详情',
-              component: () => import('@/views/contact/GroupDetail.vue'),
+              component: () => import('@/views/contact/GroupDetail.vue')
             },
             {
               path: '/contact/userDetail',
               name: '好友详情',
-              component: () => import('@/views/contact/UserDetail.vue'),
-            },
+              component: () => import('@/views/contact/UserDetail.vue')
+            }
           ]
         },
         {
@@ -67,24 +67,24 @@ const router = createRouter({
           redirect: '/setting/userinfo',
           name: '设置',
           component: () => import('@/views/setting/Setting.vue'),
-          children:[
+          children: [
             {
-            path:'/setting/userinfo',
-            name:'个人信息',
-            component:()=>import('@/views/setting/UserInfo.vue'),
-          },
+              path: '/setting/userinfo',
+              name: '个人信息',
+              component: () => import('@/views/setting/UserInfo.vue')
+            },
             {
-            path:'/setting/fileManage',
-            name:'文件管理',
-            component:()=>import('@/views/setting/FileManage.vue'),
-          },
-          {
-            path:'/setting/about',
-            name:'关于',
-            component:()=>import('@/views/setting/About.vue'),
-          }
-        ]
-        },
+              path: '/setting/fileManage',
+              name: '文件管理',
+              component: () => import('@/views/setting/FileManage.vue')
+            },
+            {
+              path: '/setting/about',
+              name: '关于',
+              component: () => import('@/views/setting/About.vue')
+            }
+          ]
+        }
       ]
     }
   ]

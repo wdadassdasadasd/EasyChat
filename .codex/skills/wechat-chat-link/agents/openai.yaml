@@ -1,0 +1,4 @@
+interface:
+  display_name: "WeChat Chat Link"
+  short_description: "Trace and fix chat message flow"
+  default_prompt: "Use $wechat-chat-link to diagnose and fix an end-to-end chat flow issue in the weChat project."

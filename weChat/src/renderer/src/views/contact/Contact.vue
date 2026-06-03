@@ -150,38 +150,63 @@ const partJump = (data) => {
     Router.push(data.path);
   
 };
-const loadContact=async(contactType)=>{
-    let result=await proxy.Request({
-        url:proxy.Api.loadContact,
-        params:{
-            contactType
-        }
-    });
-    if(!result){
-        return;
+let contactLoading = false;
+
+const loadContact = async (contactType) => {
+  try {
+    const result = await proxy.Request({
+      url: proxy.Api.loadContact,
+      params: {
+        contactType
+      }
+    })
+    if (!result) {
+      return false
     }
-    if(contactType=='GROUP'){
-        partList.value[2].contactData=result.data;
-        
+    if (contactType == 'GROUP') {
+      partList.value[2].contactData = result.data
+    } else if (contactType == 'USER') {
+      partList.value[3].contactData = result.data
     }
-    else if(contactType=='USER'){
-        partList.value[3].contactData=result.data;
-    }
+    return true
+  } catch (e) {
+    console.error('loadContact failed:', contactType, e)
+    return false
+  }
 }
 
-loadContact('USER');
-loadContact('GROUP');
-
-const loadMyGroup=async()=>{
-    let result=await proxy.Request({
-        url:proxy.Api.loadMyGroup,
-    });
-    if(!result){
-        return;
+const loadMyGroup = async () => {
+  try {
+    const result = await proxy.Request({
+      url: proxy.Api.loadMyGroup
+    })
+    if (!result) {
+      return false
     }
-    partList.value[1].contactData=result.data;
+    partList.value[1].contactData = result.data
+    return true
+  } catch (e) {
+    console.error('loadMyGroup failed:', e)
+    return false
+  }
 }
-loadMyGroup();
+
+const loadAllContacts = async () => {
+  if (contactLoading) return
+  contactLoading = true
+  const results = await Promise.allSettled([
+    loadContact('USER'),
+    loadContact('GROUP'),
+    loadMyGroup()
+  ])
+  contactLoading = false
+
+  const failed = results.filter((r) => r.status === 'rejected' || r.value === false).length
+  if (failed > 0 && failed === results.length) {
+    proxy.Message.error('联系人加载失败，请检查网络后刷新')
+  }
+}
+loadAllContacts()
 
 const contactDetail=(contact,part)=>{
     const contactId = contact[part.contactId];
@@ -206,40 +231,34 @@ const isCurrentContact = (contact, part) => {
     return isSameRoute(part.contactPath, { contactId: contact[part.contactId] });
 };
 
-//监听 Pinia Store 的状态变化，自动刷新联系人列表
-watch(()=>
-    contactStateStore.contactReload,
-    (newVal)=>{
-        if(!newVal) return;
-         switch(newVal){
-        case 'MY_GROUP':
-                loadMyGroup();
-                break;
-        case 'USER':
-            loadContact('USER');
-            break;
-        case 'GROUP':
-            loadContact('GROUP');
-            break;
-        case 'REMOVE_USER':
-            loadContact('USER');
-            Router.push('/contact/Blank');
-            rightTitle.value=null;
-            break;
-        case 'DISSOLUTION_GROUP':
-            loadContact('GROUP');
-            Router.push('/contact/Blank');
-            rightTitle.value=null;
-            break;
-        case 'LEAVE_GROUP':
-            loadContact('GROUP');
-            Router.push('/contact/Blank');
-            rightTitle.value=null;
-            break;
-     }
-    },
-   
-    {immediate:true,deep:true}
+watch(
+  () => contactStateStore.contactReload,
+  (newVal) => {
+    if (!newVal) return
+    switch (newVal) {
+      case 'MY_GROUP':
+        loadMyGroup()
+        break
+      case 'USER':
+        loadContact('USER')
+        break
+      case 'GROUP':
+        loadContact('GROUP')
+        break
+      case 'REMOVE_USER':
+        loadContact('USER')
+        Router.push('/contact/Blank')
+        rightTitle.value = null
+        break
+      case 'DISSOLUTION_GROUP':
+      case 'LEAVE_GROUP':
+        loadContact('GROUP')
+        Router.push('/contact/Blank')
+        rightTitle.value = null
+        break
+    }
+  },
+  { immediate: false }
 )
 </script>
 

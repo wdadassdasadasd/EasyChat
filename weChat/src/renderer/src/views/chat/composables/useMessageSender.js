@@ -817,16 +817,16 @@ export const useChatMessageSender = ({
       return
     }
 
-    sendChatMessage(
-      {
-        contactId: message.contactId,
-        contactType: message.contactType,
-        messageContent: message.messageContent
-      },
-      message
-    ).catch((error) => {
-      console.error('retry text message failed', error)
-    })
+    enqueueSendTask(() =>
+      sendChatMessage(
+        {
+          contactId: message.contactId,
+          contactType: message.contactType,
+          messageContent: message.messageContent
+        },
+        message
+      )
+    )
   }
 
   return {
