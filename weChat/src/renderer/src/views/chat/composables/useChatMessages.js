@@ -4,9 +4,11 @@ import { useMessageScroll } from './useMessageScroll';
 
 export const useChatMessages = ({
     currentChatSession,
+    currentUserId,
     loadChatSession,
     markSessionRead,
     messageListRef,
+    patchChatSessions,
     proxy
 }) => {
     const messageCountInfo = {
@@ -17,6 +19,7 @@ export const useChatMessages = ({
     };
     const messageList = ref([]);
     const messageLoadingMore = ref(false);
+    const messageIdSet = new Set();
     // 首屏加载需要自动贴底；向上翻页则要保持用户当前阅读位置。
     let shouldScrollToBottomAfterLoad = false;
     let pendingPrependScrollState = null;
@@ -58,10 +61,44 @@ export const useChatMessages = ({
         messageCountInfo.noData = false;
     };
 
+    const getReceiveContactId = (message = {}) => {
+        if (message.contactType == 1) {
+            return message.contactId;
+        }
+        return message.sendUserId == currentUserId?.value
+            ? message.contactId
+            : message.sendUserId;
+    };
+
+    const rebuildMessageIdSet = () => {
+        messageIdSet.clear();
+        messageList.value.forEach((message) => {
+            if (message.messageId != null) {
+                messageIdSet.add(String(message.messageId));
+            }
+        });
+    };
+
+    const appendMessageIfMissing = (message) => {
+        if (!message) {
+            return false;
+        }
+        const messageId = message.messageId != null ? String(message.messageId) : '';
+        if (messageId && messageIdSet.has(messageId)) {
+            return false;
+        }
+        messageList.value.push(message);
+        if (messageId) {
+            messageIdSet.add(messageId);
+        }
+        return true;
+    };
+
     const clearCurrentMessages = () => {
         // 清空当前会话后主动标记无更多数据，避免滚动到顶部又触发旧消息分页加载。
         startMessagePanelRender();
         messageList.value = [];
+        messageIdSet.clear();
         messageLoadingMore.value = false;
         pendingPrependScrollState = null;
         resetMessageCountInfo();
@@ -137,6 +174,7 @@ export const useChatMessages = ({
             currentChatSession.value = Object.assign({}, currentChatSession.value, item);
             if (shouldLoadMessages) {
                 messageList.value = [];
+                messageIdSet.clear();
                 messageLoadingMore.value = false;
                 pendingPrependScrollState = null;
                 resetMessageCountInfo();
@@ -150,6 +188,7 @@ export const useChatMessages = ({
         startMessagePanelRender();
         currentChatSession.value = Object.assign({}, item);
         messageList.value = [];
+        messageIdSet.clear();
         messageLoadingMore.value = false;
         pendingPrependScrollState = null;
         resetMessageCountInfo();
@@ -175,6 +214,7 @@ export const useChatMessages = ({
                 return a.messageId - b.messageId;
             });
             messageList.value = loadedMessages.concat(messageList.value);
+            rebuildMessageIdSet();
             messageCountInfo.pageNo = pageNo;
             messageCountInfo.totalPage = pageTotal;
             if (pageNo == 1) {
@@ -189,6 +229,45 @@ export const useChatMessages = ({
             }
             messageLoadingMore.value = false;
         });
+    };
+
+    const handleReceiveMessages = (messages = [], sessions = []) => {
+        const readContactIds = new Set();
+        let appended = false;
+        const shouldStickToBottom = isNearMessageBottom();
+
+        messages.forEach((message) => {
+            if (message.messageType == 6) {
+                handleFileUploadDone(message);
+                return;
+            }
+
+            const receiveContactId = getReceiveContactId(message);
+            const isCurrentSession = message.sessionId == currentChatSession.value.sessionId ||
+                receiveContactId == currentChatSession.value.contactId;
+            if (!isCurrentSession) {
+                return;
+            }
+
+            readContactIds.add(receiveContactId);
+            appended = appendMessageIfMissing(message) || appended;
+        });
+
+        readContactIds.forEach((contactId) => {
+            markSessionRead?.(contactId);
+        });
+
+        if (typeof patchChatSessions === 'function') {
+            patchChatSessions(sessions, {
+                readContactIds: Array.from(readContactIds)
+            });
+        } else {
+            loadChatSession();
+        }
+
+        if (appended) {
+            scrollMessageToBottom({ force: shouldStickToBottom });
+        }
     };
 
     const onReceiveMessage = () => {
@@ -207,16 +286,16 @@ export const useChatMessages = ({
                 handleFileUploadDone(message);
                 return;
             }
-            const receiveContactId = message.contactType == 1 ? message.contactId : message.sendUserId;
+            const receiveContactId = getReceiveContactId(message);
             const isCurrentSession = message.sessionId == currentChatSession.value.sessionId ||
                 receiveContactId == currentChatSession.value.contactId;
             if (isCurrentSession) {
                 // 当前会话收到消息时直接追加到内存列表，并按用户是否靠近底部决定是否自动滚动。
                 markSessionRead?.(receiveContactId);
-                const exists = messageList.value.some((item) => item.messageId == message.messageId);
+                const exists = message.messageId != null && messageIdSet.has(String(message.messageId));
                 if (!exists) {
                     const shouldStickToBottom = isNearMessageBottom();
-                    messageList.value.push(message);
+                    appendMessageIfMissing(message);
                     scrollMessageToBottom({ force: shouldStickToBottom });
                 }
             }
@@ -224,13 +303,23 @@ export const useChatMessages = ({
         });
     };
 
+    const onReceiveMessageBatch = () => {
+        window.ipcRenderer.on('receiveMessageBatch', (e, payload = {}) => {
+            const messages = Array.isArray(payload.messages) ? payload.messages : [];
+            const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+            handleReceiveMessages(messages, sessions);
+        });
+    };
+
     const registerMessageListeners = () => {
         onReceiveMessage();
+        onReceiveMessageBatch();
         onLoadChatMessage();
     };
 
     const removeMessageListeners = () => {
         window.ipcRenderer.removeAllListeners('receiveMessage');
+        window.ipcRenderer.removeAllListeners('receiveMessageBatch');
         window.ipcRenderer.removeAllListeners('loadChatMessageCallback');
     };
 
@@ -239,6 +328,7 @@ export const useChatMessages = ({
         cleanupMessageScroll();
         messageLoadingMore.value = false;
         pendingPrependScrollState = null;
+        messageIdSet.clear();
         messageList.value.forEach((message) => {
             if (message.localPreviewUrl) {
                 URL.revokeObjectURL(message.localPreviewUrl);

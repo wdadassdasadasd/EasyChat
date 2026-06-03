@@ -122,7 +122,49 @@ const onResetToLogin=(_mainWindow, callback)=>{
 
 
 //保存发送的消息到本地，并更新会话
+const saveSendMessageToLocal = async ({ message, chatSession } = {}) => {
+    if (!message) {
+        return {
+            success: false,
+            error: 'message is empty'
+        };
+    }
+
+    await saveMessage(message);
+
+    const sessionInfo = {
+        contactId: chatSession?.contactId || message.contactId,
+        contactType: chatSession?.contactType ?? message.contactType,
+        sessionId: message.sessionId || chatSession?.sessionId,
+        status: 1,
+        contactName: chatSession?.contactName || message.contactName,
+        lastMessage: message.messageContent,
+        lastReceiveTime: message.sendTime || Date.now(),
+        memberCount: chatSession?.memberCount,
+        noReadCount: 0
+    };
+
+    await saveOrUpdateChatSessionBatch4Init([sessionInfo]);
+
+    return {
+        success: true,
+        messageId: message.messageId,
+        session: sessionInfo
+    };
+};
+
 const onSaveSendMessage = () => {
+    ipcMain.handle('saveSendMessage', async (_e, payload) => {
+        try {
+            return await saveSendMessageToLocal(payload);
+        } catch (error) {
+            return {
+                success: false,
+                error: error?.message || String(error)
+            };
+        }
+    });
+
     ipcMain.on('saveSendMessage', async (e, { message, chatSession }) => {
         if (!message) {
             return;

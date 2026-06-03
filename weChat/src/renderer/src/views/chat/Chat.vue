@@ -171,6 +171,10 @@ const messageListRef = ref(null);
 
 const search = () => {};
 
+const currentUserId = computed(() => {
+    return userInfoStore.getInfo()?.userId;
+});
+
 // 会话链路负责：加载/排序会话、响应路由打开聊天、处理置顶/删除/已读等主进程 IPC。
 const {
     chatSessionList,
@@ -181,6 +185,7 @@ const {
     markSessionRead,
     onContextmenu,
     openChatFromRoute,
+    patchChatSessions,
     registerSessionListener,
     removeSessionListener,
     setChatSessionTop,
@@ -207,9 +212,11 @@ const {
     settleScrollToBottom
 } = useChatMessages({
     currentChatSession,
+    currentUserId,
     loadChatSession,
     markSessionRead,
     messageListRef,
+    patchChatSessions,
     proxy
 });
 
@@ -233,10 +240,6 @@ const {
     videoPlaybackError,
     videoPreviewUrl
 } = useFileTransfer({ proxy });
-
-const currentUserId = computed(() => {
-    return userInfoStore.getInfo()?.userId;
-});
 
 const totalUnreadCount = computed(() => {
     return chatSessionList.value.reduce((total, item) => {
@@ -301,14 +304,16 @@ const handleClearMessages = () => {
 
 setSessionSelector(chatSessionClickHandler);
 
+
 onMounted(() => {
     // 挂载时先注册 IPC 监听，再触发会话加载和路由打开，避免回调早于监听导致首屏丢消息。
-    registerMessageListeners();
-    registerSessionListener();
-    loadChatSession();
-    openChatFromRoute();
+    registerMessageListeners();//消息监听
+    registerSessionListener();//会话监听
+    loadChatSession();//会话加载
+    openChatFromRoute();//路由跳转
 });
 
+//处理其它页面跳转聊天
 watch(
     () => [route.query.type, route.query.chatId],
     () => {

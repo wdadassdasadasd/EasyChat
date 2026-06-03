@@ -55,6 +55,9 @@ if(!fs.existsSync(flieFolder)){
 }
 
 const db=new sqlite3.Database(flieFolder+'local.db')  // 创建/连接SQLite数据库文件
+if (typeof db.configure === 'function') {
+    db.configure('busyTimeout', 5000)
+}
 
 const runRawSql = (sql) => {
     return new Promise((resolve) => {
@@ -164,6 +167,28 @@ const run=(sql,params)=>{
 }
 
 //数据库对象转业务对象
+const runInTransaction=async(callback)=>{
+    await run('begin immediate transaction', [])
+    try {
+        const result = await callback()
+        await run('commit', [])
+        return result
+    } catch (error) {
+        await run('rollback', [])
+        throw error
+    }
+}
+
+const runPragma=()=>{
+    return new Promise((resolve) => {
+        db.run('PRAGMA journal_mode=WAL', () => {
+            db.run('PRAGMA busy_timeout=5000', () => {
+                resolve()
+            })
+        })
+    })
+}
+
 const convertDbObj2BizObj=(data)=>{
     if(!data){
         return null;
@@ -240,6 +265,7 @@ const update=(tableName,data,paramData)=>{
 }
 const init=()=>{
     db.serialize(async()=>{
+        await runPragma();
         await createTable(); 
 
     })
@@ -253,6 +279,7 @@ export {
     queryOne,
     queryCount,
     run,
+    runInTransaction,
     insert,
     update
 }

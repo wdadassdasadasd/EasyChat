@@ -370,6 +370,46 @@ export const useChatMessageSender = ({
     // 发送任务串行化，避免连续回车或批量媒体上传时服务端消息顺序和本地列表顺序错乱。
     let sendTaskQueue = Promise.resolve();
 
+    const maxUploadConcurrency = 3;
+    const uploadTaskQueue = [];
+    let activeUploadCount = 0;
+
+    const runNextUploadTask = () => {
+        if (activeUploadCount >= maxUploadConcurrency || uploadTaskQueue.length === 0) {
+            return;
+        }
+
+        const task = uploadTaskQueue.shift();
+        activeUploadCount += 1;
+        task()
+            .catch((error) => {
+                console.error('upload message file failed', error);
+            })
+            .finally(() => {
+                activeUploadCount -= 1;
+                runNextUploadTask();
+            });
+    };
+
+    const enqueueUploadTask = (task) => {
+        uploadTaskQueue.push(task);
+        runNextUploadTask();
+    };
+
+    const saveSendMessageToLocal = async (payload) => {
+        const ipcRenderer = window.ipcRenderer || window.electron?.ipcRenderer;
+        if (ipcRenderer?.invoke) {
+            return await ipcRenderer.invoke('saveSendMessage', payload);
+        }
+
+        return await new Promise((resolve) => {
+            ipcRenderer.once('saveSendMessageCallback', (e, result) => {
+                resolve(result);
+            });
+            ipcRenderer.send('saveSendMessage', payload);
+        });
+    };
+
     const enqueueSendTask = (task) => {
         sendTaskQueue = sendTaskQueue
             .catch(() => {})
@@ -421,10 +461,14 @@ export const useChatMessageSender = ({
         if (message?.messageContent) {
             appendMessageIfMissing(message);
 
-            window.ipcRenderer.send('saveSendMessage', {
+            const saveResult = await saveSendMessageToLocal({
                 message,
                 chatSession: { ...toRaw(currentChatSession.value) }
             });
+            if (!saveResult?.success) {
+                proxy.Message.error('消息保存失败');
+                return;
+            }
         }
 
         loadChatSession();
@@ -446,13 +490,22 @@ export const useChatMessageSender = ({
         if (!uploadResult) {
             message.uploading = false;
             message.status = 0;
+            await saveSendMessageToLocal({
+                message: {
+                    ...message,
+                    localPreviewUrl: undefined,
+                    uploading: undefined
+                },
+                chatSession: { ...toRaw(currentChatSession.value) }
+            });
+            loadChatSession();
             return;
         }
 
         message.uploading = false;
         message.status = 1;
 
-        window.ipcRenderer.send('saveSendMessage', {
+        await saveSendMessageToLocal({
             message: {
                 ...message,
                 localPreviewUrl: undefined,
@@ -508,7 +561,7 @@ export const useChatMessageSender = ({
         messageList.value.push(message);
         scrollMessageToBottom({ force: shouldStickToBottom });
 
-        uploadMessageFile(message, file, cover);
+        enqueueUploadTask(() => uploadMessageFile(message, file, cover));
     };
 
     const sendImageMessage = (payload) => {

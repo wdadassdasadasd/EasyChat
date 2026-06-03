@@ -4,6 +4,7 @@ import {
     queryAll,
     queryOne,
     queryCount,
+    runInTransaction,
     run,
     update
 
@@ -102,6 +103,9 @@ const saveMessage=async (data)=>{
 
 
 const saveMessageBatch=async(chatMeassageList)=>{
+        if (!Array.isArray(chatMeassageList) || chatMeassageList.length === 0) {
+            return 0;
+        }
         // 批量保存前先过滤被清空游标覆盖的消息，再统计真正可见的新未读数。
         const visibleMessageList = [];
         for (let item of chatMeassageList) {
@@ -110,6 +114,11 @@ const saveMessageBatch=async(chatMeassageList)=>{
             }
         }
 
+        if (visibleMessageList.length === 0) {
+            return 0;
+        }
+
+        return runInTransaction(async () => {
         const chatSessionCountMap={}
         visibleMessageList.forEach((item)=>{
             if(item.sendUserId==store.getUserId()){
@@ -132,9 +141,12 @@ const saveMessageBatch=async(chatMeassageList)=>{
 
         //批量插入
         for(let item of visibleMessageList){
-            await saveMessage(item);
+            item.userId=store.getUserId();
+            await insertOrReplace("chat_message",item);
 
         }
+        return visibleMessageList.length;
+        });
 }
 
 const updateMessageStatus=(messageId,status=1)=>{

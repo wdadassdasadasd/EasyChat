@@ -218,6 +218,44 @@ export const useChatSessions = ({ proxy, route }) => {
         sortChatSessionList(chatSessionList.value);
     };
 
+    const patchChatSessions = (sessions = [], { readContactIds = [] } = {}) => {
+        const readContactIdSet = new Set(readContactIds.map((item) => String(item)));
+        const sessionList = Array.isArray(sessions) ? sessions : [];
+
+        sessionList.forEach((rawSession = {}) => {
+            if (!rawSession.contactId) {
+                return;
+            }
+
+            const { noReadCountDelta = 0, ...sessionInfo } = rawSession;
+            const contactId = String(sessionInfo.contactId);
+            const index = chatSessionList.value.findIndex((item) => {
+                return String(item.contactId) === contactId;
+            });
+            const previous = index >= 0 ? chatSessionList.value[index] : {};
+            const nextSession = Object.assign({}, previous, sessionInfo, {
+                status: sessionInfo.status ?? previous.status ?? 1
+            });
+
+            if (readContactIdSet.has(contactId)) {
+                nextSession.noReadCount = 0;
+            } else if (Number(noReadCountDelta) > 0) {
+                nextSession.noReadCount = Number(previous.noReadCount || 0) + Number(noReadCountDelta);
+            } else if (sessionInfo.noReadCount == null && previous.noReadCount != null) {
+                nextSession.noReadCount = previous.noReadCount;
+            }
+
+            if (index >= 0) {
+                chatSessionList.value[index] = nextSession;
+            } else {
+                chatSessionList.value.unshift(nextSession);
+            }
+            syncCurrentSession(nextSession);
+        });
+
+        sortChatSessionList(chatSessionList.value);
+    };
+
     const markSessionRead = (contactId) => {
         if (!contactId) {
             return;
@@ -282,6 +320,7 @@ export const useChatSessions = ({ proxy, route }) => {
         markSessionRead,
         onContextmenu,
         openChatFromRoute,
+        patchChatSessions,
         registerSessionListener,
         removeSessionListener,
         setChatSessionTop,
