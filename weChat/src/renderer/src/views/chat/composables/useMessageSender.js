@@ -360,6 +360,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
 };
 
 export const useChatMessageSender = ({
+    appendMessageIfMissing,
     currentChatSession,
     isNearMessageBottom,
     loadChatSession,
@@ -421,19 +422,19 @@ export const useChatMessageSender = ({
         return sendTaskQueue;
     };
 
-    const appendMessageIfMissing = (message) => {
-        // 服务端可能通过 WebSocket 回推同一条消息，追加前先按 messageId 去重。
-        const exists = message.messageId
-            ? messageList.value.some((item) => {
-                return item.messageId == message.messageId;
-            })
-            : false;
+    const appendSentMessageIfMissing = (message) => {
+        const shouldStickToBottom = isNearMessageBottom();
+        const appended = typeof appendMessageIfMissing === 'function'
+            ? appendMessageIfMissing(message)
+            : (() => {
+                messageList.value.push(message);
+                return true;
+            })();
 
-        if (!exists) {
-            const shouldStickToBottom = isNearMessageBottom();
-            messageList.value.push(message);
+        if (appended) {
             scrollMessageToBottom({ force: shouldStickToBottom });
         }
+        return appended;
     };
 
     const sendChatMessage = async ({ contactId, contactType, messageContent }) => {
@@ -459,7 +460,7 @@ export const useChatMessageSender = ({
 
         const message = result.data;
         if (message?.messageContent) {
-            appendMessageIfMissing(message);
+            appendSentMessageIfMissing(message);
 
             const saveResult = await saveSendMessageToLocal({
                 message,
@@ -557,9 +558,7 @@ export const useChatMessageSender = ({
             message.localPreviewUrl = URL.createObjectURL(file);
         }
         message.uploading = true;
-        const shouldStickToBottom = isNearMessageBottom();
-        messageList.value.push(message);
-        scrollMessageToBottom({ force: shouldStickToBottom });
+        appendSentMessageIfMissing(message);
 
         enqueueUploadTask(() => uploadMessageFile(message, file, cover));
     };

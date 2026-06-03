@@ -1,19 +1,16 @@
 import store from '../store';
 import {
     insertOrReplace,
+    insertOrReplaceStrict,
     queryAll,
     queryOne,
-    queryCount,
     runInTransaction,
+    runStrict,
     run,
     update
-
 } from './ADB';
-import { updateNoReadCount } from './ChatSessionUserModel';
-
 
 const getClearInfoBySessionId = (sessionId) => {
-    // 清空聊天记录不只删除现有消息，还保存清空游标用于过滤之后补回来的旧消息。
     if (!sessionId) {
         return Promise.resolve(null);
     }
@@ -37,7 +34,6 @@ const saveClearInfoBySessionId = async (sessionId, clearMessageId) => {
         return 0;
     }
 
-    // 多次清空取更大的 messageId/time，避免旧清空游标覆盖新清空范围。
     const previousClearInfo = await getClearInfoBySessionId(sessionId);
     const nextClearMessageId = Math.max(Number(previousClearInfo?.clearMessageId || 0), Number(clearMessageId || 0));
     const nextClearTime = Math.max(Number(previousClearInfo?.clearTime || 0), Date.now());
@@ -51,7 +47,6 @@ const saveClearInfoBySessionId = async (sessionId, clearMessageId) => {
 };
 
 const isMessageBeforeClear = async (message = {}) => {
-    // WebSocket 初始化或历史补偿可能带来已清空前的消息，落库前统一拦截。
     const sessionId = message.sessionId;
     if (!sessionId) {
         return false;
@@ -73,8 +68,56 @@ const isMessageBeforeClear = async (message = {}) => {
     return clearTime > 0 && sendTime > 0 && sendTime <= clearTime;
 };
 
+const filterVisibleMessages = async (messageList = []) => {
+    const visibleMessageList = [];
+    if (!Array.isArray(messageList)) {
+        return visibleMessageList;
+    }
+
+    for (let item of messageList) {
+        if (!(await isMessageBeforeClear(item))) {
+            visibleMessageList.push(item);
+        }
+    }
+
+    return visibleMessageList;
+};
+
+const messageExists = async (messageId) => {
+    if (!messageId) {
+        return false;
+    }
+
+    const sql = 'select message_id from chat_message where user_id=? and message_id=? limit 1';
+    const result = await queryOne(sql, [store.getUserId(), messageId]);
+    return Boolean(result);
+};
+
+const filterNewMessages = async (messageList = []) => {
+    const newMessageList = [];
+    const messageIdSet = new Set();
+    if (!Array.isArray(messageList)) {
+        return newMessageList;
+    }
+
+    for (let item of messageList) {
+        const messageId = item?.messageId;
+        if (!messageId) {
+            newMessageList.push(item);
+            continue;
+        }
+        const messageKey = String(messageId);
+        if (messageIdSet.has(messageKey) || await messageExists(messageId)) {
+            continue;
+        }
+        messageIdSet.add(messageKey);
+        newMessageList.push(item);
+    }
+
+    return newMessageList;
+};
+
 const appendClearFilter = (sqlParts, params, clearInfo) => {
-    // 查询历史/搜索时也要套清空过滤，保证 UI 与落库过滤规则一致。
     const clearMessageId = Number(clearInfo?.clearMessageId || 0);
     const clearTime = Number(clearInfo?.clearTime || 0);
 
@@ -90,137 +133,149 @@ const appendClearFilter = (sqlParts, params, clearInfo) => {
     }
 };
 
-const saveMessage=async (data)=>{
+const incrementNoReadCountStrict = ({ contactId, noReadCount }) => {
+    if (!contactId || !noReadCount) {
+        return Promise.resolve(0);
+    }
+    const sql = 'update chat_session_user set no_read_count=coalesce(no_read_count,0)+? where user_id=? and contact_id=?';
+    return runStrict(sql, [noReadCount, store.getUserId(), contactId]);
+};
+
+const saveMessage = async (data) => {
     if (await isMessageBeforeClear(data)) {
         return 0;
     }
-    // 获取当前用户 ID，绑定到消息数据
-    data.userId=store.getUserId();
-    // 插入或替换消息到数据库
-    return insertOrReplace("chat_message",data) 
+    data.userId = store.getUserId();
+    return insertOrReplace('chat_message', data);
+};
 
-}
-
-
-const saveMessageBatch=async(chatMeassageList)=>{
-        if (!Array.isArray(chatMeassageList) || chatMeassageList.length === 0) {
-            return 0;
-        }
-        // 批量保存前先过滤被清空游标覆盖的消息，再统计真正可见的新未读数。
-        const visibleMessageList = [];
-        for (let item of chatMeassageList) {
-            if (!(await isMessageBeforeClear(item))) {
-                visibleMessageList.push(item);
-            }
-        }
-
-        if (visibleMessageList.length === 0) {
-            return 0;
-        }
-
-        return runInTransaction(async () => {
-        const chatSessionCountMap={}
-        visibleMessageList.forEach((item)=>{
-            if(item.sendUserId==store.getUserId()){
-                return;
-            }
-            let contactId=item.contactType==1?item.contactId:item.sendUserId;
-            let noReadCount=chatSessionCountMap[contactId];
-            if(!noReadCount){
-                chatSessionCountMap[contactId]=1
-            }
-            else{
-                chatSessionCountMap[contactId]=noReadCount+1;
-            }
-        })
-        //更新未读数
-        for(let item in chatSessionCountMap){
-            await updateNoReadCount({contactId:item,noReadCount:chatSessionCountMap[item]})
-
-        }
-
-        //批量插入
-        for(let item of visibleMessageList){
-            item.userId=store.getUserId();
-            await insertOrReplace("chat_message",item);
-
-        }
-        return visibleMessageList.length;
-        });
-}
-
-const updateMessageStatus=(messageId,status=1)=>{
-    // 文件消息的上传回执只需要更新 status，不改消息正文和会话摘要。
-    if(!messageId){
-        return Promise.resolve();
-    }
-    return update("chat_message",{
-        status
-    },{
-        userId:store.getUserId(),
-        messageId
-    })
-}
-
-
-const getPageOffset=(pageNo=1,totalCount)=>{
-    // 聊天历史固定 20 条一页，renderer 会把新页 prepend 到已有列表前面。
-    const pageSize=20;
-    const pageTotal=totalCount%pageSize==0?totalCount/pageSize:Math.floor(totalCount/pageSize)+1;
-    pageNo=pageNo<=1?1:pageNo;
-    return {
-        pageTotal,
-        offset:(pageNo-1)*pageSize,
-        limit:pageSize
+const saveMessageBatch = async (chatMessageList) => {
+    if (!Array.isArray(chatMessageList) || chatMessageList.length === 0) {
+        return {
+            savedCount: 0,
+            savedMessages: []
+        };
     }
 
-}
+    const visibleMessageList = await filterVisibleMessages(chatMessageList);
+    if (visibleMessageList.length === 0) {
+        return {
+            savedCount: 0,
+            savedMessages: []
+        };
+    }
 
-const selectMesssageList = async (query = {}) => {
-        const { sessionId, pageNo = 1, maxMessageId } = query;
-
-        if (!sessionId) {
+    return runInTransaction(async () => {
+        const newMessageList = await filterNewMessages(visibleMessageList);
+        if (newMessageList.length === 0) {
             return {
-                dataList: [],
-                pageNo,
-                pageTotal: 0
+                savedCount: 0,
+                savedMessages: []
             };
         }
 
-        // maxMessageId 锁定首次加载时的消息上界，避免向上翻页时混入新消息。
-        const clearInfo = await getClearInfoBySessionId(sessionId);
-        const countSqlParts = ['select count(1) as total from chat_message where user_id=? and session_id=?'];
-        const countParams = [store.getUserId(), sessionId];
-        appendClearFilter(countSqlParts, countParams, clearInfo);
+        const chatSessionCountMap = {};
+        newMessageList.forEach((item) => {
+            if (item.sendUserId == store.getUserId()) {
+                return;
+            }
+            const contactId = item.contactType == 1 ? item.contactId : item.sendUserId;
+            chatSessionCountMap[contactId] = Number(chatSessionCountMap[contactId] || 0) + 1;
+        });
 
-        if (maxMessageId) {
-            countSqlParts.push('and message_id<?');
-            countParams.push(maxMessageId);
+        for (let item in chatSessionCountMap) {
+            await incrementNoReadCountStrict({
+                contactId: item,
+                noReadCount: chatSessionCountMap[item]
+            });
         }
 
-        const totalCount = await queryCount(countSqlParts.join(' '), countParams);
-        const { pageTotal, offset, limit } = getPageOffset(pageNo, totalCount);
-
-        const sqlParts = ['select * from chat_message where user_id=? and session_id=?'];
-        const params = [store.getUserId(), sessionId];
-        appendClearFilter(sqlParts, params, clearInfo);
-
-        if (maxMessageId) {
-            sqlParts.push('and message_id<?');
-            params.push(maxMessageId);
+        for (let item of newMessageList) {
+            item.userId = store.getUserId();
+            await insertOrReplaceStrict('chat_message', item);
         }
-
-        sqlParts.push('order by message_id desc limit ?,?');
-        params.push(offset, limit);
-
-        let dataList = await queryAll(sqlParts.join(' '), params);
-        dataList = dataList.sort((a, b) => a.messageId - b.messageId);
 
         return {
-            dataList,
-            pageNo,
-            pageTotal
+            savedCount: newMessageList.length,
+            savedMessages: newMessageList
         };
+    });
+};
+
+const updateMessageStatus = (messageId, status = 1) => {
+    if (!messageId) {
+        return Promise.resolve();
+    }
+    return update('chat_message', {
+        status
+    }, {
+        userId: store.getUserId(),
+        messageId
+    });
+};
+
+const selectMesssageList = async (query = {}) => {
+    const { sessionId, beforeMessageId } = query;
+    const pageSize = 20;
+
+    if (!sessionId) {
+        return {
+            dataList: [],
+            hasMore: false
+        };
+    }
+
+    const clearInfo = await getClearInfoBySessionId(sessionId);
+    const sqlParts = ['select * from chat_message where user_id=? and session_id=?'];
+    const params = [store.getUserId(), sessionId];
+    appendClearFilter(sqlParts, params, clearInfo);
+
+    if (beforeMessageId) {
+        sqlParts.push('and message_id<?');
+        params.push(beforeMessageId);
+    }
+
+    sqlParts.push('order by message_id desc limit ?');
+    params.push(pageSize);
+
+    let dataList = await queryAll(sqlParts.join(' '), params);
+    dataList = dataList.sort((a, b) => a.messageId - b.messageId);
+
+    return {
+        dataList,
+        hasMore: dataList.length === pageSize
+    };
+};
+
+const selectMessageContextByMessageId = async ({ sessionId, messageId } = {}) => {
+    if (!sessionId || !messageId) {
+        return [];
+    }
+
+    const contextSize = 20;
+    const clearInfo = await getClearInfoBySessionId(sessionId);
+    const olderSqlParts = ['select * from chat_message where user_id=? and session_id=?'];
+    const olderParams = [store.getUserId(), sessionId];
+    appendClearFilter(olderSqlParts, olderParams, clearInfo);
+    olderSqlParts.push('and message_id<=? order by message_id desc limit ?');
+    olderParams.push(messageId, contextSize);
+
+    const newerSqlParts = ['select * from chat_message where user_id=? and session_id=?'];
+    const newerParams = [store.getUserId(), sessionId];
+    appendClearFilter(newerSqlParts, newerParams, clearInfo);
+    newerSqlParts.push('and message_id>? order by message_id asc limit ?');
+    newerParams.push(messageId, contextSize);
+
+    const olderMessages = await queryAll(olderSqlParts.join(' '), olderParams);
+    const newerMessages = await queryAll(newerSqlParts.join(' '), newerParams);
+    const messageMap = new Map();
+    olderMessages.concat(newerMessages).forEach((message) => {
+        if (message?.messageId != null) {
+            messageMap.set(String(message.messageId), message);
+        }
+    });
+
+    return Array.from(messageMap.values()).sort((a, b) => a.messageId - b.messageId);
 };
 
 const clearMessageBySessionId = async (sessionId) => {
@@ -228,7 +283,6 @@ const clearMessageBySessionId = async (sessionId) => {
         return Promise.resolve(0);
     }
 
-    // 先记录当前最大 messageId，再删除本地消息；未来小于等于该 id 的回补会被过滤。
     const maxMessageId = await getMaxMessageIdBySessionId(sessionId);
     await saveClearInfoBySessionId(sessionId, maxMessageId);
 
@@ -241,33 +295,35 @@ const escapeLikeKeyword = (keyword = '') => {
 };
 
 const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
-        const searchKey = String(keyword || '').trim();
-        if (!sessionId || !searchKey) {
-            return [];
-        }
+    const searchKey = String(keyword || '').trim();
+    if (!sessionId || !searchKey) {
+        return [];
+    }
 
-        // 搜索只在当前会话可见消息里查正文和文件名，最多返回最近 50 条。
-        const clearInfo = await getClearInfoBySessionId(sessionId);
-        const likeKeyword = `%${escapeLikeKeyword(searchKey)}%`;
-        const sqlParts = [
-            'select * from chat_message',
-            'where user_id=? and session_id=?',
-            'and (message_content like ? escape \'\\\' or file_name like ? escape \'\\\')'
-        ];
-        const params = [store.getUserId(), sessionId, likeKeyword, likeKeyword];
-        appendClearFilter(sqlParts, params, clearInfo);
-        sqlParts.push('order by message_id desc limit 50');
+    const clearInfo = await getClearInfoBySessionId(sessionId);
+    const likeKeyword = `%${escapeLikeKeyword(searchKey)}%`;
+    const sqlParts = [
+        'select * from chat_message',
+        'where user_id=? and session_id=?',
+        'and (message_content like ? escape \'\\\' or file_name like ? escape \'\\\')'
+    ];
+    const params = [store.getUserId(), sessionId, likeKeyword, likeKeyword];
+    appendClearFilter(sqlParts, params, clearInfo);
+    sqlParts.push('order by message_id desc limit 50');
 
-        const dataList = await queryAll(sqlParts.join(' '), params);
-        return dataList || [];
+    const dataList = await queryAll(sqlParts.join(' '), params);
+    return dataList || [];
 };
 
 export {
+    filterNewMessages,
+    filterVisibleMessages,
     saveMessage,
     saveMessageBatch,
     updateMessageStatus,
     selectMesssageList,
     selectMesssageList as selectMessageList,
+    selectMessageContextByMessageId,
     clearMessageBySessionId,
     searchMessageBySessionId
-}
+};

@@ -280,7 +280,9 @@ export const useChatSessions = ({ proxy, route }) => {
     const delChatSession = (contactId) => {
         // 删除会话只是隐藏会话入口，消息记录仍由清空记录链路单独处理。
         delChatSessionList(contactId);
-        currentChatSession.value = {};
+        if (currentChatSession.value.contactId == contactId) {
+            currentChatSession.value = {};
+        }
         window.ipcRenderer.send('delChatSession', contactId);
     };
 

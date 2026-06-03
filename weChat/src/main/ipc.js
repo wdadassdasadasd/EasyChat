@@ -4,8 +4,8 @@ import path from 'path'
 import {initWs, closeWs} from './wsClient.js'
 import store from './store.js'
 import { addUserSetting, getLocalFileFolder, resetLocalFileFolder, updateLocalFileFolder } from './db/UserSettingModel.js';
-import { selectUserSessionList,delChatSession,markSessionRead,topChatSession,saveOrUpdateChatSessionBatch4Init} from './db/ChatSessionUserModel.js';
-import { clearMessageBySessionId, searchMessageBySessionId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
+import { selectUserSessionList,delChatSession,markSessionRead,topChatSession,saveOrUpdateChatSessionBatch4Init,clearChatSessionSummaryBySessionId} from './db/ChatSessionUserModel.js';
+import { clearMessageBySessionId, searchMessageBySessionId, selectMessageContextByMessageId, selectMessageList, saveMessage } from './db/ChatMessageModel.js';
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister=(mainWindow, callback)=>{
       ipcMain.on("loginOrRegister",(e,isLogin)=>{
@@ -82,7 +82,17 @@ const onTopChatSession=()=>{
 const onLoadChatMessage=()=>{
     ipcMain.on("loadChatMessage",async (e,data)=>{
         // 历史消息分页在主进程完成，sessionId/loadSeq 原样带回给 renderer 做防串线校验。
-        const result=await selectMessageList(data);
+        const result=data?.targetMessageId
+            ? {
+                dataList: await selectMessageContextByMessageId({
+                    sessionId: data.sessionId,
+                    messageId: data.targetMessageId
+                }),
+                hasMore: true,
+                targetMessageId: data.targetMessageId,
+                loadMode: 'context'
+            }
+            : await selectMessageList(data);
         e.sender.send("loadChatMessageCallback",{
             ...result,
             sessionId: data?.sessionId,
@@ -165,33 +175,14 @@ const onSaveSendMessage = () => {
         }
     });
 
-    ipcMain.on('saveSendMessage', async (e, { message, chatSession }) => {
-        if (!message) {
-            return;
-        }
-        //保存发送的消息到chat_message 表
-        // HTTP 发送成功后的消息在这里落库，避免刷新会话后本地历史缺失自己发出的消息。
-        await saveMessage(message);
-
-        // 同步更新会话表的最后一条消息，使左侧列表立即反映本次发送。
-        const sessionInfo = {
-            contactId: chatSession?.contactId || message.contactId,
-            contactType: chatSession?.contactType ?? message.contactType,
-            sessionId: message.sessionId || chatSession?.sessionId,
-            status: 1,
-            contactName: chatSession?.contactName || message.contactName,
-            lastMessage: message.messageContent,
-            lastReceiveTime: message.sendTime || Date.now(),
-            memberCount: chatSession?.memberCount,
-            noReadCount: 0
-        };
-
-        await saveOrUpdateChatSessionBatch4Init([sessionInfo]);
-
-        e.sender.send('saveSendMessageCallback', {
-            success: true,
-            messageId: message.messageId
+    ipcMain.on('saveSendMessage', async (e, payload) => {
+        const result = await saveSendMessageToLocal(payload).catch((error) => {
+            return {
+                success: false,
+                error: error?.message || String(error)
+            };
         });
+        e.sender.send('saveSendMessageCallback', result);
     });
 };
 
@@ -200,9 +191,11 @@ const onClearChatMessage = () => {
         try {
             // 清空记录写入 clear 游标后删除当前本地消息，后续旧 WebSocket 回补会被过滤。
             await clearMessageBySessionId(sessionId);
+            const session = await clearChatSessionSummaryBySessionId(sessionId);
             e.sender.send('clearChatMessageCallback', {
                 success: true,
-                sessionId
+                sessionId,
+                session
             });
         } catch (error) {
             e.sender.send('clearChatMessageCallback', {

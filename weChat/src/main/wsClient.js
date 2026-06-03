@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import { saveOrUpdateChatSessionBatch4Init } from './db/ChatSessionUserModel'
 import store from "./store.js";
-import { saveMessageBatch, updateMessageStatus } from './db/ChatMessageModel'
+import { filterNewMessages, filterVisibleMessages, saveMessageBatch, updateMessageStatus } from './db/ChatMessageModel'
 import { updateNoReadCount } from './db/UserSettingModel'
 
 const NODE_ENV = process.env.NODE_ENV
@@ -40,6 +40,28 @@ const clearReceiveFlushTimer = () => {
         clearTimeout(receiveFlushTimer);
         receiveFlushTimer = null;
     }
+}
+
+const closeCurrentSocket = () => {
+    if (!ws) {
+        return;
+    }
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.close();
+    ws = null;
+}
+
+const resetWsRuntime = () => {
+    clearHeartbeatTimer();
+    clearReconnectTimer();
+    clearReceiveFlushTimer();
+    receiveQueue = [];
+    receiveFlushing = false;
+    lockReconnect = false;
+    closeCurrentSocket();
 }
 
 const getMessageContactId = (message = {}) => {
@@ -104,18 +126,48 @@ const saveAndPublishMessageBatch = async (messages) => {
         return;
     }
 
-    const sessions = getLatestSessionList(messages);
+    const visibleMessages = await filterVisibleMessages(messages);
+    if (!visibleMessages.length) {
+        return;
+    }
+
+    const newMessages = await filterNewMessages(visibleMessages);
+    if (!newMessages.length) {
+        return;
+    }
+
+    const sessions = getLatestSessionList(newMessages);
     const sessionRows = sessions.map(({ noReadCountDelta, ...sessionInfo }) => sessionInfo);
 
     // Ensure a new conversation row exists before unread counters are incremented.
     await saveOrUpdateChatSessionBatch4Init(sessionRows);
-    await saveMessageBatch(messages);
+    const { savedMessages = [] } = await saveMessageBatch(newMessages);
+    if (!savedMessages.length) {
+        return;
+    }
 
+    const sessionPatches = getLatestSessionList(savedMessages);
     sendToRenderer('receiveMessageBatch', {
         messageType: 'batch',
-        messages,
-        sessions
+        messages: savedMessages,
+        sessions: sessionPatches,
+        sessionPatches,
+        stats: {
+            receivedCount: messages.length,
+            savedCount: savedMessages.length,
+            filteredCount: messages.length - savedMessages.length
+        }
     });
+}
+
+const scheduleReceiveFlush = () => {
+    if (receiveQueue.length >= RECEIVE_FLUSH_MAX) {
+        flushReceiveQueue();
+        return;
+    }
+    if (!receiveFlushTimer) {
+        receiveFlushTimer = setTimeout(flushReceiveQueue, RECEIVE_FLUSH_DELAY);
+    }
 }
 
 const flushReceiveQueue = async () => {
@@ -138,16 +190,6 @@ const flushReceiveQueue = async () => {
     }
 }
 
-const scheduleReceiveFlush = () => {
-    if (receiveQueue.length >= RECEIVE_FLUSH_MAX) {
-        flushReceiveQueue();
-        return;
-    }
-    if (!receiveFlushTimer) {
-        receiveFlushTimer = setTimeout(flushReceiveQueue, RECEIVE_FLUSH_DELAY);
-    }
-}
-
 const enqueueReceiveMessage = (message) => {
     receiveQueue.push(message);
     scheduleReceiveFlush();
@@ -160,7 +202,7 @@ const startHeartbeat = () => {
     }
     heartbeatTimer = setInterval(() => {
         if (ws?.readyState === WebSocket.OPEN) {
-            console.log("发送心跳");
+            console.log("send heartbeat");
             ws.send("heart beat");
         }
     }, HEARTBEAT_INTERVAL);
@@ -170,9 +212,10 @@ const initWs = (config, sender) => {
     const domainKey = NODE_ENV !== 'development' ? 'prodWsDomain' : 'devWsDomain';
     const wsDomain = store.getData(domainKey);
     if (!wsDomain) {
-        console.log(`未配置${domainKey}，无法建立WS连接`);
+        console.log(`missing ${domainKey}, skip WebSocket connect`);
         return;
     }
+    resetWsRuntime();
     wsUrl = `${wsDomain}?token=${config.token}`
     webContentsSender = sender;
     needReconnect = true;
@@ -182,15 +225,7 @@ const initWs = (config, sender) => {
 
 const closeWs = () => {
     needReconnect = false;
-    lockReconnect = false;
-    clearHeartbeatTimer();
-    clearReconnectTimer();
-    clearReceiveFlushTimer();
-    receiveQueue = [];
-    if (ws) {
-        ws.close();
-        ws = null;
-    }
+    resetWsRuntime();
 }
 
 const handleWsMessage = async (message) => {
@@ -238,23 +273,31 @@ const createWs = () => {
     }
 
     clearHeartbeatTimer();
-    ws = new WebSocket(wsUrl);
+    closeCurrentSocket();
+    try {
+        ws = new WebSocket(wsUrl);
+    } catch (error) {
+        console.error('failed to create WebSocket', error);
+        lockReconnect = false;
+        reconnect();
+        return;
+    }
 
     ws.onopen = function () {
-        console.log("客户端连接成功");
+        console.log("WebSocket connected");
         lockReconnect = false;
         maxReConnectTimes = 5;
         startHeartbeat();
     }
 
     ws.onmessage = async function (e) {
-        console.log('收到服务消息', e.data);
+        console.log('received WebSocket message', e.data);
 
         let message = null;
         try {
             message = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
         } catch (error) {
-            console.error('WebSocket 消息解析失败', error);
+            console.error('failed to parse WebSocket message', error);
             return;
         }
 
@@ -262,13 +305,13 @@ const createWs = () => {
     };
 
     ws.onclose = function () {
-        console.log("关闭客户端连接，准备重连")
+        console.log("WebSocket closed, reconnecting")
         clearHeartbeatTimer();
         reconnect();
     }
 
     ws.onerror = function () {
-        console.log("连接失败，准备重连")
+        console.log("WebSocket error, reconnecting")
         clearHeartbeatTimer();
         reconnect();
     }
@@ -276,7 +319,7 @@ const createWs = () => {
 
 const reconnect = () => {
     if (!needReconnect) {
-        console.log("连接断开，无需重连")
+        console.log("WebSocket closed intentionally")
         return;
     }
     if (lockReconnect) {
@@ -284,20 +327,20 @@ const reconnect = () => {
     }
     lockReconnect = true;
 
-    if (ws) {
-        ws.close();
-    }
+    closeCurrentSocket();
 
     if (maxReConnectTimes > 0) {
-        console.log("准备重连，剩余重连次数" + maxReConnectTimes, new Date().getTime())
+        console.log("prepare reconnect, remaining times: " + maxReConnectTimes, new Date().getTime())
         maxReConnectTimes--;
         clearReconnectTimer();
         reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
+            lockReconnect = false;
             createWs();
         }, 5000);
     } else {
-        console.log("连接超时")
+        lockReconnect = false;
+        console.log("WebSocket reconnect timeout")
     }
 }
 

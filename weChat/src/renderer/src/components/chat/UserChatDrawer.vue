@@ -14,7 +14,7 @@
             </div>
 
             <div class="drawer-menu">
-                <button class="menu-row" type="button" @click="showComingSoon">
+                <button class="menu-row" type="button" @click="openSearchDialog">
                     <span>查找聊天内容</span>
                     <el-icon>
                         <ArrowRight />
@@ -34,11 +34,18 @@
             </div>
         </div>
     </aside>
+
+    <ChatMessageSearchDialog
+        v-model="searchDialogVisible"
+        :currentChatSession="currentChatSession"
+        @locateMessage="$emit('locateMessage', $event)"
+    />
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, toRef, watch } from 'vue';
+import { computed, getCurrentInstance, ref, toRef, watch } from 'vue';
 import AvatarBase from '@/components/AvatarBase.vue';
+import ChatMessageSearchDialog from '@/components/chat/ChatMessageSearchDialog.vue';
 import { useUserChatDrawer } from '@/views/chat/composables/useUserChatDrawer';
 
 const props = defineProps({
@@ -52,8 +59,9 @@ const props = defineProps({
     }
 });
 
-const emit = defineEmits(['clearMessages', 'toggleTop', 'update:modelValue']);
+const emit = defineEmits(['clearMessages', 'locateMessage', 'toggleTop', 'update:modelValue']);
 const { proxy } = getCurrentInstance();
+const searchDialogVisible = ref(false);
 
 const {
     loading,
@@ -82,6 +90,14 @@ const showComingSoon = () => {
     proxy.Message.warning('功能暂未开放');
 };
 
+const openSearchDialog = () => {
+    if (!props.currentChatSession.sessionId) {
+        proxy.Message.warning('暂无可搜索的聊天记录');
+        return;
+    }
+    searchDialogVisible.value = true;
+};
+
 watch(
     () => props.modelValue,
     async (nextVisible) => {
@@ -98,6 +114,7 @@ watch(
     () => props.currentChatSession.contactId,
     async () => {
         // 抽屉打开时切换会话，立即重新同步资料，避免显示上一个联系人。
+        searchDialogVisible.value = false;
         if (props.modelValue) {
             await syncVisible(props.currentChatSession.contactType != 1);
             emit('update:modelValue', visible.value);

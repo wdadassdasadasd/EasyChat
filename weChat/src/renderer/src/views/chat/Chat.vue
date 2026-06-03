@@ -89,12 +89,14 @@
                         @toggleTop="handleToggleTop"
                         @clearMessages="handleClearMessages"
                         @groupUpdated="handleGroupUpdated"
+                        @locateMessage="locateChatMessage"
                     />
                     <UserChatDrawer
                         v-model="userDetailVisible"
                         :currentChatSession="currentChatSession"
                         @toggleTop="handleToggleTop"
                         @clearMessages="handleClearMessages"
+                        @locateMessage="locateChatMessage"
                     />
                 </div>
             </template>
@@ -200,6 +202,7 @@ const {
     cleanupChatMessages,
     clearCurrentMessages,
     clearInitialBottomLock,
+    locateChatMessage,
     loadMoreChatMessage,
     messageList,
     messageLoadingMore,
@@ -290,6 +293,9 @@ const handleClearMessages = () => {
             window.ipcRenderer.once('clearChatMessageCallback', (e, data) => {
                 if (data?.success && data.sessionId === sessionId) {
                     clearCurrentMessages();
+                    if (data.session) {
+                        patchChatSessions([data.session]);
+                    }
                     proxy.Message.success('聊天记录已清空');
                     return;
                 }

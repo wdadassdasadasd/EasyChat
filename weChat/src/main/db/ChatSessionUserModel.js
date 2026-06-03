@@ -11,7 +11,7 @@ import {
 
 const addChatSession=(sessionInfo)=>{
     sessionInfo.userId=store.getUserId();
-    insertOrIgnore("chat_session_user",sessionInfo)
+    return insertOrIgnore("chat_session_user",sessionInfo)
 }
 
 const updateChatSession=(sessionInfo)=>{
@@ -74,6 +74,31 @@ const selectUserSessionByContactId=(contactId)=>{
 
 }
 
+const selectUserSessionBySessionId=(sessionId)=>{
+    let sql="select * from chat_session_user where user_id=? and session_id=?";
+    return queryOne(sql,[store.getUserId(),sessionId])
+
+}
+
+const clearChatSessionSummaryBySessionId=async (sessionId)=>{
+    if(!sessionId){
+        return null;
+    }
+    const sessionData=await selectUserSessionBySessionId(sessionId);
+    if(!sessionData){
+        return null;
+    }
+    const sessionInfo={
+        lastMessage:'',
+        noReadCount:0
+    }
+    await update("chat_session_user",sessionInfo,{
+        userId:store.getUserId(),
+        sessionId
+    });
+    return Object.assign({},sessionData,sessionInfo);
+}
+
 const delChatSession=(contactId)=>{
     // 这里不物理删除会话，也不删除消息，方便后续重新打开聊天时继续使用历史记录。
     const paramData={
@@ -110,6 +135,8 @@ export {
      updateNoReadCount,
      markSessionRead,
      selectUserSessionList,
+     selectUserSessionBySessionId,
+     clearChatSessionSummaryBySessionId,
      delChatSession,
      topChatSession
 }

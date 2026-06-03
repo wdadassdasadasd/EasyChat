@@ -72,8 +72,11 @@ const isVideoPreviewDisabled = (message) => {
 }
 
 const getFileMessageStatusText = (message) => {
-    if (message?.uploading || message?.status == 0) {
+    if (message?.uploading) {
         return '上传中';
+    }
+    if (message?.status == 0) {
+        return '上传失败';
     }
     return '未下载';
 }

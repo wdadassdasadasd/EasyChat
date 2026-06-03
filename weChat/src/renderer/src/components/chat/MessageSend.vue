@@ -103,7 +103,7 @@
                 spellcheck="false"
                 input-style="background:#f5f5f5;border:none"
                 @paste="pasteHandler"
-                @keydown.enter="sendMessage"
+                @keydown.enter.exact.prevent="sendMessage"
             />
         </div>
 
