@@ -1,175 +1,175 @@
 <template>
-    <div :class="['image-panel', preview && imageUrl ? 'image-panel-preview' : '']">
-        <el-image
-            :src="imageUrl"
-            fit="scale-down"
-            :width="width"
-            :preview-src-list="previewSrcList"
-            :preview-teleported="true"
-            :hide-on-click-modal="true"
-            @load="emitLoaded"
-        >
-            <template #error>
-                <div class="image-fallback">
-                    <el-icon :size="width * 0.5"><User /></el-icon>
-                </div>
-            </template>
-            <template #placeholder>
-                <div class="image-loading">
-                    <el-icon class="is-loading" :size="width * 0.3"><Loading /></el-icon>
-                </div>
-            </template>
-        </el-image>
-    </div>
+  <div :class="['image-panel', preview && imageUrl ? 'image-panel-preview' : '']">
+    <el-image
+      :src="imageUrl"
+      fit="scale-down"
+      :width="width"
+      :preview-src-list="previewSrcList"
+      :preview-teleported="true"
+      :hide-on-click-modal="true"
+      @load="emitLoaded"
+    >
+      <template #error>
+        <div class="image-fallback">
+          <el-icon :size="width * 0.5"><User /></el-icon>
+        </div>
+      </template>
+      <template #placeholder>
+        <div class="image-loading">
+          <el-icon class="is-loading" :size="width * 0.3"><Loading /></el-icon>
+        </div>
+      </template>
+    </el-image>
+  </div>
 </template>
 
 <script setup>
-import { computed, ref, watch, onBeforeUnmount } from 'vue';
-import axios from 'axios';
-import { User, Loading } from '@element-plus/icons-vue';
+import { computed, getCurrentInstance, ref, watch, onBeforeUnmount } from 'vue'
+import { User, Loading } from '@element-plus/icons-vue'
+
+const { proxy } = getCurrentInstance()
 
 const props = defineProps({
-    width: {
-        type: Number,
-        default: 170
-    },
-    height: {
-        type: Number,
-    },
-    showPlaye: {
-        type: Boolean,
-        default: false
-    },
-    fileId: {
-        type: [String, Number],
-        default: ''
-    },
-    partType: {
-        type: String,
-        default: 'avatar'
-    },
-    fileType: {
-        type: Number,
-        default: 0
-    },
-    forceGet: {
-        type: [Boolean, Number, String],
-        default: false
-    },
-    preview: {
-        type: Boolean,
-        default: false
-    },
-    showCover: {
-        type: Boolean,
-        default: false
-    }
-});
+  width: {
+    type: Number,
+    default: 170
+  },
+  height: {
+    type: Number
+  },
+  showPlaye: {
+    type: Boolean,
+    default: false
+  },
+  fileId: {
+    type: [String, Number],
+    default: ''
+  },
+  partType: {
+    type: String,
+    default: 'avatar'
+  },
+  fileType: {
+    type: Number,
+    default: 0
+  },
+  forceGet: {
+    type: [Boolean, Number, String],
+    default: false
+  },
+  preview: {
+    type: Boolean,
+    default: false
+  },
+  showCover: {
+    type: Boolean,
+    default: false
+  }
+})
 
-const emit = defineEmits(['loaded']);
-const imageUrl = ref('');
+const emit = defineEmits(['loaded'])
+const imageUrl = ref('')
 const previewSrcList = computed(() => {
-    return props.preview && imageUrl.value ? [imageUrl.value] : [];
-});
-let currentObjectUrl = '';
+  return props.preview && imageUrl.value ? [imageUrl.value] : []
+})
+let currentObjectUrl = ''
 
 const emitLoaded = () => {
-    emit('loaded');
-};
+  emit('loaded')
+}
 
 const loadImage = async () => {
-    // 释放之前的 blob URL
-    if (currentObjectUrl) {
-        URL.revokeObjectURL(currentObjectUrl);
-        currentObjectUrl = '';
-    }
-    imageUrl.value = '';
+  if (currentObjectUrl) {
+    URL.revokeObjectURL(currentObjectUrl)
+    currentObjectUrl = ''
+  }
+  imageUrl.value = ''
 
-    if (!props.fileId) {
-        return;
-    }
+  if (!props.fileId) {
+    return
+  }
 
-    // 使用后端 downloadFile 接口，fileId 为非数字时获取头像，为数字时获取聊天文件
-    const url = `/api/chat/downloadFile`;
-    let userInfoJson = localStorage.getItem('userInfo');
-    let token = userInfoJson ? JSON.parse(userInfoJson).token : '';
+  // 统一使用项目封装的 Request 工具，复用 token 注入、901 登出、统一错误处理。
+  const blob = await proxy.Request({
+    url: proxy.Api.downloadFile,
+    params: {
+      fileId: props.fileId,
+      showCover: props.showCover
+    },
+    responseType: 'blob',
+    showLoading: false,
+    showError: false
+  })
 
+  if (!blob) {
+    imageUrl.value = ''
+    return
+  }
+
+  if (blob.type && (blob.type.includes('json') || blob.type.includes('application/json'))) {
     try {
-        const response = await axios.post(url, `fileId=${props.fileId}&showCover=${props.showCover}`, {
-            baseURL: import.meta.env.PROD ? (import.meta.env.VITE_DOMAIN || import.meta.env.VITE_PROD_DOMAIN || 'http://localhost:5050') : '',
-            responseType: 'blob',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-                'X-Requested-With': 'XMLHttpRequest',
-                'token': token
-            }
-        });
-
-        const blob = response.data;
-        if (blob.type && (blob.type.includes('json') || blob.type.includes('application/json'))) {
-            const text = await blob.text();
-            console.error('[ShowLocalImage] 后端返回错误:', text);
-            imageUrl.value = '';
-            return;
-        }
-
-        // 后端 downloadFile 返回 Content-Type 为 application/x-msdownload，不是图片类型，
-        // 需要修正为 image/png，否则 el-image 可能无法正确渲染。
-        const imageBlob = new Blob([blob], { type: 'image/png' });
-        currentObjectUrl = URL.createObjectURL(imageBlob);
-        imageUrl.value = currentObjectUrl;
+      const text = await blob.text()
+      console.error('[ShowLocalImage] 后端返回错误:', text)
     } catch (e) {
-        console.error('[ShowLocalImage] 请求失败:', e.message);
-        imageUrl.value = '';
+      // blob.text() 失败时忽略，继续尝试按图片渲染。
     }
-};
+    imageUrl.value = ''
+    return
+  }
+
+  // 后端 downloadFile 返回 Content-Type 可能不是图片 MIME 类型，
+  // 修正为 image/png 确保 el-image 能正确渲染。
+  const imageBlob = new Blob([blob], { type: 'image/png' })
+  currentObjectUrl = URL.createObjectURL(imageBlob)
+  imageUrl.value = currentObjectUrl
+}
 
 watch(
-    () => [props.fileId, props.partType, props.forceGet, props.showCover],
-    () => {
-        loadImage();
-    },
-    { immediate: true }
-);
+  () => [props.fileId, props.partType, props.forceGet, props.showCover],
+  () => {
+    loadImage()
+  },
+  { immediate: true }
+)
 
 onBeforeUnmount(() => {
-    if (currentObjectUrl) {
-        URL.revokeObjectURL(currentObjectUrl);
-    }
-});
+  if (currentObjectUrl) {
+    URL.revokeObjectURL(currentObjectUrl)
+  }
+})
 </script>
 
 <style lang="scss" scoped>
 .image-panel {
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .image-panel-preview {
-    cursor: zoom-in;
+  cursor: zoom-in;
 }
 
 .image-fallback {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #e0e0e0;
-    color: #999;
-    border-radius: inherit;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e0e0e0;
+  color: #999;
+  border-radius: inherit;
 }
 
 .image-loading {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #ccc;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ccc;
 }
 </style>

@@ -6,3 +6,4 @@ out
 logs/
 check.json
 cookies.txt
+.claude/settings.local.json
