@@ -42,6 +42,7 @@ const globalColumnMap = {
 const fs = require('fs')
 const sqlite3 = require('sqlite3')
 const os = require('os')
+const { AsyncLocalStorage } = require('async_hooks')
 const NODE_ENV = process.env.NODE_ENV
 
 const userDir = os.homedir()
@@ -58,10 +59,10 @@ if (typeof db.configure === 'function') {
 }
 
 let writeQueue = Promise.resolve()
-let transactionDepth = 0
+const transactionContext = new AsyncLocalStorage()
 
 const enqueueDbWrite = (task) => {
-  if (transactionDepth > 0) {
+  if (transactionContext.getStore()?.inTransaction) {
     return task()
   }
   const nextTask = writeQueue
@@ -186,19 +187,22 @@ const run = (sql, params = []) => {
 }
 
 const runInTransaction = async (callback) => {
+  if (transactionContext.getStore()?.inTransaction) {
+    return callback()
+  }
+
   return enqueueDbWrite(async () => {
-    await runStrictNow('begin immediate transaction', [])
-    transactionDepth += 1
-    try {
-      const result = await callback()
-      transactionDepth -= 1
-      await runStrictNow('commit', [])
-      return result
-    } catch (error) {
-      transactionDepth = Math.max(0, transactionDepth - 1)
-      await runStrictNow('rollback', []).catch(() => {})
-      throw error
-    }
+    return transactionContext.run({ inTransaction: true }, async () => {
+      await runStrictNow('begin immediate transaction', [])
+      try {
+        const result = await callback()
+        await runStrictNow('commit', [])
+        return result
+      } catch (error) {
+        await runStrictNow('rollback', []).catch(() => {})
+        throw error
+      }
+    })
   })
 }
 

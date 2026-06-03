@@ -178,6 +178,33 @@ const incrementNoReadCountStrict = ({ contactId, noReadCount }) => {
   return runStrict(sql, [noReadCount, store.getUserId(), contactId])
 }
 
+const selectSessionByContactId = (contactId) => {
+  if (!contactId) {
+    return Promise.resolve(null)
+  }
+  const sql = 'select * from chat_session_user where user_id=? and contact_id=?'
+  return queryOne(sql, [store.getUserId(), contactId])
+}
+
+const upsertChatSessionPreservingState = async (session) => {
+  if (!session?.contactId) {
+    return null
+  }
+
+  const previous = await selectSessionByContactId(session.contactId)
+  const nextSession = {
+    ...previous,
+    ...session,
+    noReadCount: session.noReadCount ?? previous?.noReadCount,
+    topType: session.topType ?? previous?.topType,
+    status: session.status ?? previous?.status ?? 1,
+    userId: store.getUserId()
+  }
+
+  await insertOrReplaceStrict('chat_session_user', nextSession)
+  return nextSession
+}
+
 const saveMessage = async (data) => {
   data.userId = store.getUserId()
   return insertOrReplace('chat_message', data)
@@ -220,10 +247,7 @@ const savePendingMessage = async ({ message, chatSession } = {}) => {
 
     const session = toSendSessionInfo({ message: pendingMessage, chatSession })
     if (session) {
-      await insertOrReplaceStrict('chat_session_user', {
-        ...session,
-        userId: store.getUserId()
-      })
+      await upsertChatSessionPreservingState(session)
     }
 
     return {
@@ -257,10 +281,7 @@ const replacePendingMessage = async ({ localMessageId, message, chatSession } = 
 
     const session = toSendSessionInfo({ message: savedMessage, chatSession })
     if (session) {
-      await insertOrReplaceStrict('chat_session_user', {
-        ...session,
-        userId: store.getUserId()
-      })
+      await upsertChatSessionPreservingState(session)
     }
 
     return {
@@ -305,10 +326,9 @@ const saveMessageBatch = async (chatMessageList, { sessionRows = [] } = {}) => {
 
     // 会话表写入与消息表写入在同一事务中，防止会话摘要指向不存在的消息。
     for (const row of sessionRows) {
-      await insertOrReplaceStrict('chat_session_user', {
+      await upsertChatSessionPreservingState({
         ...row,
-        userId: store.getUserId(),
-        status: 1
+        status: row.status ?? 1
       })
     }
 
@@ -373,10 +393,7 @@ const updateLocalMessageStatus = async ({ messageId, status, chatSession } = {})
         ...chatSession,
         status: chatSession.status ?? 1
       }
-      await insertOrReplaceStrict('chat_session_user', {
-        ...session,
-        userId: store.getUserId()
-      })
+      session = await upsertChatSessionPreservingState(session)
     }
 
     return {

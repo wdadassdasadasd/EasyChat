@@ -240,8 +240,9 @@ watch(
 )
 
 // 图片/视频封面加载完成后重新测量，布局可能变高。
-const onMessageImageLoaded = () => {
-  measureVisibleHeights()
+const onMessageImageLoaded = async () => {
+  await measureVisibleHeights()
+  emit('imageLoaded')
 }
 
 // 外部调用的 API（保持与旧版兼容）。

@@ -1,6 +1,33 @@
 import store from '../store'
 import { insertOrReplaceStrict, queryAll, queryOne, run, runInTransaction, update } from './ADB'
 
+const selectUserSessionByContactId = (contactId) => {
+  if (!contactId) {
+    return Promise.resolve(null)
+  }
+  const sql = 'select * from chat_session_user where user_id=? and contact_id=?'
+  return queryOne(sql, [store.getUserId(), contactId])
+}
+
+const upsertSessionPreservingState = async (sessionInfo) => {
+  if (!sessionInfo?.contactId) {
+    return null
+  }
+
+  const previous = await selectUserSessionByContactId(sessionInfo.contactId)
+  const nextSession = {
+    ...previous,
+    ...sessionInfo,
+    noReadCount: sessionInfo.noReadCount ?? previous?.noReadCount,
+    topType: sessionInfo.topType ?? previous?.topType,
+    status: sessionInfo.status ?? previous?.status ?? 1,
+    userId: store.getUserId()
+  }
+
+  await insertOrReplaceStrict('chat_session_user', nextSession)
+  return nextSession
+}
+
 const saveOrUpdateChatSessionBatch4Init = async (chatSessionList) => {
   // WebSocket 初始化、普通消息和发送成功统一使用 INSERT OR REPLACE 批量 upsert。
   if (!Array.isArray(chatSessionList) || chatSessionList.length === 0) {
@@ -10,7 +37,7 @@ const saveOrUpdateChatSessionBatch4Init = async (chatSessionList) => {
   return runInTransaction(async () => {
     for (let i = 0; i < chatSessionList.length; i++) {
       const sessionInfo = { ...chatSessionList[i], userId, status: 1 }
-      await insertOrReplaceStrict('chat_session_user', sessionInfo)
+      await upsertSessionPreservingState(sessionInfo)
     }
   })
 }

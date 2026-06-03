@@ -441,6 +441,7 @@ export const useChatMessageSender = ({
     delete dbMessage.retryFile
     delete dbMessage.retryCover
     delete dbMessage.uploading
+    delete dbMessage.uploadAcked
     delete dbMessage.forceGet
     return dbMessage
   }
@@ -646,6 +647,12 @@ export const useChatMessageSender = ({
     })
 
     if (!uploadResult) {
+      const latestMessage = messageList.value.find((item) => {
+        return item.messageId == message.messageId
+      })
+      if (latestMessage?.uploadAcked || latestMessage?.status == 1) {
+        return
+      }
       await markMessageFailed(message, 'File upload failed. The message can be retried.')
       return
     }
@@ -775,6 +782,8 @@ export const useChatMessageSender = ({
 
     if (targetMessage) {
       targetMessage.status = message.status ?? 1
+      targetMessage.uploading = false
+      targetMessage.uploadAcked = true
       targetMessage.forceGet = Date.now()
     }
     // 文件回执不影响会话排序信息，不需要更新会话列表。

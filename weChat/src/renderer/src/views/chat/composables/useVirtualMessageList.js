@@ -146,16 +146,26 @@ export const useVirtualMessageList = (messageList, { estimateHeight = 76, oversc
     }
   }
 
+  const getEffectiveScrollHeight = (containerEl) => {
+    return Math.max(totalHeight.value, containerEl?.scrollHeight || 0)
+  }
+
   /** 滚动到底部。使用容器实际 scrollHeight 兜底，处理测量误差。 */
   const scrollToBottom = (containerEl) => {
     if (!containerEl) return
-    containerEl.scrollTop = Math.max(0, totalHeight.value - containerEl.clientHeight)
+    containerEl.scrollTop = Math.max(
+      0,
+      getEffectiveScrollHeight(containerEl) - containerEl.clientHeight
+    )
   }
 
   /** 底部剩余距离（px），0 表示已到底。 */
   const getBottomGap = (containerEl) => {
     if (!containerEl) return 0
-    return Math.max(0, totalHeight.value - containerEl.scrollTop - containerEl.clientHeight)
+    return Math.max(
+      0,
+      getEffectiveScrollHeight(containerEl) - containerEl.scrollTop - containerEl.clientHeight
+    )
   }
 
   /** 清空高度缓存（会话切换/清空记录时调用，避免内存无限增长）。 */
@@ -167,7 +177,7 @@ export const useVirtualMessageList = (messageList, { estimateHeight = 76, oversc
   /** 完整滚动状态快照。scrollHeight 使用虚拟总高度以保证稳定性。 */
   const getScrollState = (containerEl) => {
     if (!containerEl) return null
-    const total = totalHeight.value
+    const total = getEffectiveScrollHeight(containerEl)
     return {
       scrollHeight: total,
       scrollTop: containerEl.scrollTop,

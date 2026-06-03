@@ -230,4 +230,54 @@ describe('useChatMessageSender', () => {
     expect(messageList.value[0].status).toBe(0)
     expect(messageList.value[0].uploading).toBe(false)
   })
+
+  it('keeps a media message successful when file ack arrives before upload failure', async () => {
+    let resolveUpload
+    const uploadPromise = new Promise((resolve) => {
+      resolveUpload = resolve
+    })
+    const { invoke, messageList, proxy, request, sender } = createHarness({
+      requestResults: [
+        {
+          data: {
+            messageId: 404,
+            sessionId: 's1',
+            contactId: 'u2',
+            contactType: 0,
+            messageType: 5,
+            messageContent: 'ack-first.txt',
+            fileName: 'ack-first.txt',
+            fileType: 2,
+            sendUserId: 'u1',
+            sendTime: 4000
+          }
+        },
+        uploadPromise
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'ack-first.txt', size: 12, path: 'D:/tmp/ack-first.txt' },
+      cover: { name: 'cover.png' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+
+    sender.handleFileUploadDone({
+      messageId: 404,
+      messageType: 6,
+      status: 1
+    })
+    resolveUpload(null)
+    await flush()
+
+    expect(messageList.value).toHaveLength(1)
+    expect(messageList.value[0].messageId).toBe(404)
+    expect(messageList.value[0].status).toBe(1)
+    expect(messageList.value[0].uploading).toBe(false)
+    expect(messageList.value[0].uploadAcked).toBe(true)
+    expect(proxy.Message.error).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'replace'])
+  })
 })
