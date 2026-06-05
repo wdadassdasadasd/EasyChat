@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach, beforeAll } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
 vi.mock('element-plus', () => ({
@@ -102,7 +102,7 @@ const createHarness = ({ requestResults = [] } = {}) => {
 
 describe('useChatMessageSender', () => {
   beforeAll(async () => {
-    ;({ useChatMessageSender } = await import('./useMessageSender'))
+    ;({ useChatMessageSender } = await import('@/views/chat/composables/useChatMessageSender'))
   })
 
   beforeEach(() => {

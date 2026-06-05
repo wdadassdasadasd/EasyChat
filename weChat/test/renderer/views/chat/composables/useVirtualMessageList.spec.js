@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ref } from 'vue'
-import { useVirtualMessageList } from './useVirtualMessageList'
+import { useVirtualMessageList } from '@/views/chat/composables/useVirtualMessageList'
 
 describe('useVirtualMessageList', () => {
   it('scrolls to the real DOM bottom when measured virtual height is stale', () => {

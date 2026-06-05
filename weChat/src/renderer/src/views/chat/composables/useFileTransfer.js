@@ -1,6 +1,12 @@
 import { ref } from 'vue'
 import Utils from '@/utils/Utils'
 
+/**
+ * 聊天文件和视频接收流程的管理入口。
+ *
+ * 负责预览弹窗状态、下载进度、本地视频兜底、对象 URL 生命周期，
+ * 以及普通下载和系统播放器打开等动作，避免这些逻辑堆在 Chat.vue 中。
+ */
 export const useFileTransfer = ({ proxy }) => {
   const selectedFileMessage = ref(null)
   const selectedVideoMessage = ref(null)

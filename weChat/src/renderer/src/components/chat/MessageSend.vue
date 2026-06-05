@@ -134,7 +134,7 @@
 <script setup>
 import { ref, toRef } from 'vue';
 import emojiList from '@/utils/Emoji';
-import { useMessageComposer } from '@/views/chat/composables/useMessageSender';
+import { useMessageComposer } from '@/views/chat/composables/useMessageComposer';
 import { CHAT_CONSTANTS } from '@/utils/ChatConstants';
 
 const props = defineProps({

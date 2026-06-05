@@ -10,6 +10,11 @@ const getMemberName = (member = {}) => {
   )
 }
 
+/**
+ * 当前群聊详情抽屉的状态管理入口。
+ *
+ * 负责加载群资料和成员列表、本地过滤成员，并通过 loadSeq 丢弃快速切换群聊时的过期回包。
+ */
 export const useGroupChatDrawer = ({ currentChatSession, proxy }) => {
   const visible = ref(false)
   const loading = ref(false)

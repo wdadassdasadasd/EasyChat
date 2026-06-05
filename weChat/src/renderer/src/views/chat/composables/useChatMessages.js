@@ -1,7 +1,13 @@
 import { nextTick, ref } from 'vue'
-import { useChatMessageSender } from './useMessageSender'
+import { useChatMessageSender } from './useChatMessageSender'
 import { useMessageScroll } from './useMessageScroll'
 
+/**
+ * 当前聊天窗口的消息列表总控。
+ *
+ * 负责历史分页、实时收消息、消息去重、滚动位置恢复，以及接入发送链路。
+ * 会话列表状态由 useChatSessions 管理，发送落库细节由 useChatMessageSender 管理。
+ */
 export const useChatMessages = ({
   currentChatSession,
   currentUserId,

@@ -20,6 +20,12 @@ const getMessageKey = (message, index) => {
  * @param {import('vue').Ref<Array>} messageList 消息列表 Ref
  * @param {{ estimateHeight?: number, overscan?: number }} options
  */
+/**
+ * 长聊天记录的虚拟滚动管理入口。
+ *
+ * 按 messageId 缓存测量高度，计算带 overscan 的可视窗口，
+ * 对外暴露上下占位高度，并为外层滚动控制提供稳定的底部距离计算。
+ */
 export const useVirtualMessageList = (messageList, { estimateHeight = 76, overscan = 8 } = {}) => {
   // 消息高度缓存：key → 测量高度（px）。shallowRef + version 避免全量 reactive 开销。
   const heightMap = shallowRef(new Map())

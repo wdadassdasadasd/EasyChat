@@ -24,6 +24,12 @@ const createScrollState = () => {
   }
 }
 
+/**
+ * 聊天消息面板的滚动状态机。
+ *
+ * 统一维护渲染/加载序列、首屏贴底锁和延迟贴底帧，
+ * 让历史分页、首屏贴底、图片加载撑高、会话切换共用同一套滚动规则。
+ */
 export const useMessageScroll = ({ messageListRef } = {}) => {
   const messagePanelPhase = ref('ready')
   const state = createScrollState()

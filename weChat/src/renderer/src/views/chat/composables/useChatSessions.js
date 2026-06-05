@@ -1,6 +1,12 @@
 import { computed, ref } from 'vue'
 import ContextMenu from '@imengyu/vue3-context-menu'
 
+/**
+ * 聊天会话列表和当前会话壳状态的管理入口。
+ *
+ * 负责本地会话补全、路由打开聊天、未读/置顶/删除更新，
+ * 以及让 renderer 会话状态和主进程 IPC 回包保持同步。
+ */
 export const useChatSessions = ({ proxy, route }) => {
   const chatSessionList = ref([])
   const currentChatSession = ref({})

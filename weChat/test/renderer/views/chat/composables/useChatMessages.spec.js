@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
-vi.mock('./useMessageSender', () => ({
+vi.mock('@/views/chat/composables/useChatMessageSender', () => ({
   useChatMessageSender: () => ({
     handleFileUploadDone: vi.fn(),
     onSendChatMessage: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock('./useMessageSender', () => ({
   })
 }))
 
-vi.mock('./useMessageScroll', () => ({
+vi.mock('@/views/chat/composables/useMessageScroll', () => ({
   useMessageScroll: () => ({
     cleanupMessageScroll: vi.fn(),
     clearInitialBottomLock: vi.fn(),
@@ -93,7 +93,7 @@ const createHarness = () => {
 
 describe('useChatMessages receive flow', () => {
   beforeAll(async () => {
-    ;({ useChatMessages } = await import('./useChatMessages'))
+    ;({ useChatMessages } = await import('@/views/chat/composables/useChatMessages'))
   })
 
   beforeEach(() => {

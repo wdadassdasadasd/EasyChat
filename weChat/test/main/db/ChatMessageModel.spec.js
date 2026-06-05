@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const insertedRows = []
 
-vi.mock('../store', () => ({
+vi.mock('../../../src/main/store', () => ({
   default: {
     getUserId: () => 'u1'
   }
 }))
 
-vi.mock('./ADB', () => ({
+vi.mock('../../../src/main/db/ADB', () => ({
   insertOrReplace: vi.fn(),
   insertOrReplaceStrict: vi.fn(async (tableName, data) => {
     insertedRows.push({ tableName, data })
@@ -52,7 +52,7 @@ describe('ChatMessageModel saveMessageBatch', () => {
   })
 
   it('preserves existing unread and top state when receive session patch omits them', async () => {
-    const { saveMessageBatch } = await import('./ChatMessageModel')
+    const { saveMessageBatch } = await import('../../../src/main/db/ChatMessageModel')
 
     await saveMessageBatch(
       [

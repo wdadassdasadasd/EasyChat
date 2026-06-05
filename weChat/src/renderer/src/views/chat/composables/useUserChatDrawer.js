@@ -1,5 +1,10 @@
 import { ref } from 'vue'
 
+/**
+ * 当前单聊用户详情抽屉的状态管理入口。
+ *
+ * 负责按需加载联系人资料，使用当前会话信息做兜底，并在切换会话时丢弃过期回包。
+ */
 export const useUserChatDrawer = ({ currentChatSession, proxy }) => {
   const visible = ref(false)
   const loading = ref(false)
