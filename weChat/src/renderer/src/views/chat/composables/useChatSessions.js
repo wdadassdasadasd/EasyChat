@@ -184,6 +184,8 @@ export const useChatSessions = ({ proxy, route }) => {
   }
 
   const registerSessionListener = () => {
+    removeSessionListener()
+
     loadSessionDataHandler = async (e, dataList) => {
       if (dataList && !Array.isArray(dataList) && dataList.success === false) {
         proxy.Message.error(dataList.error || 'Load sessions failed')

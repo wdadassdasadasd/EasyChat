@@ -98,6 +98,28 @@ export const useChatMessages = ({
       return false
     }
     const previousMessage = messageList.value[index]
+    const nextMessageId = nextMessage.messageId != null ? String(nextMessage.messageId) : ''
+    const existingServerIndex = nextMessageId
+      ? messageList.value.findIndex((message, itemIndex) => {
+          return itemIndex !== index && String(message?.messageId) === nextMessageId
+        })
+      : -1
+
+    if (existingServerIndex !== -1) {
+      const existingServerMessage = messageList.value[existingServerIndex]
+      const mergedMessage = Object.assign({}, existingServerMessage, nextMessage)
+      if (
+        previousMessage?.localPreviewUrl &&
+        previousMessage.localPreviewUrl !== mergedMessage.localPreviewUrl
+      ) {
+        URL.revokeObjectURL(previousMessage.localPreviewUrl)
+      }
+      messageList.value[existingServerIndex] = mergedMessage
+      messageList.value.splice(index, 1)
+      rebuildMessageIdSet()
+      return true
+    }
+
     if (
       previousMessage?.localPreviewUrl &&
       previousMessage.localPreviewUrl !== nextMessage.localPreviewUrl
@@ -263,13 +285,16 @@ export const useChatMessages = ({
     })
   }
 
-  const loadChatMessage = ({ keepScrollPosition = false } = {}) => {
+  const loadChatMessage = ({ keepScrollPosition = false, refreshTail = false } = {}) => {
     if (!currentChatSession.value.sessionId) {
       messageCountInfo.noData = true
       markMessagePanelReady()
       return false
     }
-    if (messageCountInfo.noData || (keepScrollPosition && messageLoadingMore.value)) {
+    if (
+      (!refreshTail && messageCountInfo.noData) ||
+      (keepScrollPosition && messageLoadingMore.value)
+    ) {
       return false
     }
     const beforeMessageId = keepScrollPosition ? getOldestMessageId() : null
@@ -286,6 +311,7 @@ export const useChatMessages = ({
     window.ipcRenderer.send('loadChatMessage', {
       sessionId: currentChatSession.value.sessionId,
       beforeMessageId,
+      loadMode: refreshTail ? 'tail' : undefined,
       loadSeq
     })
     return true
@@ -367,6 +393,20 @@ export const useChatMessages = ({
       return
     }
 
+    if (loadMode === 'tail') {
+      let appended = false
+      const shouldStickToBottom = isNearMessageBottom()
+      loadedMessages.forEach((message) => {
+        appended = appendMessageIfMissing(message) || appended
+      })
+      messageLoadingMore.value = false
+      pendingPrependScrollState = null
+      if (appended) {
+        scrollMessageToBottom({ force: shouldStickToBottom })
+      }
+      return
+    }
+
     if (!hasMore || loadedMessages.length === 0) {
       messageCountInfo.noData = true
     }
@@ -441,6 +481,8 @@ export const useChatMessages = ({
   let loadChatMessageHandler = null
 
   const registerMessageListeners = () => {
+    removeMessageListeners()
+
     receiveMessageHandler = (e, message) => {
       console.log('收到消息', message)
       if (typeof message === 'string') {

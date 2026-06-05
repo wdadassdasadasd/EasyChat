@@ -1,17 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
-vi.mock('@/views/chat/composables/useChatMessageSender', () => ({
-  useChatMessageSender: () => ({
-    handleFileUploadDone: vi.fn(),
-    onSendChatMessage: vi.fn(),
-    onSendFileMessage: vi.fn(),
-    onSendImageMessage: vi.fn(),
-    onSendVideoMessage: vi.fn(),
-    retryFailedMessage: vi.fn()
-  })
-}))
-
 vi.mock('@/views/chat/composables/useMessageScroll', () => ({
   useMessageScroll: () => ({
     cleanupMessageScroll: vi.fn(),
@@ -42,6 +31,7 @@ const createIpcMock = () => {
       removeListener: vi.fn((channel) => {
         delete handlers[channel]
       }),
+      invoke: vi.fn(async () => ({ success: true })),
       send: vi.fn()
     }
   }
@@ -65,6 +55,11 @@ const createHarness = () => {
   const markSessionRead = vi.fn()
   const patchChatSessions = vi.fn()
   const proxy = {
+    Api: {
+      sendMessage: '/chat/sendMessage',
+      uploadFile: '/chat/uploadFile'
+    },
+    Request: vi.fn(async () => null),
     Message: {
       error: vi.fn(),
       warning: vi.fn()
@@ -87,7 +82,8 @@ const createHarness = () => {
     handlers,
     markSessionRead,
     patchChatSessions,
-    proxy
+    proxy,
+    window: global.window
   }
 }
 
@@ -166,5 +162,78 @@ describe('useChatMessages receive flow', () => {
 
     expect(chat.messageList.value).toEqual([])
     expect(proxy.Message.error).toHaveBeenCalledWith('db failed')
+  })
+
+  it('merges a self WebSocket echo when HTTP replacement arrives later', async () => {
+    let resolveRequest
+    const requestPromise = new Promise((resolve) => {
+      resolveRequest = resolve
+    })
+    const { chat, handlers, proxy, window } = createHarness()
+    proxy.Request.mockImplementationOnce(() => requestPromise)
+
+    chat.onSendChatMessage({ contactId: 'u2', contactType: 0, messageContent: 'echo' })
+    await vi.waitFor(() => expect(proxy.Request).toHaveBeenCalledTimes(1))
+
+    handlers.receiveMessageBatch(
+      {},
+      {
+        messages: [
+          {
+            messageId: 777,
+            sessionId: 's1',
+            contactId: 'u2',
+            contactType: 0,
+            messageType: 2,
+            messageContent: 'echo',
+            sendUserId: 'u1',
+            sendTime: 7000
+          }
+        ],
+        sessions: [{ contactId: 'u2', sessionId: 's1' }]
+      }
+    )
+
+    expect(chat.messageList.value.map((message) => message.messageId)).toHaveLength(2)
+
+    resolveRequest({
+      data: {
+        messageId: 777,
+        sessionId: 's1',
+        contactId: 'u2',
+        contactType: 0,
+        messageType: 2,
+        messageContent: 'echo',
+        sendUserId: 'u1',
+        sendTime: 7000
+      }
+    })
+
+    await vi.waitFor(() => {
+      expect(chat.messageList.value.map((message) => message.messageId)).toEqual([777])
+    })
+    expect(window.ipcRenderer.invoke.mock.calls.map((call) => call[1].mode)).toEqual([
+      'pending',
+      'replace'
+    ])
+  })
+
+  it('registers message listeners idempotently', () => {
+    const { chat, window } = createHarness()
+
+    chat.registerMessageListeners()
+
+    expect(window.ipcRenderer.removeListener).toHaveBeenCalledWith(
+      'receiveMessage',
+      expect.any(Function)
+    )
+    expect(window.ipcRenderer.removeListener).toHaveBeenCalledWith(
+      'receiveMessageBatch',
+      expect.any(Function)
+    )
+    expect(window.ipcRenderer.removeListener).toHaveBeenCalledWith(
+      'loadChatMessageCallback',
+      expect.any(Function)
+    )
   })
 })

@@ -83,12 +83,20 @@ export const useChatMessageSender = ({
     }
   }
 
+  const assertLocalSaveSuccess = (saveResult, fallbackError) => {
+    if (!saveResult || saveResult.success === false) {
+      throw new Error(saveResult?.error || fallbackError || 'Save message failed')
+    }
+    return saveResult
+  }
+
   const persistPendingMessage = async (message) => {
     const saveResult = await saveSendMessageToLocal({
       mode: 'pending',
       message: stripTransientMessageFields(message),
       chatSession: getCurrentSessionSnapshot()
     })
+    assertLocalSaveSuccess(saveResult, 'Save pending message failed')
     patchSessionFromSaveResult(saveResult)
     return saveResult
   }
@@ -100,6 +108,7 @@ export const useChatMessageSender = ({
       status: message.status,
       chatSession: getCurrentSessionSnapshot()
     })
+    assertLocalSaveSuccess(saveResult, 'Save message status failed')
     patchSessionFromSaveResult(saveResult)
     return saveResult
   }
@@ -111,6 +120,7 @@ export const useChatMessageSender = ({
       message: stripTransientMessageFields(message),
       chatSession: getCurrentSessionSnapshot()
     })
+    assertLocalSaveSuccess(saveResult, 'Save server message failed')
     patchSessionFromSaveResult(saveResult)
     return saveResult
   }
@@ -194,9 +204,7 @@ export const useChatMessageSender = ({
       status: 2,
       ...patch
     })
-    await persistMessageStatus(message).catch((error) => {
-      console.error('save sending message status failed', error)
-    })
+    await persistMessageStatus(message)
   }
 
   const replaceLocalWithServerMessage = async (localMessage, serverMessage, patch = {}) => {
@@ -232,12 +240,22 @@ export const useChatMessageSender = ({
       })
 
     if (retryMessage) {
-      await markMessageSending(localMessage)
+      try {
+        await markMessageSending(localMessage)
+      } catch (error) {
+        console.error('save retry text message status failed', error)
+        await markMessageFailed(localMessage, 'Message retry failed. Local status could not be saved.')
+        return
+      }
     } else {
       appendSentMessageIfMissing(localMessage)
-      await persistPendingMessage(localMessage).catch((error) => {
+      try {
+        await persistPendingMessage(localMessage)
+      } catch (error) {
         console.error('save pending text message failed', error)
-      })
+        await markMessageFailed(localMessage, 'Message could not be saved locally. Retry later.')
+        return
+      }
     }
 
     // 文本消息先拿到服务端 messageId，再替换本地临时消息。
@@ -261,7 +279,12 @@ export const useChatMessageSender = ({
     }
 
     const message = result.data
-    await replaceLocalWithServerMessage(localMessage, message)
+    try {
+      await replaceLocalWithServerMessage(localMessage, message)
+    } catch (error) {
+      console.error('save sent text message failed', error)
+      proxy.Message.error('Message sent, but local history could not be updated.')
+    }
   }
 
   const uploadMessageFile = async (message, file, cover) => {
@@ -294,7 +317,10 @@ export const useChatMessageSender = ({
       uploading: false,
       status: 1
     })
-    await persistMessageStatus(message)
+    await persistMessageStatus(message).catch((error) => {
+      console.error('save uploaded media status failed', error)
+      proxy.Message.error('File uploaded, but local message status could not be saved.')
+    })
   }
 
   const sendMediaMessage = async (
@@ -325,12 +351,22 @@ export const useChatMessageSender = ({
     }
 
     if (retryMessage) {
-      await markMessageSending(localMessage, { uploading: false })
+      try {
+        await markMessageSending(localMessage, { uploading: false })
+      } catch (error) {
+        console.error('save retry media message status failed', error)
+        await markMessageFailed(localMessage, 'Media retry failed. Local status could not be saved.')
+        return
+      }
     } else {
       appendSentMessageIfMissing(localMessage)
-      await persistPendingMessage(localMessage).catch((error) => {
+      try {
+        await persistPendingMessage(localMessage)
+      } catch (error) {
         console.error('save pending media message failed', error)
-      })
+        await markMessageFailed(localMessage, 'Media message could not be saved locally. Retry later.')
+        return
+      }
     }
 
     // 图片、视频、文件统一使用 messageType=5，fileType 决定展示方式。
@@ -366,13 +402,20 @@ export const useChatMessageSender = ({
       message.filePath = filePath
     }
 
-    const serverMessage = await replaceLocalWithServerMessage(localMessage, message, {
-      localPreviewUrl: localMessage.localPreviewUrl,
-      retryFile: file,
-      retryCover: cover,
-      uploading: true,
-      status: 2
-    })
+    let serverMessage = null
+    try {
+      serverMessage = await replaceLocalWithServerMessage(localMessage, message, {
+        localPreviewUrl: localMessage.localPreviewUrl,
+        retryFile: file,
+        retryCover: cover,
+        uploading: true,
+        status: 2
+      })
+    } catch (error) {
+      console.error('save sent media message failed', error)
+      proxy.Message.error('Media message created, but local history could not be updated.')
+      return
+    }
     enqueueUploadTask(() => uploadMessageFile(serverMessage, file, cover))
   }
 

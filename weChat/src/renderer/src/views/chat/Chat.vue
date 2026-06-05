@@ -206,6 +206,7 @@ const {
     clearCurrentMessages,
     clearInitialBottomLock,
     locateChatMessage,
+    loadChatMessage,
     loadMoreChatMessage,
     messageList,
     messageLoadingMore,
@@ -255,7 +256,13 @@ const totalUnreadCount = computed(() => {
 });
 
 const wsStatusHandler = (_e, payload = {}) => {
-    if (payload.status === 'connected' || payload.status === 'closed') {
+    if (payload.status === 'connected') {
+        wsStatusText.value = '';
+        loadChatSession();
+        loadChatMessage({ refreshTail: true });
+        return;
+    }
+    if (payload.status === 'closed') {
         wsStatusText.value = '';
         return;
     }

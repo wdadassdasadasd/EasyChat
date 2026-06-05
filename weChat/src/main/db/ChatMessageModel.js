@@ -6,8 +6,7 @@ import {
   queryOne,
   runInTransaction,
   runStrict,
-  run,
-  update
+  run
 } from './ADB'
 import { MAX_SQL_IN_PARAMS } from '../constants'
 const MESSAGE_PAGE_SIZE = 20
@@ -74,7 +73,7 @@ const saveClearInfoBySessionId = async (sessionId, clearMessageId) => {
     'values (?, ?, ?, ?)'
   ].join(' ')
 
-  return run(sql, [store.getUserId(), sessionId, nextClearMessageId, nextClearTime])
+  return runStrict(sql, [store.getUserId(), sessionId, nextClearMessageId, nextClearTime])
 }
 
 const filterVisibleMessages = async (messageList = []) => {
@@ -364,16 +363,8 @@ const updateMessageStatus = (messageId, status = 1) => {
   if (!messageId) {
     return Promise.resolve()
   }
-  return update(
-    'chat_message',
-    {
-      status
-    },
-    {
-      userId: store.getUserId(),
-      messageId
-    }
-  )
+  const sql = 'update chat_message set status=? where user_id=? and message_id=?'
+  return runStrict(sql, [status, store.getUserId(), messageId])
 }
 
 const updateLocalMessageStatus = async ({ messageId, status, chatSession } = {}) => {

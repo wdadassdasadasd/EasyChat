@@ -27,6 +27,7 @@ let receiveFlushTimer = null
 let receiveFlushing = false
 let wsRuntimeGeneration = 0
 const RECEIVE_SAVE_MAX_RETRY = 3
+const RECEIVE_QUEUE_MAX = RECEIVE_FLUSH_MAX * 20
 
 const clearHeartbeatTimer = () => {
   if (heartbeatTimer) {
@@ -122,9 +123,15 @@ const getLatestSessionList = (messages = []) => {
 
 const sendToRenderer = (channel, payload) => {
   if (!webContentsSender || webContentsSender.isDestroyed?.()) {
-    return
+    return false
   }
-  webContentsSender.send(channel, payload)
+  try {
+    webContentsSender.send(channel, payload)
+    return true
+  } catch (error) {
+    console.error(`failed to send IPC message: ${channel}`, error)
+    return false
+  }
 }
 
 const publishWsStatus = (payload) => {
@@ -227,6 +234,20 @@ const flushReceiveQueue = async () => {
 }
 
 const enqueueReceiveMessage = (message) => {
+  if (receiveQueue.length >= RECEIVE_QUEUE_MAX) {
+    const overflowCount = receiveQueue.length - RECEIVE_QUEUE_MAX + 1
+    receiveQueue.splice(0, overflowCount)
+    sendToRenderer('receiveMessageBatch', {
+      success: false,
+      messageType: 'batch',
+      messages: [],
+      sessions: [],
+      error: 'Receive queue overflow. Some messages were not saved locally.',
+      stats: {
+        droppedCount: overflowCount
+      }
+    })
+  }
   receiveQueue.push(message)
   scheduleReceiveFlush()
 }
@@ -276,8 +297,44 @@ const closeWs = () => {
   webContentsSender = null
 }
 
-const handleWsMessage = async (message) => {
-  const messageType = message.messageType
+const normalizeWsMessages = (payload) => {
+  if (payload == null) {
+    return []
+  }
+  if (Array.isArray(payload)) {
+    return payload.flatMap(normalizeWsMessages)
+  }
+  if (Array.isArray(payload.messages)) {
+    return payload.messages.flatMap(normalizeWsMessages)
+  }
+  if (Array.isArray(payload.dataList)) {
+    return payload.dataList.flatMap(normalizeWsMessages)
+  }
+  if (Array.isArray(payload.chatMessageList)) {
+    return payload.chatMessageList.flatMap(normalizeWsMessages)
+  }
+  return [payload]
+}
+
+const isValidWsMessage = (message = {}) => {
+  if (message == null || typeof message !== 'object' || Array.isArray(message)) {
+    return false
+  }
+  const messageType = Number(message.messageType)
+  if (!Number.isFinite(messageType)) {
+    return false
+  }
+  if (messageType === 0) {
+    return true
+  }
+  if (messageType === 6) {
+    return message.messageId != null
+  }
+  return message.messageId != null && Boolean(message.sessionId)
+}
+
+const handleSingleWsMessage = async (message) => {
+  const messageType = Number(message.messageType)
 
   switch (messageType) {
     case 0: {
@@ -309,6 +366,17 @@ const handleWsMessage = async (message) => {
       enqueueReceiveMessage(message)
       break
     }
+  }
+}
+
+const handleWsMessage = async (payload) => {
+  const messages = normalizeWsMessages(payload)
+  for (const message of messages) {
+    if (!isValidWsMessage(message)) {
+      console.warn('drop invalid WebSocket message', message)
+      continue
+    }
+    await handleSingleWsMessage(message)
   }
 }
 
@@ -401,4 +469,4 @@ const reconnect = () => {
   }
 }
 
-export { initWs, closeWs }
+export { initWs, closeWs, normalizeWsMessages, isValidWsMessage }

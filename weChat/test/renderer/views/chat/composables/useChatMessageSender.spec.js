@@ -17,7 +17,7 @@ let useChatMessageSender
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-const createHarness = ({ requestResults = [] } = {}) => {
+const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
   const messageList = ref([])
   const currentChatSession = ref({
     contactId: 'u2',
@@ -27,7 +27,9 @@ const createHarness = ({ requestResults = [] } = {}) => {
   })
   const currentUserId = ref('u1')
   const request = vi.fn(async () => requestResults.shift() ?? null)
-  const invoke = vi.fn(async () => ({ success: true, session: currentChatSession.value }))
+  const invoke = vi.fn(async () => {
+    return invokeResults.shift() ?? { success: true, session: currentChatSession.value }
+  })
   const patchChatSessions = vi.fn()
   const proxy = {
     Api: {
@@ -156,6 +158,38 @@ describe('useChatMessageSender', () => {
     expect(messageList.value[0].status).toBe(0)
     expect(proxy.Message.error).toHaveBeenCalled()
     expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'status'])
+  })
+
+  it('does not send HTTP when pending save fails', async () => {
+    const { invoke, messageList, proxy, request, sender } = createHarness({
+      invokeResults: [{ success: false, error: 'db unavailable' }],
+      requestResults: [
+        {
+          data: {
+            messageId: 909,
+            sessionId: 's1',
+            contactId: 'u2',
+            contactType: 0,
+            messageType: 2,
+            messageContent: 'hello',
+            sendUserId: 'u1',
+            sendTime: 9000
+          }
+        }
+      ]
+    })
+
+    sender.onSendChatMessage({ contactId: 'u2', contactType: 0, messageContent: 'hello' })
+    await flush()
+
+    expect(request).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledTimes(2)
+    expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'status'])
+    expect(messageList.value).toHaveLength(1)
+    expect(messageList.value[0].status).toBe(0)
+    expect(proxy.Message.error).toHaveBeenCalledWith(
+      'Message could not be saved locally. Retry later.'
+    )
   })
 
   it('retries a failed text message and replaces the temporary id', async () => {

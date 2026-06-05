@@ -119,6 +119,27 @@ const onTopChatSession = () => {
 }
 
 //分页查询聊天消息
+const onDelChatSessionSafe = () => {
+  registerSafeIpcOn('delChatSession', 'delChatSessionCallback', async (e, contactId) => {
+    await delChatSession(contactId)
+    e.sender.send('delChatSessionCallback', {
+      contactId,
+      success: true
+    })
+  })
+}
+
+const onTopChatSessionSafe = () => {
+  registerSafeIpcOn('topChatSession', 'topChatSessionCallback', async (e, { contactId, topType }) => {
+    await topChatSession(contactId, topType)
+    e.sender.send('topChatSessionCallback', {
+      contactId,
+      topType,
+      success: true
+    })
+  })
+}
+
 const onLoadChatMessage = () => {
   registerSafeIpcOn('loadChatMessage', 'loadChatMessageCallback', async (e, data) => {
     // 历史消息分页在主进程完成，sessionId/loadSeq 原样带回给 renderer 做防串线校验。
@@ -136,6 +157,7 @@ const onLoadChatMessage = () => {
     e.sender.send('loadChatMessageCallback', {
       ...result,
       sessionId: data?.sessionId,
+      loadMode: data?.loadMode || result?.loadMode,
       loadSeq: data?.loadSeq
     })
   })
@@ -360,9 +382,9 @@ export {
   onSetLocalStore,
   onGetLocalStore,
   onLoadSessionData,
-  onDelChatSession,
+  onDelChatSessionSafe as onDelChatSession,
   onMarkSessionRead,
-  onTopChatSession,
+  onTopChatSessionSafe as onTopChatSession,
   onLoadChatMessage,
   onSaveSendMessage,
   onClearChatMessage,

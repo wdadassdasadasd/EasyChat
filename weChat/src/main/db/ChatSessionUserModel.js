@@ -1,5 +1,5 @@
 import store from '../store'
-import { insertOrReplaceStrict, queryAll, queryOne, run, runInTransaction, update } from './ADB'
+import { insertOrReplaceStrict, queryAll, queryOne, runStrict, runInTransaction } from './ADB'
 
 const selectUserSessionByContactId = (contactId) => {
   if (!contactId) {
@@ -50,11 +50,11 @@ const updateNoReadCount = ({ contactId, noReadCount }) => {
   }
   if (noReadCount === 0) {
     let sql = 'update chat_session_user set no_read_count=0 where user_id=? and contact_id=?'
-    return run(sql, [store.getUserId(), contactId])
+    return runStrict(sql, [store.getUserId(), contactId])
   }
   let sql =
     'update chat_session_user set no_read_count=coalesce(no_read_count,0)+? where user_id=? and contact_id=?'
-  return run(sql, [noReadCount, store.getUserId(), contactId])
+  return runStrict(sql, [noReadCount, store.getUserId(), contactId])
 }
 
 const markSessionRead = (contactId) => {
@@ -85,10 +85,9 @@ const clearChatSessionSummaryBySessionId = async (sessionId) => {
     lastMessage: '',
     noReadCount: 0
   }
-  await update('chat_session_user', sessionInfo, {
-    userId: store.getUserId(),
-    sessionId
-  })
+  const sql =
+    'update chat_session_user set last_message=?, no_read_count=? where user_id=? and session_id=?'
+  await runStrict(sql, [sessionInfo.lastMessage, sessionInfo.noReadCount, store.getUserId(), sessionId])
   return Object.assign({}, sessionData, sessionInfo)
 }
 
@@ -101,7 +100,8 @@ const delChatSession = (contactId) => {
   const sessionInfo = {
     status: 0
   }
-  return update('chat_session_user', sessionInfo, paramData)
+  const sql = 'update chat_session_user set status=? where user_id=? and contact_id=?'
+  return runStrict(sql, [sessionInfo.status, paramData.userId, paramData.contactId])
 }
 
 const topChatSession = (contactId, topType) => {
@@ -112,7 +112,8 @@ const topChatSession = (contactId, topType) => {
   const sessionInfo = {
     topType
   }
-  return update('chat_session_user', sessionInfo, paramData)
+  const sql = 'update chat_session_user set top_type=? where user_id=? and contact_id=?'
+  return runStrict(sql, [sessionInfo.topType, paramData.userId, paramData.contactId])
 }
 
 export {
