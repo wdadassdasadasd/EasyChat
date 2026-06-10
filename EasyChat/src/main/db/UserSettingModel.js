@@ -1,0 +1,184 @@
+import store from '../store'
+import { insertOrIgnore, queryOne, run, runInTransaction, update } from './ADB'
+import os from 'os'
+import fs from 'fs'
+import path from 'path'
+const userDir = os.homedir()
+
+const defaultLocalFileFolder = () => {
+  return path.join(userDir, '.weChat', 'fileStorge')
+}
+
+const ensureFolder = async (folder) => {
+  // H-15: 异步文件操作，避免同步 fs 阻塞主进程
+  if (!folder) {
+    return
+  }
+  try {
+    await fs.promises.access(folder)
+  } catch {
+    await fs.promises.mkdir(folder, { recursive: true })
+  }
+}
+
+const parseSysSetting = (sysSetting) => {
+  try {
+    return sysSetting ? JSON.parse(sysSetting) : {}
+  } catch (e) {
+    // M-7: 解析失败时记录警告而非静默丢弃
+    console.error('Failed to parse sys_setting JSON, resetting to empty object', e)
+    return {}
+  }
+}
+
+const getFolderStats = async (folder) => {
+  // H-15: 异步文件操作，避免同步 fs 阻塞主进程
+  const stats = {
+    exists: false,
+    fileCount: 0,
+    totalSize: 0
+  }
+
+  if (!folder) {
+    return stats
+  }
+  try {
+    await fs.promises.access(folder)
+  } catch {
+    return stats
+  }
+
+  stats.exists = true
+  const walk = async (dir) => {
+    let fileList = []
+    try {
+      fileList = await fs.promises.readdir(dir, { withFileTypes: true })
+    } catch (e) {
+      return
+    }
+    for (const item of fileList) {
+      const fullPath = path.join(dir, item.name)
+      if (item.isDirectory()) {
+        await walk(fullPath)
+      } else if (item.isFile()) {
+        try {
+          const fileStat = await fs.promises.stat(fullPath)
+          stats.fileCount++
+          stats.totalSize += fileStat.size
+        } catch (e) {
+          // Ignore files that disappear while the folder is being scanned.
+        }
+      }
+    }
+  }
+
+  await walk(folder)
+  return stats
+}
+
+const updateNoReadCount = async (userId, noReadCount) => {
+  let sql = null
+  if (noReadCount === 0) {
+    return
+  }
+  if (noReadCount) {
+    sql = 'update user_setting set contact_no_read=contact_no_read+? where user_id=?'
+  } else {
+    noReadCount = 0
+    sql = 'update user_setting set contact_no_read=? where user_id=?'
+  }
+  await run(sql, [noReadCount, userId])
+}
+
+const addUserSetting = async (userId, email) => {
+  // H-14: 整个端口分配+插入操作包裹在事务中，防止并发分配相同端口
+  return runInTransaction(async () => {
+    let sql = 'select max(server_port) maxserver_port from user_setting'
+    const maxServerInfo = await queryOne(sql, [])
+    let serverPort = maxServerInfo?.maxserverPort
+    if (serverPort == null) {
+      serverPort = 10240
+    } else {
+      serverPort++
+    }
+
+    const sysSetting = {
+      localFileFolder: defaultLocalFileFolder()
+    }
+    sql = 'select * from user_setting where user_id=?'
+    const userInfo = await queryOne(sql, [userId])
+    let resultServerPort = null
+    let localFileFolder = null
+
+    if (userInfo) {
+      await update('user_setting', { email }, { userId })
+      resultServerPort = userInfo.serverPort
+      localFileFolder =
+        parseSysSetting(userInfo.sysSetting).localFileFolder || sysSetting.localFileFolder
+    } else {
+      await insertOrIgnore('user_setting', {
+        userId,
+        email,
+        sysSetting: JSON.stringify(sysSetting),
+        contactNoRead: 0,
+        serverPort
+      })
+      resultServerPort = serverPort
+      localFileFolder = sysSetting.localFileFolder
+    }
+
+    await ensureFolder(localFileFolder)
+    store.setUserData('localServerPort', resultServerPort)
+    store.setUserData('localFileFolder', localFileFolder)
+  })
+}
+
+const getLocalFileFolder = async () => {
+  const userId = store.getUserId()
+  const defaultFolder = defaultLocalFileFolder()
+  let localFileFolder = store.getUserData('localFileFolder')
+
+  if (!localFileFolder && userId) {
+    const userInfo = await queryOne('select * from user_setting where user_id=?', [userId])
+    localFileFolder = parseSysSetting(userInfo?.sysSetting).localFileFolder
+  }
+
+  localFileFolder = localFileFolder || defaultFolder
+  await ensureFolder(localFileFolder)
+  store.setUserData('localFileFolder', localFileFolder)
+
+  return {
+    localFileFolder,
+    defaultFolder,
+    isDefault: path.normalize(localFileFolder) === path.normalize(defaultFolder),
+    ...(await getFolderStats(localFileFolder))
+  }
+}
+
+const updateLocalFileFolder = async (folder) => {
+  const userId = store.getUserId()
+  if (!userId || !folder) {
+    return await getLocalFileFolder()
+  }
+
+  const localFileFolder = path.normalize(folder)
+  await ensureFolder(localFileFolder)
+  const userInfo = await queryOne('select * from user_setting where user_id=?', [userId])
+  const sysSetting = parseSysSetting(userInfo?.sysSetting)
+  sysSetting.localFileFolder = localFileFolder
+  await update('user_setting', { sysSetting: JSON.stringify(sysSetting) }, { userId })
+  store.setUserData('localFileFolder', localFileFolder)
+  return await getLocalFileFolder()
+}
+
+const resetLocalFileFolder = async () => {
+  return await updateLocalFileFolder(defaultLocalFileFolder())
+}
+
+export {
+  updateNoReadCount,
+  addUserSetting,
+  getLocalFileFolder,
+  updateLocalFileFolder,
+  resetLocalFileFolder
+}
