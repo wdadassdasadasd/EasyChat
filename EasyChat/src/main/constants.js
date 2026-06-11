@@ -8,6 +8,12 @@ export const WS_SYSTEM_CONTACT_FILTER = 'EasyChat'
 // 心跳间隔（ms）
 export const HEARTBEAT_INTERVAL = 10000
 
+// 心跳 pong 最大等待时间（ms），超过后认为连接半开
+export const HEARTBEAT_PONG_TIMEOUT = HEARTBEAT_INTERVAL * 2
+
+// 单个 WebSocket 消息处理最大耗时（ms），防止处理链永久阻塞
+export const WS_MESSAGE_PROCESS_TIMEOUT = 15000
+
 // 消息队列刷盘延迟（ms）
 export const RECEIVE_FLUSH_DELAY = 50
 

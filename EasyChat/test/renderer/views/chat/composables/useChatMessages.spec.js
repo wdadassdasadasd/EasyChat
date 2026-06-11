@@ -54,6 +54,7 @@ const createHarness = () => {
     contactType: 0,
     sessionId: 's1'
   })
+  const loadChatSession = vi.fn()
   const markSessionRead = vi.fn()
   const patchChatSessions = vi.fn()
   const proxy = {
@@ -70,7 +71,7 @@ const createHarness = () => {
   const chat = useChatMessages({
     currentChatSession,
     currentUserId: ref('u1'),
-    loadChatSession: vi.fn(),
+    loadChatSession,
     markSessionRead,
     messageListRef: ref(null),
     patchChatSessions,
@@ -82,6 +83,7 @@ const createHarness = () => {
     chat,
     currentChatSession,
     handlers,
+    loadChatSession,
     markSessionRead,
     patchChatSessions,
     proxy,
@@ -164,6 +166,35 @@ describe('useChatMessages receive flow', () => {
 
     expect(chat.messageList.value).toEqual([])
     expect(proxy.Message.error).toHaveBeenCalledWith('db failed')
+  })
+
+  it('resyncs sessions and refreshes current chat tail when batch receive requires recovery', () => {
+    const { chat, handlers, loadChatSession, patchChatSessions, proxy, window } = createHarness()
+
+    handlers.receiveMessageBatch(
+      {},
+      {
+        success: false,
+        kind: 'queue_overflow',
+        resyncRequired: true,
+        error: '消息同步异常，正在尝试恢复。',
+        sessions: [{ contactId: 'u2', sessionId: 's1', lastMessage: 'latest' }]
+      }
+    )
+
+    expect(chat.messageList.value).toEqual([])
+    expect(proxy.Message.error).toHaveBeenCalledWith('消息同步异常，正在尝试恢复。')
+    expect(patchChatSessions).toHaveBeenCalledWith([
+      { contactId: 'u2', sessionId: 's1', lastMessage: 'latest' }
+    ])
+    expect(loadChatSession).toHaveBeenCalled()
+    expect(window.electron.ipcRenderer.send).toHaveBeenCalledWith(
+      'loadChatMessage',
+      expect.objectContaining({
+        sessionId: 's1',
+        loadMode: 'tail'
+      })
+    )
   })
 
   it('merges a self WebSocket echo when HTTP replacement arrives later', async () => {

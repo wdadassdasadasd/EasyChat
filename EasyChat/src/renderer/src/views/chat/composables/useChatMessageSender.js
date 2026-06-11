@@ -221,6 +221,24 @@ export const useChatMessageSender = ({
     }
   }
 
+  const markMessageLocalSyncFailed = (localMessage, serverMessage, error) => {
+    const nextMessage = {
+      ...localMessage,
+      ...serverMessage,
+      status: 0,
+      uploading: false,
+      uploadError: '消息已发出，但本地记录保存失败，正在等待同步恢复。',
+      localSyncFailed: true
+    }
+    const replaced = replaceMessageById?.(localMessage.messageId, nextMessage)
+    if (!replaced) {
+      updateMessageById?.(localMessage.messageId, nextMessage)
+    }
+    console.error('message sent but local replace failed', error)
+    proxy.Message.error('消息已发出，但本地记录保存失败，请稍后重新打开会话同步。')
+    return nextMessage
+  }
+
   const markMessageSending = async (message, patch = {}) => {
     Object.assign(message, {
       status: 2,
@@ -257,11 +275,11 @@ export const useChatMessageSender = ({
       ...patch,
       status: patch.status ?? serverMessage.status ?? 1
     }
+    await persistServerMessage(localMessage.messageId, nextMessage)
     const replaced = replaceMessageById?.(localMessage.messageId, nextMessage)
     if (!replaced) {
       appendSentMessageIfMissing(nextMessage)
     }
-    await persistServerMessage(localMessage.messageId, nextMessage)
     return nextMessage
   }
 
@@ -328,8 +346,7 @@ export const useChatMessageSender = ({
     try {
       await replaceLocalWithServerMessage(localMessage, message)
     } catch (error) {
-      console.error('save sent text message failed', error)
-      proxy.Message.error('Message sent, but local history could not be updated.')
+      markMessageLocalSyncFailed(localMessage, message, error)
     }
   }
 
@@ -527,8 +544,7 @@ export const useChatMessageSender = ({
         status: 2
       })
     } catch (error) {
-      console.error('save sent media message failed', error)
-      proxy.Message.error('Media message created, but local history could not be updated.')
+      markMessageLocalSyncFailed(localMessage, message, error)
       return
     }
     enqueueUploadTask(() => uploadMessageFile(serverMessage, file, cover))

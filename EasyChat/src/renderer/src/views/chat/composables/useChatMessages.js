@@ -494,6 +494,14 @@ export const useChatMessages = ({
     }
   }
 
+  const recoverReceiveResync = (payload = {}) => {
+    patchChatSessions(payload.sessions || [])
+    loadChatSession?.()
+    if (currentChatSession.value?.sessionId) {
+      loadChatMessage({ refreshTail: true })
+    }
+  }
+
   // 保存监听器引用，便于精确移除而不影响其他窗口。
   let receiveMessageHandler = null
   let receiveMessageBatchHandler = null
@@ -554,7 +562,10 @@ export const useChatMessages = ({
 
     receiveMessageBatchHandler = (e, payload = {}) => {
       if (payload?.success === false) {
-        proxy.Message.error(payload.error || 'Receive messages failed')
+        proxy.Message.error(payload.error || '消息同步异常，正在尝试恢复。')
+        if (payload.resyncRequired) {
+          recoverReceiveResync(payload)
+        }
         return
       }
       const messages = Array.isArray(payload.messages) ? payload.messages : []

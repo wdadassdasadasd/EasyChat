@@ -6,8 +6,10 @@ import { updateNoReadCount } from './db/UserSettingModel'
 import {
   WS_SYSTEM_CONTACT_FILTER,
   HEARTBEAT_INTERVAL,
+  HEARTBEAT_PONG_TIMEOUT,
   RECEIVE_FLUSH_DELAY,
   RECEIVE_FLUSH_MAX,
+  WS_MESSAGE_PROCESS_TIMEOUT,
   WS_RECONNECT_DELAY,
   WS_MAX_RECONNECT_TIMES
 } from './constants'
@@ -21,20 +23,32 @@ let webContentsSender = null
 let needReconnect = null
 let lockReconnect = false
 let heartbeatTimer = null
+let pongTimeoutTimer = null
+let pongHandler = null
 let reconnectTimer = null
 let receiveQueue = []
 let receiveFlushTimer = null
 let receiveFlushing = false
 let wsRuntimeGeneration = 0
 let messageProcessingQueue = Promise.resolve()
+let awaitingPong = false
 const RECEIVE_SAVE_MAX_RETRY = 3
 const RECEIVE_QUEUE_MAX = RECEIVE_FLUSH_MAX * 20
+
+const clearPongTimeoutTimer = () => {
+  if (pongTimeoutTimer) {
+    clearTimeout(pongTimeoutTimer)
+    pongTimeoutTimer = null
+  }
+  awaitingPong = false
+}
 
 const clearHeartbeatTimer = () => {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer)
     heartbeatTimer = null
   }
+  clearPongTimeoutTimer()
 }
 
 const clearReconnectTimer = () => {
@@ -55,6 +69,11 @@ const closeCurrentSocket = () => {
   if (!ws) {
     return
   }
+  clearPongTimeoutTimer()
+  if (pongHandler && typeof ws.removeListener === 'function') {
+    ws.removeListener('pong', pongHandler)
+  }
+  pongHandler = null
   ws.onopen = null
   ws.onmessage = null
   ws.onclose = null
@@ -154,6 +173,59 @@ const publishWsStatus = (payload) => {
   sendToRenderer('wsStatusChange', payload)
 }
 
+const getResyncSessions = (messages = []) => {
+  return getLatestSessionList(messages).map(({ noReadCountDelta, ...sessionInfo }) => {
+    return sessionInfo
+  })
+}
+
+const publishReceiveRecoveryNeeded = ({ error, messages = [], stats = {} } = {}) => {
+  sendToRenderer('receiveMessageBatch', {
+    success: false,
+    messageType: 'batch',
+    messages: [],
+    sessions: getResyncSessions(messages),
+    kind: stats.kind || 'receive_resync_required',
+    error: error?.message || String(error || '消息同步异常，正在尝试恢复。'),
+    resyncRequired: true,
+    stats
+  })
+}
+
+const runWithTimeout = (task, timeoutMs, errorMessage) => {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) {
+        return
+      }
+      settled = true
+      reject(new Error(errorMessage))
+    }, timeoutMs)
+
+    Promise.resolve()
+      .then(task)
+      .then(
+        (result) => {
+          if (settled) {
+            return
+          }
+          settled = true
+          clearTimeout(timer)
+          resolve(result)
+        },
+        (error) => {
+          if (settled) {
+            return
+          }
+          settled = true
+          clearTimeout(timer)
+          reject(error)
+        }
+      )
+  })
+}
+
 const saveAndPublishMessageBatch = async (messages) => {
   if (!messages.length) {
     return
@@ -227,13 +299,11 @@ const flushReceiveQueue = async () => {
           receiveQueue = receiveQueue.filter((message) => {
             return !failedSet.has(message)
           })
-          sendToRenderer('receiveMessageBatch', {
-            success: false,
-            messageType: 'batch',
-            messages: [],
-            sessions: [],
-            error: error?.message || String(error),
+          publishReceiveRecoveryNeeded({
+            error,
+            messages: failedMessages,
             stats: {
+              kind: 'db_write_failed',
               failedCount: failedMessages.length
             }
           })
@@ -252,14 +322,12 @@ const flushReceiveQueue = async () => {
 const enqueueReceiveMessage = (message) => {
   if (receiveQueue.length >= RECEIVE_QUEUE_MAX) {
     const overflowCount = receiveQueue.length - RECEIVE_QUEUE_MAX + 1
-    receiveQueue.splice(0, overflowCount)
-    sendToRenderer('receiveMessageBatch', {
-      success: false,
-      messageType: 'batch',
-      messages: [],
-      sessions: [],
-      error: 'Receive queue overflow. Some messages were not saved locally.',
+    const droppedMessages = receiveQueue.splice(0, overflowCount)
+    publishReceiveRecoveryNeeded({
+      error: new Error('接收消息过多，部分消息未能及时写入本地，正在尝试重新同步。'),
+      messages: droppedMessages,
       stats: {
+        kind: 'queue_overflow',
         droppedCount: overflowCount
       }
     })
@@ -270,24 +338,75 @@ const enqueueReceiveMessage = (message) => {
 
 const startHeartbeat = () => {
   clearHeartbeatTimer()
-  if (ws?.readyState === WebSocket.OPEN) {
-    try {
-      ws.ping()
-    } catch (error) {
-      console.error('failed to send heartbeat ping', error)
-    }
+  pongHandler = () => {
+    clearPongTimeoutTimer()
   }
-  heartbeatTimer = setInterval(() => {
+
+  if (typeof ws?.on === 'function') {
+    ws.on('pong', pongHandler)
+  }
+
+  const sendHeartbeatPing = () => {
+    if (awaitingPong) {
+      return
+    }
     if (ws?.readyState === WebSocket.OPEN) {
       try {
         ws.ping()
+        awaitingPong = true
+        if (pongTimeoutTimer) {
+          clearTimeout(pongTimeoutTimer)
+        }
+        pongTimeoutTimer = setTimeout(() => {
+          if (!awaitingPong) {
+            return
+          }
+          console.warn('WebSocket pong timeout, reconnecting')
+          publishWsStatus({
+            status: 'stale',
+            retryLeft: maxReConnectTimes,
+            error: 'WebSocket heartbeat timed out'
+          })
+          clearHeartbeatTimer()
+          closeCurrentSocket()
+          reconnect()
+        }, HEARTBEAT_PONG_TIMEOUT)
       } catch (error) {
         console.error('failed to send heartbeat ping', error)
         clearHeartbeatTimer()
         reconnect()
       }
     }
-  }, HEARTBEAT_INTERVAL)
+  }
+
+  sendHeartbeatPing()
+  heartbeatTimer = setInterval(sendHeartbeatPing, HEARTBEAT_INTERVAL)
+}
+
+const enqueueMessageProcessing = (message) => {
+  messageProcessingQueue = messageProcessingQueue
+    .catch((error) => {
+      console.error('previous WebSocket message task failed, continuing', error)
+    })
+    .then(() => {
+      return runWithTimeout(
+        () => handleWsMessage(message),
+        WS_MESSAGE_PROCESS_TIMEOUT,
+        'WebSocket message processing timed out'
+      )
+    })
+    .catch((error) => {
+      console.error('failed to handle WebSocket message', error)
+      publishReceiveRecoveryNeeded({
+        error,
+        messages: normalizeWsMessages(message).filter(isValidWsMessage),
+        stats: {
+          kind: 'message_processing_timeout'
+        }
+      })
+    })
+
+  return messageProcessingQueue
 }
 
 const initWs = (config, sender) => {
@@ -437,11 +556,7 @@ const createWs = () => {
     }
 
     // C-4: 串行化消息处理，防止多个 handleWsMessage 并发执行竞争共享状态
-    messageProcessingQueue = messageProcessingQueue
-      .then(() => handleWsMessage(message))
-      .catch((error) => {
-        console.error('failed to handle WebSocket message', error)
-      })
+    enqueueMessageProcessing(message)
   }
 
   ws.onclose = function () {

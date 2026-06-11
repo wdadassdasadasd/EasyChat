@@ -285,6 +285,25 @@ describe('IPC: loadChatMessage', () => {
     expect(call[1]).toHaveProperty('success', true)
     expect(call[1]).toHaveProperty('targetMessageId', 5)
   })
+
+  it('sends error callback when message query fails', async () => {
+    const { selectMessageList } = await import('../../src/main/db/ChatMessageModel')
+    selectMessageList.mockRejectedValueOnce(new Error('read failed'))
+
+    ipcExports.onLoadChatMessage()
+    const handler = mockIpcOn['loadChatMessage']
+
+    await handler(ipcEvent(), { sessionId: 's1', loadSeq: 9 })
+    expect(mockSender.send).toHaveBeenCalledWith(
+      'loadChatMessageCallback',
+      expect.objectContaining({
+        success: false,
+        error: 'read failed',
+        sessionId: 's1',
+        loadSeq: 9
+      })
+    )
+  })
 })
 
 describe('IPC: clearChatMessage', () => {

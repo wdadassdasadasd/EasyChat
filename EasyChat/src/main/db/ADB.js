@@ -113,14 +113,14 @@ const convertDbObj2BizObj = (data) => {
 }
 
 const queryAll = (sql, params = []) => {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const stmt = db.prepare(sql)
     stmt.all(params, function (err, row = []) {
       if (err) {
         console.error(
           `SQL queryAll failed: ${sql}, params: ${JSON.stringify(params)}, error: ${err}`
         )
-        stmt.finalize(() => resolve([]))
+        stmt.finalize(() => reject(err))
         return
       }
       row.forEach((item, index) => {
@@ -132,15 +132,17 @@ const queryAll = (sql, params = []) => {
 }
 
 const queryOne = (sql, params = []) => {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const stmt = db.prepare(sql)
     stmt.get(params, function (err, row) {
       if (err) {
         console.error(
           `SQL queryOne failed: ${sql}, params: ${JSON.stringify(params)}, error: ${err}`
         )
+        stmt.finalize(() => reject(err))
+        return
       }
-      if (err || !row) {
+      if (!row) {
         stmt.finalize(() => resolve(null))
         return
       }
@@ -150,15 +152,17 @@ const queryOne = (sql, params = []) => {
 }
 
 const queryCount = (sql, params = []) => {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const stmt = db.prepare(sql)
     stmt.get(params, function (err, row) {
       if (err) {
         console.error(
           `SQL queryCount failed: ${sql}, params: ${JSON.stringify(params)}, error: ${err}`
         )
+        stmt.finalize(() => reject(err))
+        return
       }
-      if (err || !row) {
+      if (!row) {
         stmt.finalize(() => resolve(0))
         return
       }
@@ -308,6 +312,7 @@ const init = async () => {
 
 const dbReady = init().catch((err) => {
   console.error('Database initialization failed', err)
+  throw err
 })
 
 export {

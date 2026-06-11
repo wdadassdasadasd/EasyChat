@@ -1,14 +1,43 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { wsInstances } = vi.hoisted(() => ({
+  wsInstances: []
+}))
 
 vi.mock('ws', () => ({
   WebSocket: class {
     static OPEN = 1
+    static CLOSED = 3
+
+    constructor(url) {
+      this.url = url
+      this.readyState = 1
+      this.handlers = {}
+      this.ping = vi.fn()
+      this.close = vi.fn(() => {
+        this.readyState = 3
+        this.onclose?.()
+      })
+      this.on = vi.fn((event, handler) => {
+        this.handlers[event] = handler
+      })
+      this.removeListener = vi.fn((event, handler) => {
+        if (this.handlers[event] === handler) {
+          delete this.handlers[event]
+        }
+      })
+      wsInstances.push(this)
+    }
+
+    emit(event, ...args) {
+      this.handlers[event]?.(...args)
+    }
   }
 }))
 
 vi.mock('../../src/main/store', () => ({
   default: {
-    getData: vi.fn(),
+    getData: vi.fn(() => 'ws://localhost/ws'),
     getUserId: () => 'u1'
   }
 }))
@@ -27,6 +56,22 @@ vi.mock('../../src/main/db/UserSettingModel', () => ({
 }))
 
 describe('wsClient message normalization', () => {
+  beforeEach(async () => {
+    vi.useRealTimers()
+    vi.clearAllMocks()
+    vi.resetModules()
+    wsInstances.length = 0
+    const store = (await import('../../src/main/store')).default
+    store.getData.mockImplementation(() => 'ws://localhost/ws')
+    const chatModel = await import('../../src/main/db/ChatMessageModel')
+    chatModel.saveMessageBatch.mockImplementation(async () => ({ savedMessages: [] }))
+    chatModel.updateMessageStatus.mockResolvedValue(undefined)
+    const sessionModel = await import('../../src/main/db/ChatSessionUserModel')
+    sessionModel.saveOrUpdateChatSessionBatch4Init.mockResolvedValue(undefined)
+    const userSettingModel = await import('../../src/main/db/UserSettingModel')
+    userSettingModel.updateNoReadCount.mockResolvedValue(undefined)
+  })
+
   it('flattens raw arrays and nested batch payloads', async () => {
     const { normalizeWsMessages } = await import('../../src/main/wsClient')
     const first = { messageId: 1, sessionId: 's1', messageType: 2 }
@@ -115,5 +160,147 @@ describe('wsClient message normalization', () => {
     expect(isValidWsMessage({ messageType: 'invalid' })).toBe(false)
     expect(isValidWsMessage({ messageType: undefined })).toBe(false)
     expect(isValidWsMessage({})).toBe(false)
+  })
+
+  it('publishes stale status and reconnects when pong times out', async () => {
+    vi.useFakeTimers()
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onopen()
+
+    expect(socket.ping).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(20000)
+
+    expect(sender.send).toHaveBeenCalledWith(
+      'wsStatusChange',
+      expect.objectContaining({ status: 'stale' })
+    )
+    expect(socket.close).toHaveBeenCalled()
+
+    closeWs()
+    vi.useRealTimers()
+  })
+
+  it('emits resyncRequired when the receive queue overflows', async () => {
+    const { saveMessageBatch } = await import('../../src/main/db/ChatMessageModel')
+    saveMessageBatch.mockImplementation(() => new Promise(() => {}))
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onopen()
+    const messages = Array.from({ length: 2105 }, (_, index) => ({
+      messageId: index + 1,
+      sessionId: 's1',
+      contactId: 'u2',
+      contactType: 0,
+      messageType: 2,
+      messageContent: `m-${index}`,
+      sendUserId: 'u2',
+      sendTime: index + 1
+    }))
+
+    socket.onmessage({ data: JSON.stringify(messages) })
+    await vi.waitFor(() => {
+      expect(sender.send).toHaveBeenCalledWith(
+        'receiveMessageBatch',
+        expect.objectContaining({
+          kind: 'queue_overflow',
+          resyncRequired: true
+        })
+      )
+    })
+
+    closeWs()
+  })
+
+  it('emits db_write_failed after repeated receive flush failures', async () => {
+    vi.useFakeTimers()
+    const { saveMessageBatch } = await import('../../src/main/db/ChatMessageModel')
+    saveMessageBatch.mockRejectedValue(new Error('db down'))
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onopen()
+    socket.emit('pong')
+    socket.onmessage({
+      data: JSON.stringify({
+        messageId: 1,
+        sessionId: 's1',
+        contactId: 'u2',
+        contactType: 0,
+        messageType: 2,
+        messageContent: 'hello',
+        sendUserId: 'u2'
+      })
+    })
+
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(sender.send).toHaveBeenCalledWith(
+      'receiveMessageBatch',
+      expect.objectContaining({
+        kind: 'db_write_failed',
+        resyncRequired: true
+      })
+    )
+
+    closeWs()
+    vi.useRealTimers()
+  })
+
+  it('emits recovery signal when a WebSocket message task times out', async () => {
+    vi.useFakeTimers()
+    const { saveOrUpdateChatSessionBatch4Init } = await import(
+      '../../src/main/db/ChatSessionUserModel'
+    )
+    saveOrUpdateChatSessionBatch4Init.mockImplementation(() => new Promise(() => {}))
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onopen()
+    socket.emit('pong')
+    socket.onmessage({
+      data: JSON.stringify({
+        messageType: 0,
+        extendData: {
+          chatSessionList: [{ contactId: 'u2', contactName: 'User Two' }],
+          chatMessageList: []
+        }
+      })
+    })
+
+    await vi.advanceTimersByTimeAsync(15000)
+
+    expect(sender.send).toHaveBeenCalledWith(
+      'receiveMessageBatch',
+      expect.objectContaining({
+        kind: 'message_processing_timeout',
+        resyncRequired: true
+      })
+    )
+
+    closeWs()
+    vi.useRealTimers()
   })
 })

@@ -172,6 +172,44 @@ describe('useChatMessageSender', () => {
     expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'status'])
   })
 
+  it('marks text message as localSyncFailed when server send succeeds but local replace fails', async () => {
+    const { invoke, messageList, proxy, request, sender } = createHarness({
+      invokeResults: [
+        { success: true },
+        { success: false, error: 'replace failed' }
+      ],
+      requestResults: [
+        {
+          data: {
+            messageId: 111,
+            sessionId: 's1',
+            contactId: 'u2',
+            contactType: 0,
+            messageType: 2,
+            messageContent: 'server ok',
+            sendUserId: 'u1',
+            sendTime: 1110
+          }
+        }
+      ]
+    })
+
+    sender.onSendChatMessage({ contactId: 'u2', contactType: 0, messageContent: 'server ok' })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+    await flush()
+
+    expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'replace'])
+    expect(messageList.value).toHaveLength(1)
+    expect(messageList.value[0]).toMatchObject({
+      messageId: 111,
+      status: 0,
+      localSyncFailed: true
+    })
+    expect(proxy.Message.error).toHaveBeenCalledWith(
+      '消息已发出，但本地记录保存失败，请稍后重新打开会话同步。'
+    )
+  })
+
   it('does not send HTTP when pending save fails', async () => {
     const { invoke, messageList, proxy, request, sender } = createHarness({
       invokeResults: [{ success: false, error: 'db unavailable' }],
@@ -275,6 +313,52 @@ describe('useChatMessageSender', () => {
     expect(messageList.value[0].messageId).toBe(303)
     expect(messageList.value[0].status).toBe(0)
     expect(messageList.value[0].uploading).toBe(false)
+  })
+
+  it('does not upload media when server message replace fails locally', async () => {
+    const { messageList, proxy, request, sender } = createHarness({
+      invokeResults: [
+        { success: true },
+        { success: false, error: 'replace failed' }
+      ],
+      requestResults: [
+        {
+          data: {
+            messageId: 313,
+            sessionId: 's1',
+            contactId: 'u2',
+            contactType: 0,
+            messageType: 5,
+            messageContent: 'no-upload.txt',
+            fileName: 'no-upload.txt',
+            fileType: 2,
+            sendUserId: 'u1',
+            sendTime: 3130
+          }
+        },
+        { data: null }
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'no-upload.txt', size: 12, path: 'D:/tmp/no-upload.txt' },
+      cover: { name: 'cover.png' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+    await flush()
+
+    expect(messageList.value).toHaveLength(1)
+    expect(messageList.value[0]).toMatchObject({
+      messageId: 313,
+      status: 0,
+      localSyncFailed: true,
+      uploading: false
+    })
+    expect(proxy.Message.error).toHaveBeenCalledWith(
+      '消息已发出，但本地记录保存失败，请稍后重新打开会话同步。'
+    )
   })
 
   it('keeps a media message successful when file ack arrives before upload failure', async () => {
