@@ -40,7 +40,9 @@ const createIpcMock = () => {
 const createHarness = () => {
   const { handlers, ipcRenderer } = createIpcMock()
   global.window = {
-    ipcRenderer,
+    electron: {
+      ipcRenderer
+    },
     requestAnimationFrame: (callback) => setTimeout(callback, 0)
   }
   global.document = {
@@ -212,7 +214,7 @@ describe('useChatMessages receive flow', () => {
     await vi.waitFor(() => {
       expect(chat.messageList.value.map((message) => message.messageId)).toEqual([777])
     })
-    expect(window.ipcRenderer.invoke.mock.calls.map((call) => call[1].mode)).toEqual([
+    expect(window.electron.ipcRenderer.invoke.mock.calls.map((call) => call[1].mode)).toEqual([
       'pending',
       'replace'
     ])
@@ -223,15 +225,15 @@ describe('useChatMessages receive flow', () => {
 
     chat.registerMessageListeners()
 
-    expect(window.ipcRenderer.removeListener).toHaveBeenCalledWith(
+    expect(window.electron.ipcRenderer.removeListener).toHaveBeenCalledWith(
       'receiveMessage',
       expect.any(Function)
     )
-    expect(window.ipcRenderer.removeListener).toHaveBeenCalledWith(
+    expect(window.electron.ipcRenderer.removeListener).toHaveBeenCalledWith(
       'receiveMessageBatch',
       expect.any(Function)
     )
-    expect(window.ipcRenderer.removeListener).toHaveBeenCalledWith(
+    expect(window.electron.ipcRenderer.removeListener).toHaveBeenCalledWith(
       'loadChatMessageCallback',
       expect.any(Function)
     )

@@ -43,10 +43,14 @@ const api = {
   adminDissolutionGroup: '/admin/dissolutionGroup',
   saveSysSetting: '/admin/saveSysSetting',
   getSysSeting4Admin: '/admin/getSysSetting',
-  loadUpdateDataList: '/update/loadUpdateList',
-  delUpdate: '/update/delUpdate',
   saveBeautAccount: '/admin/saveBeautAccount',
   delBeautAccount: '/admin/delBeautAccount',
-  checkVersion: '/update/checkVersion'
+  loadBeautyAccountList: '/admin/loadBeautyAccountList',
+  loadUpdateList: '/admin/loadUpdateList',
+  saveUpdate: '/admin/saveUpdate',
+  delUpdate: '/admin/delUpdate',
+  postUpdate: '/admin/postUpdate',
+  checkVersion: '/update/checkVersion',
+  downloadUpdate: '/update/download'
 }
 export default api

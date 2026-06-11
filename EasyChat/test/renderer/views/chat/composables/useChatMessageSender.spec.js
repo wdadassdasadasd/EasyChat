@@ -57,8 +57,10 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
     api: {
       getPathForFile: (file) => file.path || ''
     },
-    ipcRenderer: {
-      invoke
+    electron: {
+      ipcRenderer: {
+        invoke
+      }
     }
   }
   global.URL.createObjectURL = vi.fn(() => 'blob://preview')
