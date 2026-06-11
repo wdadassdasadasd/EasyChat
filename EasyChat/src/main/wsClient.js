@@ -34,6 +34,61 @@ let messageProcessingQueue = Promise.resolve()
 let awaitingPong = false
 const RECEIVE_SAVE_MAX_RETRY = 3
 const RECEIVE_QUEUE_MAX = RECEIVE_FLUSH_MAX * 20
+const wsDiagnostics = {
+  status: 'closed',
+  retryLeft: 0,
+  reconnectCount: 0,
+  queueSize: 0,
+  lastPingAt: 0,
+  lastPongAt: 0,
+  parseErrorCount: 0,
+  invalidMessageCount: 0,
+  dbErrorCount: 0,
+  lastError: ''
+}
+
+const updateWsDiagnostics = (patch = {}) => {
+  Object.assign(wsDiagnostics, patch, {
+    queueSize: receiveQueue.length,
+    retryLeft: maxReConnectTimes
+  })
+}
+
+const getWsDiagnostics = () => {
+  return { ...wsDiagnostics, queueSize: receiveQueue.length, retryLeft: maxReConnectTimes }
+}
+
+const recordWsError = (error, patch = {}) => {
+  updateWsDiagnostics({
+    ...patch,
+    lastError: error?.message || String(error || '')
+  })
+}
+
+const describeWsPayloadForLog = (data) => {
+  if (typeof data === 'string') {
+    return { type: 'text', bytes: data.length }
+  }
+  if (data?.byteLength != null) {
+    return { type: 'binary', bytes: data.byteLength }
+  }
+  return { type: typeof data }
+}
+
+const resetWsDiagnostics = () => {
+  Object.assign(wsDiagnostics, {
+    status: 'closed',
+    retryLeft: 0,
+    reconnectCount: 0,
+    queueSize: 0,
+    lastPingAt: 0,
+    lastPongAt: 0,
+    parseErrorCount: 0,
+    invalidMessageCount: 0,
+    dbErrorCount: 0,
+    lastError: ''
+  })
+}
 
 const clearPongTimeoutTimer = () => {
   if (pongTimeoutTimer) {
@@ -170,7 +225,15 @@ const sendToRenderer = (channel, payload) => {
 }
 
 const publishWsStatus = (payload) => {
-  sendToRenderer('wsStatusChange', payload)
+  updateWsDiagnostics({
+    status: payload?.status || wsDiagnostics.status,
+    retryLeft: payload?.retryLeft ?? maxReConnectTimes,
+    lastError: payload?.error || wsDiagnostics.lastError
+  })
+  sendToRenderer('wsStatusChange', {
+    ...payload,
+    diagnostics: getWsDiagnostics()
+  })
 }
 
 const getResyncSessions = (messages = []) => {
@@ -180,6 +243,9 @@ const getResyncSessions = (messages = []) => {
 }
 
 const publishReceiveRecoveryNeeded = ({ error, messages = [], stats = {} } = {}) => {
+  if (stats.kind === 'queue_overflow') {
+    recordWsError(error, { queueSize: receiveQueue.length })
+  }
   sendToRenderer('receiveMessageBatch', {
     success: false,
     messageType: 'batch',
@@ -188,7 +254,10 @@ const publishReceiveRecoveryNeeded = ({ error, messages = [], stats = {} } = {})
     kind: stats.kind || 'receive_resync_required',
     error: error?.message || String(error || '消息同步异常，正在尝试恢复。'),
     resyncRequired: true,
-    stats
+    stats: {
+      ...stats,
+      diagnostics: getWsDiagnostics()
+    }
   })
 }
 
@@ -288,6 +357,7 @@ const flushReceiveQueue = async () => {
         receiveQueue.splice(0, messages.length)
       } catch (error) {
         console.error('failed to save received WebSocket messages', error)
+        updateWsDiagnostics({ dbErrorCount: wsDiagnostics.dbErrorCount + 1 })
         messages.forEach((message) => {
           message.__receiveRetry = Number(message.__receiveRetry || 0) + 1
         })
@@ -333,12 +403,14 @@ const enqueueReceiveMessage = (message) => {
     })
   }
   receiveQueue.push(message)
+  updateWsDiagnostics({ queueSize: receiveQueue.length })
   scheduleReceiveFlush()
 }
 
 const startHeartbeat = () => {
   clearHeartbeatTimer()
   pongHandler = () => {
+    updateWsDiagnostics({ lastPongAt: Date.now(), lastError: '' })
     clearPongTimeoutTimer()
   }
 
@@ -353,6 +425,7 @@ const startHeartbeat = () => {
     if (ws?.readyState === WebSocket.OPEN) {
       try {
         ws.ping()
+        updateWsDiagnostics({ lastPingAt: Date.now() })
         awaitingPong = true
         if (pongTimeoutTimer) {
           clearTimeout(pongTimeoutTimer)
@@ -362,6 +435,7 @@ const startHeartbeat = () => {
             return
           }
           console.warn('WebSocket pong timeout, reconnecting')
+          recordWsError(new Error('WebSocket heartbeat timed out'))
           publishWsStatus({
             status: 'stale',
             retryLeft: maxReConnectTimes,
@@ -373,6 +447,7 @@ const startHeartbeat = () => {
         }, HEARTBEAT_PONG_TIMEOUT)
       } catch (error) {
         console.error('failed to send heartbeat ping', error)
+        recordWsError(error)
         clearHeartbeatTimer()
         reconnect()
       }
@@ -410,15 +485,25 @@ const enqueueMessageProcessing = (message) => {
 }
 
 const initWs = (config, sender) => {
+  resetWsDiagnostics()
   const domainKey = NODE_ENV !== 'development' ? 'prodWsDomain' : 'devWsDomain'
   const wsDomain = store.getData(domainKey)
+  webContentsSender = sender
   if (!wsDomain) {
-    console.log(`missing ${domainKey}, skip WebSocket connect`)
+    maxReConnectTimes = 0
+    const error = `missing ${domainKey}, skip WebSocket connect`
+    console.log(error)
+    recordWsError(new Error(error))
+    publishWsStatus({
+      status: 'failed',
+      kind: 'config_missing',
+      retryLeft: 0,
+      error
+    })
     return
   }
   resetWsRuntime()
   wsUrl = `${wsDomain}?token=${config.token}`
-  webContentsSender = sender
   needReconnect = true
   maxReConnectTimes = WS_MAX_RECONNECT_TIMES
   publishWsStatus({ status: 'connecting', retryLeft: maxReConnectTimes })
@@ -427,8 +512,9 @@ const initWs = (config, sender) => {
 
 const closeWs = () => {
   needReconnect = false
+  maxReConnectTimes = 0
   resetWsRuntime()
-  publishWsStatus({ status: 'closed' })
+  publishWsStatus({ status: 'closed', retryLeft: 0 })
   webContentsSender = null
 }
 
@@ -514,6 +600,10 @@ const handleWsMessage = async (payload) => {
   for (const message of messages) {
     if (!isValidWsMessage(message)) {
       console.warn('drop invalid WebSocket message', message)
+      updateWsDiagnostics({
+        invalidMessageCount: wsDiagnostics.invalidMessageCount + 1,
+        lastError: 'Invalid WebSocket message'
+      })
       continue
     }
     await handleSingleWsMessage(message)
@@ -531,6 +621,7 @@ const createWs = () => {
     ws = new WebSocket(wsUrl)
   } catch (error) {
     console.error('failed to create WebSocket', error)
+    recordWsError(error)
     lockReconnect = false
     reconnect()
     return
@@ -540,18 +631,23 @@ const createWs = () => {
     console.log('WebSocket connected')
     lockReconnect = false
     maxReConnectTimes = WS_MAX_RECONNECT_TIMES
+    updateWsDiagnostics({ lastError: '' })
     publishWsStatus({ status: 'connected', retryLeft: maxReConnectTimes })
     startHeartbeat()
   }
 
   ws.onmessage = function (e) {
-    console.log('received WebSocket message', e.data)
+    console.log('received WebSocket message', describeWsPayloadForLog(e.data))
 
     let message = null
     try {
       message = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
     } catch (error) {
       console.error('failed to parse WebSocket message', error)
+      updateWsDiagnostics({
+        parseErrorCount: wsDiagnostics.parseErrorCount + 1,
+        lastError: error?.message || String(error)
+      })
       return
     }
 
@@ -569,6 +665,7 @@ const createWs = () => {
     // onclose always follows onerror in the WebSocket spec, so let onclose
     // handle the actual reconnection to avoid double-reconnect races.
     console.log('WebSocket error', error?.message || String(error))
+    recordWsError(error)
     publishWsStatus({
       status: 'reconnecting',
       retryLeft: maxReConnectTimes,
@@ -591,6 +688,7 @@ const reconnect = () => {
 
   if (maxReConnectTimes > 0) {
     console.log('prepare reconnect, remaining times: ' + maxReConnectTimes, new Date().getTime())
+    updateWsDiagnostics({ reconnectCount: wsDiagnostics.reconnectCount + 1 })
     publishWsStatus({ status: 'reconnecting', retryLeft: maxReConnectTimes })
     maxReConnectTimes--
     clearReconnectTimer()
@@ -606,4 +704,4 @@ const reconnect = () => {
   }
 }
 
-export { initWs, closeWs, normalizeWsMessages, isValidWsMessage }
+export { initWs, closeWs, normalizeWsMessages, isValidWsMessage, getWsDiagnostics }

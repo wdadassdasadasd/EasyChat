@@ -12,6 +12,9 @@ import { MAX_SQL_IN_PARAMS } from '../constants'
 const MESSAGE_PAGE_SIZE = 20
 const MESSAGE_CONTEXT_SIZE = 20
 const MESSAGE_SEARCH_LIMIT = 50
+const PENDING_RECOVERY_TIMEOUT_MS = 60000
+let ftsUnavailable = false
+const ftsBackfilledUsers = new Set()
 
 const getClearInfoBySessionId = (sessionId) => {
   if (!sessionId) {
@@ -74,6 +77,98 @@ const saveClearInfoBySessionId = async (sessionId, clearMessageId) => {
   ].join(' ')
 
   return runStrict(sql, [store.getUserId(), sessionId, nextClearMessageId, nextClearTime])
+}
+
+const isFtsAvailableError = (error) => {
+  const message = String(error?.message || error || '').toLowerCase()
+  return message.includes('fts5') || message.includes('chat_message_fts')
+}
+
+const runFtsSafe = async (task, context = 'fts') => {
+  if (ftsUnavailable) {
+    return false
+  }
+  try {
+    await task()
+    return true
+  } catch (error) {
+    if (isFtsAvailableError(error)) {
+      ftsUnavailable = true
+    }
+    console.error(`ChatMessageModel ${context} failed`, error)
+    return false
+  }
+}
+
+const deleteFtsByMessageId = (messageId) => {
+  if (messageId == null) {
+    return Promise.resolve(false)
+  }
+  return runFtsSafe(
+    () => runStrict('delete from chat_message_fts where user_id=? and message_id=?', [
+      store.getUserId(),
+      messageId
+    ]),
+    'delete fts message'
+  )
+}
+
+const upsertFtsMessage = async (message = {}) => {
+  if (!message?.messageId) {
+    return false
+  }
+  return runFtsSafe(async () => {
+    await runStrict('delete from chat_message_fts where user_id=? and message_id=?', [
+      store.getUserId(),
+      message.messageId
+    ])
+    await runStrict(
+      [
+        'insert into chat_message_fts',
+        '(user_id, session_id, message_id, message_content, file_name)',
+        'values (?, ?, ?, ?, ?)'
+      ].join(' '),
+      [
+        store.getUserId(),
+        message.sessionId || '',
+        message.messageId,
+        message.messageContent || '',
+        message.fileName || ''
+      ]
+    )
+  }, 'upsert fts message')
+}
+
+const deleteFtsBySessionId = (sessionId) => {
+  if (!sessionId) {
+    return Promise.resolve(false)
+  }
+  return runFtsSafe(
+    () => runStrict('delete from chat_message_fts where user_id=? and session_id=?', [
+      store.getUserId(),
+      sessionId
+    ]),
+    'delete fts session'
+  )
+}
+
+const backfillFtsForCurrentUser = async () => {
+  const userId = store.getUserId()
+  if (!userId || ftsUnavailable || ftsBackfilledUsers.has(userId)) {
+    return false
+  }
+  return runFtsSafe(async () => {
+    const sql = [
+      'insert into chat_message_fts',
+      '(user_id, session_id, message_id, message_content, file_name)',
+      "select user_id, session_id, message_id, coalesce(message_content, ''), coalesce(file_name, '')",
+      'from chat_message',
+      'where user_id=? and message_id not in',
+      '(select message_id from chat_message_fts where user_id=?)'
+    ].join(' ')
+    await runStrict(sql, [userId, userId])
+    ftsBackfilledUsers.add(userId)
+  }, 'backfill fts')
 }
 
 const filterVisibleMessages = async (messageList = []) => {
@@ -206,7 +301,9 @@ const upsertChatSessionPreservingState = async (session) => {
 
 const saveMessage = async (data) => {
   data.userId = store.getUserId()
-  return insertOrReplace('chat_message', data)
+  const result = await insertOrReplace('chat_message', data)
+  await upsertFtsMessage(data)
+  return result
 }
 
 const toSendSessionInfo = ({ message = {}, chatSession = {} } = {}) => {
@@ -243,6 +340,7 @@ const savePendingMessage = async ({ message, chatSession } = {}) => {
       status: message.status ?? 2
     }
     await insertOrReplaceStrict('chat_message', pendingMessage)
+    await upsertFtsMessage(pendingMessage)
 
     const session = toSendSessionInfo({ message: pendingMessage, chatSession })
     if (session) {
@@ -277,6 +375,10 @@ const replacePendingMessage = async ({ localMessageId, message, chatSession } = 
       status: message.status ?? 1
     }
     await insertOrReplaceStrict('chat_message', savedMessage)
+    if (localMessageId && String(localMessageId) !== String(savedMessage.messageId)) {
+      await deleteFtsByMessageId(localMessageId)
+    }
+    await upsertFtsMessage(savedMessage)
 
     const session = toSendSessionInfo({ message: savedMessage, chatSession })
     if (session) {
@@ -350,6 +452,7 @@ const saveMessageBatch = async (chatMessageList, { sessionRows = [] } = {}) => {
     for (let item of newMessageList) {
       item.userId = store.getUserId()
       await insertOrReplaceStrict('chat_message', item)
+      await upsertFtsMessage(item)
     }
 
     return {
@@ -469,7 +572,9 @@ const clearMessageBySessionId = async (sessionId) => {
     await saveClearInfoBySessionId(sessionId, maxMessageId)
 
     const sql = 'delete from chat_message where user_id=? and session_id=?'
-    return runStrict(sql, [store.getUserId(), sessionId])
+    const result = await runStrict(sql, [store.getUserId(), sessionId])
+    await deleteFtsBySessionId(sessionId)
+    return result
   })
 }
 
@@ -484,6 +589,7 @@ const clearMessageAndSessionSummaryBySessionId = async (sessionId) => {
 
     const deleteSql = 'delete from chat_message where user_id=? and session_id=?'
     await runStrict(deleteSql, [store.getUserId(), sessionId])
+    await deleteFtsBySessionId(sessionId)
 
     const sessionSql = 'select * from chat_session_user where user_id=? and session_id=?'
     const session = await queryOne(sessionSql, [store.getUserId(), sessionId])
@@ -507,7 +613,16 @@ const escapeLikeKeyword = (keyword = '') => {
   return String(keyword).replace(/[\\%_]/g, (match) => `\\${match}`)
 }
 
-const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
+const escapeFtsKeyword = (keyword = '') => {
+  return String(keyword)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((item) => `"${item.replace(/"/g, '""')}"`)
+    .join(' ')
+}
+
+const searchMessageBySessionIdLike = async ({ sessionId, keyword } = {}) => {
   const searchKey = String(keyword || '').trim()
   if (!sessionId || !searchKey) {
     return []
@@ -529,6 +644,61 @@ const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
   return dataList || []
 }
 
+const searchMessageBySessionIdFts = async ({ sessionId, keyword } = {}) => {
+  const ftsKeyword = escapeFtsKeyword(keyword)
+  if (!sessionId || !ftsKeyword || ftsUnavailable) {
+    return []
+  }
+
+  await backfillFtsForCurrentUser()
+  const clearInfo = await getClearInfoBySessionId(sessionId)
+  const sqlParts = [
+    'select m.* from chat_message_fts f',
+    'join chat_message m on m.user_id=f.user_id and m.message_id=f.message_id',
+    'where f.user_id=? and f.session_id=? and chat_message_fts match ?'
+  ]
+  const params = [store.getUserId(), sessionId, ftsKeyword]
+  const clearMessageId = Number(clearInfo?.clearMessageId || 0)
+  const clearTime = Number(clearInfo?.clearTime || 0)
+  if (clearMessageId > 0) {
+    sqlParts.push('and m.message_id>?')
+    params.push(clearMessageId)
+  } else if (clearTime > 0) {
+    sqlParts.push('and (m.send_time is null or m.send_time>?)')
+    params.push(clearTime)
+  }
+  sqlParts.push('order by m.message_id desc limit ?')
+  params.push(MESSAGE_SEARCH_LIMIT)
+  return await queryAll(sqlParts.join(' '), params)
+}
+
+const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
+  try {
+    const ftsResults = await searchMessageBySessionIdFts({ sessionId, keyword })
+    if (ftsResults.length > 0) {
+      return ftsResults
+    }
+  } catch (error) {
+    if (isFtsAvailableError(error)) {
+      ftsUnavailable = true
+    }
+    console.error('FTS search failed, fallback to LIKE', error)
+  }
+  return searchMessageBySessionIdLike({ sessionId, keyword })
+}
+
+const recoverStalePendingMessages = async ({ timeoutMs = PENDING_RECOVERY_TIMEOUT_MS } = {}) => {
+  const cutoffTime = Date.now() - Number(timeoutMs || PENDING_RECOVERY_TIMEOUT_MS)
+  const sql =
+    'update chat_message set status=? where user_id=? and status=? and (send_time is null or send_time<?)'
+  const recoveredCount = await runStrict(sql, [0, store.getUserId(), 2, cutoffTime])
+  return {
+    success: true,
+    recoveredCount,
+    cutoffTime
+  }
+}
+
 export {
   filterNewMessages,
   filterVisibleMessages,
@@ -542,5 +712,8 @@ export {
   selectMessageContextByMessageId,
   clearMessageBySessionId,
   clearMessageAndSessionSummaryBySessionId,
+  recoverStalePendingMessages,
+  searchMessageBySessionIdLike,
+  searchMessageBySessionIdFts,
   searchMessageBySessionId
 }

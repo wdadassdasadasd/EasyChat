@@ -101,6 +101,12 @@ const handleSearchChatMessageCallback = (e, data) => {
     if (!props.modelValue || data?.searchSeq !== messageSearchSeq || data?.sessionId !== props.currentChatSession.sessionId) {
         return;
     }
+    if (data?.success === false) {
+        messageSearchResults.value = [];
+        messageSearching.value = false;
+        proxy.Message.error('搜索聊天记录失败，请稍后重试。');
+        return;
+    }
     messageSearchResults.value = data?.dataList || [];
     messageSearching.value = false;
 };

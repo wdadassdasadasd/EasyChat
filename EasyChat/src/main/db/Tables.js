@@ -48,6 +48,18 @@ const add_tables = [
     ');'
 ]
 
+const optional_tables = [
+  [
+    'create virtual table if not exists chat_message_fts using fts5(',
+    'user_id unindexed,',
+    'session_id unindexed,',
+    'message_id unindexed,',
+    'message_content,',
+    'file_name',
+    ');'
+  ].join(' ')
+]
+
 // alter_tables 定义数据库迁移（每次新增列/索引后在此追加条目）：
 // 每个条目包含 { tableName, field, sql } — 如果表缺少 field 列，则自动执行 sql（幂等）。
 // 示例：
@@ -75,4 +87,4 @@ const add_index = [
     ');'
 ]
 
-export { add_tables, add_index, alter_tables }
+export { add_tables, optional_tables, add_index, alter_tables }

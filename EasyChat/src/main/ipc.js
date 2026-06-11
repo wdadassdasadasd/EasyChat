@@ -21,6 +21,7 @@ import {
 import {
   clearMessageAndSessionSummaryBySessionId,
   replacePendingMessage,
+  recoverStalePendingMessages,
   savePendingMessage,
   searchMessageBySessionId,
   selectMessageContextByMessageId,
@@ -40,6 +41,14 @@ const onLoginSuccess = (mainWindow, callback) => {
     store.initUserId(config.userId)
     store.setUserData('token', config.token)
     await addUserSetting(config.userId, config.email)
+    try {
+      const result = await recoverStalePendingMessages()
+      if (result?.recoveredCount) {
+        console.log(`Recovered stale pending messages: ${result.recoveredCount}`)
+      }
+    } catch (error) {
+      console.error('Failed to recover stale pending messages', error)
+    }
     callback(config)
     initWs(config, e.sender)
   })
@@ -55,16 +64,35 @@ const getErrorMessage = (error) => {
   return error?.message || String(error || 'unknown error')
 }
 
+const getErrorKind = (error) => {
+  if (error?.kind) {
+    return error.kind
+  }
+  const message = getErrorMessage(error).toLowerCase()
+  if (message.includes('timeout')) {
+    return 'timeout'
+  }
+  if (message.includes('database') || message.includes('sqlite') || message.includes('db')) {
+    return 'db_error'
+  }
+  return 'ipc_error'
+}
+
+const buildIpcErrorPayload = (callbackChannel, error, payload = {}) => {
+  return {
+    ...payload,
+    success: false,
+    channel: callbackChannel,
+    kind: getErrorKind(error),
+    error: getErrorMessage(error)
+  }
+}
+
 const sendIpcError = (sender, callbackChannel, error, payload = {}) => {
   if (!sender || sender.isDestroyed?.()) {
     return
   }
-  sender.send(callbackChannel, {
-    ...payload,
-    success: false,
-    channel: callbackChannel,
-    error: getErrorMessage(error)
-  })
+  sender.send(callbackChannel, buildIpcErrorPayload(callbackChannel, error, payload))
 }
 
 const registerSafeIpcOn = (channel, callbackChannel, handler) => {
@@ -227,11 +255,7 @@ const onSaveSendMessage = () => {
     try {
       return await saveSendMessageToLocal(payload)
     } catch (error) {
-      return {
-        success: false,
-        channel: 'saveSendMessage',
-        error: getErrorMessage(error)
-      }
+      return buildIpcErrorPayload('saveSendMessage', error)
     }
   })
 }
@@ -250,11 +274,10 @@ const onClearChatMessage = () => {
           session
         })
       } catch (error) {
-        e.sender.send('clearChatMessageCallback', {
-          success: false,
-          sessionId,
-          error: error?.message || String(error)
-        })
+        e.sender.send(
+          'clearChatMessageCallback',
+          buildIpcErrorPayload('clearChatMessageCallback', error, { sessionId })
+        )
       }
     }
   )

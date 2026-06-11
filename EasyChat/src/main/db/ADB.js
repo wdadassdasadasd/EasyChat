@@ -1,4 +1,4 @@
-import { add_tables, add_index, alter_tables } from './Tables'
+import { add_tables, optional_tables, add_index, alter_tables } from './Tables'
 import fs from 'fs'
 import sqlite3 from 'sqlite3'
 import os from 'os'
@@ -383,6 +383,11 @@ const update = async (tableName, data, paramData) => {
 const createTable = async () => {
   for (const item of add_tables) {
     await runRawSql(item)
+  }
+  for (const item of optional_tables || []) {
+    await runRawSql(item).catch((error) => {
+      console.error(`optional database feature failed:${item}`, error)
+    })
   }
   for (const item of add_index) {
     await runRawSql(item)

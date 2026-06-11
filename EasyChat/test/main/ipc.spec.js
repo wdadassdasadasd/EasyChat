@@ -57,6 +57,7 @@ vi.mock('../../src/main/db/ChatMessageModel', () => ({
     sessionId: sid, contactId: 'c1', lastMessage: '', noReadCount: 0
   })),
   clearMessageBySessionId: vi.fn(async () => 1),
+  recoverStalePendingMessages: vi.fn(async () => ({ success: true, recoveredCount: 2 })),
   replacePendingMessage: vi.fn(async ({ message, localMessageId }) => ({
     success: true, messageId: message?.messageId, localMessageId
   })),
@@ -186,6 +187,31 @@ describe('IPC: GetLocalStore', () => {
 // ═══════════════════════════════════════════════
 // Session channels (registerSafeIpcOn)
 // ═══════════════════════════════════════════════
+describe('IPC: openChat', () => {
+  it('recovers stale pending messages before starting WebSocket', async () => {
+    const { recoverStalePendingMessages } = await import('../../src/main/db/ChatMessageModel')
+    const { initWs } = await import('../../src/main/wsClient')
+    const callback = vi.fn()
+
+    ipcExports.onLoginSuccess({}, callback)
+    const handler = mockIpcOn['openChat']
+    expect(handler).toBeDefined()
+
+    await handler(ipcEvent(), {
+      userId: 'u1',
+      token: 'token-1',
+      email: 'u1@example.com'
+    })
+
+    expect(recoverStalePendingMessages).toHaveBeenCalled()
+    expect(callback).toHaveBeenCalled()
+    expect(initWs).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', token: 'token-1' }),
+      mockSender
+    )
+  })
+})
+
 describe('IPC: loadSessionData', () => {
   // FIXME: registerSafeIpcOn happy-path tests have mock state pollution
   // between tests. The error-path variant works correctly. The contract
@@ -334,6 +360,27 @@ describe('IPC: searchChatMessage', () => {
     expect(call).toBeDefined()
     expect(call[1]).toHaveProperty('success', true)
     expect(call[1]).toHaveProperty('dataList')
+  })
+
+  it('sends unified error callback when search fails', async () => {
+    const { searchMessageBySessionId } = await import('../../src/main/db/ChatMessageModel')
+    searchMessageBySessionId.mockRejectedValueOnce(new Error('db search failed'))
+
+    ipcExports.onSearchChatMessage()
+    const handler = mockIpcOn['searchChatMessage']
+
+    await handler(ipcEvent(), { sessionId: 's1', keyword: 'hello', searchSeq: 7 })
+    expect(mockSender.send).toHaveBeenCalledWith(
+      'searchChatMessageCallback',
+      expect.objectContaining({
+        success: false,
+        channel: 'searchChatMessageCallback',
+        kind: 'db_error',
+        error: 'db search failed',
+        sessionId: 's1',
+        searchSeq: 7
+      })
+    )
   })
 })
 

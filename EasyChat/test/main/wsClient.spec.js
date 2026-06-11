@@ -179,7 +179,13 @@ describe('wsClient message normalization', () => {
 
     expect(sender.send).toHaveBeenCalledWith(
       'wsStatusChange',
-      expect.objectContaining({ status: 'stale' })
+      expect.objectContaining({
+        status: 'stale',
+        diagnostics: expect.objectContaining({
+          lastPingAt: expect.any(Number),
+          lastError: 'WebSocket heartbeat timed out'
+        })
+      })
     )
     expect(socket.close).toHaveBeenCalled()
 
@@ -216,7 +222,12 @@ describe('wsClient message normalization', () => {
         'receiveMessageBatch',
         expect.objectContaining({
           kind: 'queue_overflow',
-          resyncRequired: true
+          resyncRequired: true,
+          stats: expect.objectContaining({
+            diagnostics: expect.objectContaining({
+              queueSize: expect.any(Number)
+            })
+          })
         })
       )
     })
@@ -255,9 +266,14 @@ describe('wsClient message normalization', () => {
     expect(sender.send).toHaveBeenCalledWith(
       'receiveMessageBatch',
       expect.objectContaining({
-        kind: 'db_write_failed',
-        resyncRequired: true
-      })
+          kind: 'db_write_failed',
+          resyncRequired: true,
+          stats: expect.objectContaining({
+            diagnostics: expect.objectContaining({
+              dbErrorCount: 3
+            })
+          })
+        })
     )
 
     closeWs()
@@ -302,5 +318,124 @@ describe('wsClient message normalization', () => {
 
     closeWs()
     vi.useRealTimers()
+  })
+
+  it('publishes failed config_missing when WebSocket domain is not configured', async () => {
+    const store = (await import('../../src/main/store')).default
+    store.getData.mockImplementationOnce(() => '')
+    const { initWs } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    initWs({ token: 'secret-token', userId: 'u1' }, sender)
+
+    expect(wsInstances).toHaveLength(0)
+    expect(sender.send).toHaveBeenCalledWith(
+      'wsStatusChange',
+      expect.objectContaining({
+        status: 'failed',
+        kind: 'config_missing',
+        diagnostics: expect.objectContaining({
+          retryLeft: 0,
+          lastError: expect.stringContaining('missing')
+        })
+      })
+    )
+    expect(JSON.stringify(sender.send.mock.calls)).not.toContain('secret-token')
+  })
+
+  it('publishes closed diagnostics with no reconnect attempts left', async () => {
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    closeWs()
+
+    expect(sender.send).toHaveBeenCalledWith(
+      'wsStatusChange',
+      expect.objectContaining({
+        status: 'closed',
+        retryLeft: 0,
+        diagnostics: expect.objectContaining({
+          retryLeft: 0
+        })
+      })
+    )
+  })
+
+  it('counts JSON parse errors without blocking later messages', async () => {
+    vi.useFakeTimers()
+    const { initWs, closeWs, getWsDiagnostics } = await import('../../src/main/wsClient')
+    const { saveMessageBatch } = await import('../../src/main/db/ChatMessageModel')
+    saveMessageBatch.mockResolvedValueOnce({
+      savedMessages: [
+        {
+          messageId: 2,
+          sessionId: 's1',
+          contactId: 'u2',
+          contactType: 0,
+          messageType: 2,
+          messageContent: 'ok',
+          sendUserId: 'u2'
+        }
+      ]
+    })
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onopen()
+    socket.emit('pong')
+    socket.onmessage({ data: '{bad-json' })
+    socket.onmessage({
+      data: JSON.stringify({
+        messageId: 2,
+        sessionId: 's1',
+        contactId: 'u2',
+        contactType: 0,
+        messageType: 2,
+        messageContent: 'ok',
+        sendUserId: 'u2'
+      })
+    })
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(getWsDiagnostics().parseErrorCount).toBe(1)
+    expect(sender.send).toHaveBeenCalledWith(
+      'receiveMessageBatch',
+      expect.objectContaining({
+        messages: expect.arrayContaining([expect.objectContaining({ messageId: 2 })])
+      })
+    )
+
+    closeWs()
+    vi.useRealTimers()
+  })
+
+  it('counts invalid WebSocket messages', async () => {
+    const { initWs, closeWs, getWsDiagnostics } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onopen()
+    socket.emit('pong')
+    socket.onmessage({ data: JSON.stringify({ messageType: 2, sessionId: 's1' }) })
+    await vi.waitFor(() => {
+      expect(getWsDiagnostics().invalidMessageCount).toBe(1)
+    })
+
+    closeWs()
   })
 })

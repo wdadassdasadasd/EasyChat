@@ -16,6 +16,16 @@ vi.mock('../../../src/main/db/ADB', () => ({
     return 1
   }),
   queryAll: vi.fn(async (sql) => {
+    if (sql.includes('chat_message_fts f')) {
+      return [
+        {
+          messageId: 900,
+          sessionId: 's1',
+          messageContent: 'fts result',
+          fileName: ''
+        }
+      ]
+    }
     if (sql.includes('chat_session_clear')) {
       return []
     }
@@ -102,6 +112,7 @@ describe('ChatMessageModel saveMessageBatch', () => {
 describe('ChatMessageModel savePendingMessage', () => {
   beforeEach(() => {
     insertedRows.length = 0
+    strictRuns.length = 0
   })
 
   it('saves message with status=2 and returns session', async () => {
@@ -134,6 +145,7 @@ describe('ChatMessageModel savePendingMessage', () => {
       messageContent: 'pending msg',
       userId: 'u1'
     })
+    expect(strictRuns.some((run) => run.sql.includes('chat_message_fts'))).toBe(true)
 
     expect(result.session).toBeTruthy()
     expect(result.session.contactId).toBe('u2')
@@ -155,6 +167,7 @@ describe('ChatMessageModel savePendingMessage', () => {
 describe('ChatMessageModel replacePendingMessage', () => {
   beforeEach(() => {
     insertedRows.length = 0
+    strictRuns.length = 0
   })
 
   it('deletes old temp messageId and inserts with status=1', async () => {
@@ -186,6 +199,8 @@ describe('ChatMessageModel replacePendingMessage', () => {
       status: 1,
       messageContent: 'replaced msg'
     })
+    expect(strictRuns.some((run) => run.sql.includes('delete from chat_message_fts'))).toBe(true)
+    expect(strictRuns.some((run) => run.sql.includes('insert into chat_message_fts'))).toBe(true)
   })
 
   it('returns error when messageId is missing', async () => {
@@ -298,6 +313,7 @@ describe('ChatMessageModel clearMessageAndSessionSummaryBySessionId', () => {
     expect(strictRuns.some((run) => run.sql.includes('chat_session_clear'))).toBe(true)
     expect(strictRuns.some((run) => run.sql.includes('delete from chat_message'))).toBe(true)
     expect(strictRuns.some((run) => run.sql.includes('update chat_session_user'))).toBe(true)
+    expect(strictRuns.some((run) => run.sql.includes('delete from chat_message_fts'))).toBe(true)
   })
 
   it('returns null for empty sessionId', async () => {
@@ -342,5 +358,69 @@ describe('ChatMessageModel searchMessageBySessionId', () => {
 
     const result = await searchMessageBySessionId({ sessionId: 's1', keyword: '' })
     expect(result).toEqual([])
+  })
+
+  it('uses FTS search before LIKE search', async () => {
+    const { searchMessageBySessionId } = await import('../../../src/main/db/ChatMessageModel')
+
+    const result = await searchMessageBySessionId({ sessionId: 's1', keyword: 'hello' })
+
+    expect(result).toEqual([
+      {
+        messageId: 900,
+        sessionId: 's1',
+        messageContent: 'fts result',
+        fileName: ''
+      }
+    ])
+  })
+
+  it('falls back to LIKE when FTS query fails', async () => {
+    const { queryAll } = await import('../../../src/main/db/ADB')
+    queryAll.mockImplementationOnce(async (sql) => {
+      if (sql.includes('chat_message_fts f')) {
+        throw new Error('fts syntax error')
+      }
+      return []
+    })
+    queryAll.mockImplementationOnce(async () => [
+      {
+        messageId: 901,
+        sessionId: 's1',
+        messageContent: 'like result'
+      }
+    ])
+    const { searchMessageBySessionId } = await import('../../../src/main/db/ChatMessageModel')
+
+    const result = await searchMessageBySessionId({ sessionId: 's1', keyword: 'hello' })
+
+    expect(result).toEqual([
+      {
+        messageId: 901,
+        sessionId: 's1',
+        messageContent: 'like result'
+      }
+    ])
+  })
+})
+
+describe('ChatMessageModel recoverStalePendingMessages', () => {
+  beforeEach(() => {
+    strictRuns.length = 0
+  })
+
+  it('marks stale status=2 messages as failed', async () => {
+    const { recoverStalePendingMessages } = await import(
+      '../../../src/main/db/ChatMessageModel'
+    )
+
+    const result = await recoverStalePendingMessages({ timeoutMs: 60000 })
+
+    expect(result.success).toBe(true)
+    expect(result.recoveredCount).toBe(1)
+    expect(strictRuns.at(-1)).toMatchObject({
+      params: [0, 'u1', 2, expect.any(Number)]
+    })
+    expect(strictRuns.at(-1).sql).toContain('status=?')
   })
 })
