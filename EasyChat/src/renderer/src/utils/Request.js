@@ -63,6 +63,39 @@ const isFileLike = (value) => {
   return value instanceof Blob || value instanceof File
 }
 
+const getErrorKind = (error = {}) => {
+  if (error.kind) {
+    return error.kind
+  }
+  if (error.code === 'ERR_CANCELED' || error.name === 'CanceledError') {
+    return 'canceled'
+  }
+  if (error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '')) {
+    return 'timeout'
+  }
+  if (error.response?.status) {
+    return 'http_status'
+  }
+  return 'network'
+}
+
+const normalizeRequestError = (error = {}, fallbackUrl = '') => {
+  const kind = getErrorKind(error)
+  return {
+    success: false,
+    kind,
+    code: error.code ?? error.response?.data?.code,
+    msg:
+      error.msg ||
+      error.response?.data?.info ||
+      error.response?.data?.message ||
+      error.message ||
+      '网络异常',
+    status: error.status ?? error.response?.status,
+    url: error.url || error.config?.url || fallbackUrl
+  }
+}
+
 //请求前拦截器
 instance.interceptors.request.use(
   (config) => {
@@ -76,7 +109,12 @@ instance.interceptors.request.use(
       hideLoadingIfDone()
     }
     Message.error('请求发送失败')
-    return Promise.reject('请求发送失败')
+    return Promise.reject({
+      kind: 'network',
+      showError: true,
+      msg: '请求发送失败',
+      config: error.config
+    })
   }
 )
 //请求后拦截器
@@ -98,7 +136,14 @@ instance.interceptors.response.use(
       return responseData
     } else if (responseData.code == 901) {
       await resetLoginState()
-      return Promise.reject({ showError: false })
+      return Promise.reject({
+        showError: false,
+        kind: 'auth_expired',
+        msg: responseData.info || '登录已过期',
+        code: responseData.code,
+        status: response.status,
+        url: response.config?.url
+      })
     } else {
       //其他错误
       if (errorCallback) {
@@ -106,9 +151,12 @@ instance.interceptors.response.use(
       }
       // M-12: errorCallback 已调用时不再重复弹窗
       return Promise.reject({
+        kind: 'api_code',
         showError: errorCallback ? false : showError,
         msg: responseData.info,
-        code: responseData.code
+        code: responseData.code,
+        status: response.status,
+        url: response.config?.url
       })
     }
   },
@@ -117,7 +165,22 @@ instance.interceptors.response.use(
     if (error.config?.showLoading) {
       hideLoadingIfDone()
     }
-    return Promise.reject({ showError: error.config?.showError ?? true, msg: '网络异常' })
+    const kind = getErrorKind(error)
+    const msg =
+      kind === 'timeout'
+        ? '请求超时'
+        : kind === 'canceled'
+          ? '请求已取消'
+          : error.response?.data?.info || error.response?.data?.message || '网络异常'
+    return Promise.reject({
+      kind,
+      showError: kind === 'canceled' ? false : (error.config?.showError ?? true),
+      msg,
+      code: error.code || error.response?.data?.code,
+      status: error.response?.status,
+      url: error.config?.url,
+      config: error.config
+    })
   }
 )
 
@@ -131,7 +194,8 @@ const request = (config) => {
     responseType = responseTypeJson,
     showError = true,
     timeout,
-    signal
+    signal,
+    returnError = false
   } = config
   let contentType = contentTypeForm
   let requestData = new URLSearchParams()
@@ -225,14 +289,17 @@ const request = (config) => {
     })
     .catch((error) => {
       clearDedup()
+      const normalizedError = normalizeRequestError(error, url)
       // M-11: 记录错误码便于调试，保持 null 返回维持向后兼容
-      if (error.code) {
-        console.error(`[Request] ${url} 返回码: ${error.code}, 错误: ${error.msg || '-'}`)
+      if (normalizedError.code || normalizedError.status || normalizedError.kind) {
+        console.error(
+          `[Request] ${url} failed kind=${normalizedError.kind}, code=${normalizedError.code || '-'}, status=${normalizedError.status || '-'}, error=${normalizedError.msg || '-'}`
+        )
       }
       if (error.showError) {
         Message.error(error.msg)
       }
-      return null
+      return returnError ? normalizedError : null
     })
 
   if (dedupKey) {

@@ -170,6 +170,27 @@ describe('useChatMessageSender', () => {
     expect(messageList.value[0].status).toBe(0)
     expect(proxy.Message.error).toHaveBeenCalled()
     expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'status'])
+    expect(request.mock.calls[0][0].returnError).toBe(true)
+  })
+
+  it('shows timeout message when structured text send error times out', async () => {
+    const { messageList, proxy, request, sender } = createHarness({
+      requestResults: [
+        {
+          success: false,
+          kind: 'timeout',
+          code: 'ECONNABORTED',
+          msg: '请求超时'
+        }
+      ]
+    })
+
+    sender.onSendChatMessage({ contactId: 'u2', contactType: 0, messageContent: 'hello' })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+    await flush()
+
+    expect(messageList.value[0].status).toBe(0)
+    expect(proxy.Message.error).toHaveBeenCalledWith('消息发送超时，请检查网络后重试。')
   })
 
   it('marks text message as localSyncFailed when server send succeeds but local replace fails', async () => {
@@ -313,6 +334,88 @@ describe('useChatMessageSender', () => {
     expect(messageList.value[0].messageId).toBe(303)
     expect(messageList.value[0].status).toBe(0)
     expect(messageList.value[0].uploading).toBe(false)
+    expect(request.mock.calls[0][0].returnError).toBe(true)
+    expect(request.mock.calls[1][0].returnError).toBe(true)
+  })
+
+  it('marks media upload failed with timeout message when upload times out', async () => {
+    const { messageList, proxy, request, sender } = createHarness({
+      requestResults: [
+        {
+          data: {
+            messageId: 323,
+            sessionId: 's1',
+            contactId: 'u2',
+            contactType: 0,
+            messageType: 5,
+            messageContent: 'timeout.txt',
+            fileName: 'timeout.txt',
+            fileType: 2,
+            sendUserId: 'u1',
+            sendTime: 3230
+          }
+        },
+        {
+          success: false,
+          kind: 'timeout',
+          msg: '请求超时'
+        }
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'timeout.txt', size: 12, path: 'D:/tmp/timeout.txt' },
+      cover: { name: 'cover.png' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+    await flush()
+
+    expect(messageList.value[0].status).toBe(0)
+    expect(messageList.value[0].uploading).toBe(false)
+    expect(proxy.Message.error).toHaveBeenCalledWith('文件上传超时，请检查网络后重试。')
+  })
+
+  it('does not show generic network failure when upload is canceled', async () => {
+    const { messageList, proxy, request, sender } = createHarness({
+      requestResults: [
+        {
+          data: {
+            messageId: 324,
+            sessionId: 's1',
+            contactId: 'u2',
+            contactType: 0,
+            messageType: 5,
+            messageContent: 'cancel.txt',
+            fileName: 'cancel.txt',
+            fileType: 2,
+            sendUserId: 'u1',
+            sendTime: 3240
+          }
+        },
+        {
+          success: false,
+          kind: 'canceled',
+          msg: '请求已取消'
+        }
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'cancel.txt', size: 12, path: 'D:/tmp/cancel.txt' },
+      cover: { name: 'cover.png' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+    await flush()
+
+    expect(messageList.value[0].status).toBe(0)
+    expect(proxy.Message.error).toHaveBeenCalledWith('文件上传已取消。')
+    expect(proxy.Message.error).not.toHaveBeenCalledWith(
+      '文件上传失败，请检查网络后重试。'
+    )
   })
 
   it('does not upload media when server message replace fails locally', async () => {

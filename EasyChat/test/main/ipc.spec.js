@@ -53,6 +53,9 @@ vi.mock('../../src/main/db/ChatSessionUserModel', () => ({
 }))
 
 vi.mock('../../src/main/db/ChatMessageModel', () => ({
+  clearMessageAndSessionSummaryBySessionId: vi.fn(async (sid) => ({
+    sessionId: sid, contactId: 'c1', lastMessage: '', noReadCount: 0
+  })),
   clearMessageBySessionId: vi.fn(async () => 1),
   replacePendingMessage: vi.fn(async ({ message, localMessageId }) => ({
     success: true, messageId: message?.messageId, localMessageId
@@ -533,8 +536,10 @@ describe('registerSafeIpcOn error wrapping', () => {
   })
 
   it('sends error when clearChatMessage DB call fails', async () => {
-    const { clearMessageBySessionId } = await import('../../src/main/db/ChatMessageModel')
-    clearMessageBySessionId.mockRejectedValueOnce(new Error('txn fail'))
+    const { clearMessageAndSessionSummaryBySessionId } = await import(
+      '../../src/main/db/ChatMessageModel'
+    )
+    clearMessageAndSessionSummaryBySessionId.mockRejectedValueOnce(new Error('txn fail'))
 
     ipcExports.onClearChatMessage()
     const handler = mockIpcOn['clearChatMessage']

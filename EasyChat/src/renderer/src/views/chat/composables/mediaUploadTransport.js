@@ -5,6 +5,11 @@ const chunkUploadTimeout = Math.max(
   120000,
   (CHAT_CONSTANTS.UPLOAD_CHUNK_SIZE / (100 * 1024)) * 1000
 )
+const uploadHandshakeTimeout = 30000
+
+const isRequestFailure = (result) => {
+  return result && result.success === false
+}
 
 const normalizeUploadedChunks = (value) => {
   if (!Array.isArray(value)) {
@@ -48,6 +53,7 @@ export const uploadMediaFile = async ({
       },
       showLoading: false,
       signal,
+      returnError: true,
       timeout: chunkUploadTimeout
     })
   }
@@ -71,12 +77,16 @@ export const uploadMediaFile = async ({
     showLoading: false,
     showError: false,
     signal,
-    timeout: chunkUploadTimeout
+    returnError: true,
+    timeout: uploadHandshakeTimeout
   })
 
-  if (!initResult) {
+  if (!initResult || (isRequestFailure(initResult) && initResult.kind !== 'canceled')) {
     // 兼容尚未升级/重启的后端：新分片入口不可用时退回旧上传接口。
     return await uploadWithLegacyEndpoint()
+  }
+  if (isRequestFailure(initResult)) {
+    return initResult
   }
 
   const uploadId = initResult.data?.uploadId
@@ -125,11 +135,12 @@ export const uploadMediaFile = async ({
       },
       showLoading: false,
       signal,
+      returnError: true,
       timeout: chunkUploadTimeout
     })
 
-    if (!chunkResult) {
-      return null
+    if (!chunkResult || isRequestFailure(chunkResult)) {
+      return chunkResult || null
     }
     uploadedBytes += chunk.size
     uploadedChunks.add(chunkIndex)
@@ -149,7 +160,8 @@ export const uploadMediaFile = async ({
     },
     showLoading: false,
     signal,
-    timeout: chunkUploadTimeout
+    returnError: true,
+    timeout: uploadHandshakeTimeout
   })
 }
 
@@ -165,6 +177,7 @@ export const cancelMediaUpload = async ({ messageId, proxy, uploadId }) => {
     },
     showLoading: false,
     showError: false,
+    returnError: true,
     timeout: chunkUploadTimeout
   })
 }

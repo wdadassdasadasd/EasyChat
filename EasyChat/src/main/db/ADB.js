@@ -61,6 +61,69 @@ if (typeof db.configure === 'function') {
 let writeQueue = Promise.resolve()
 let writeQueueSize = 0
 const transactionContext = new AsyncLocalStorage()
+const WAL_CHECKPOINT_WRITE_INTERVAL = 500
+const VALID_WAL_CHECKPOINT_MODES = new Set(['PASSIVE', 'FULL', 'RESTART', 'TRUNCATE'])
+let dbInitialized = false
+let dbInitError = null
+let dbReadyPromise = null
+let successfulWriteCount = 0
+let checkpointInFlight = false
+
+const ensureDbReady = async () => {
+  if (dbInitialized) {
+    return
+  }
+  if (dbInitError) {
+    throw dbInitError
+  }
+  await dbReadyPromise
+  if (dbInitError) {
+    throw dbInitError
+  }
+}
+
+const runWalCheckpointNow = (mode = 'PASSIVE') => {
+  const normalizedMode = String(mode || 'PASSIVE').toUpperCase()
+  const checkpointMode = VALID_WAL_CHECKPOINT_MODES.has(normalizedMode) ? normalizedMode : 'PASSIVE'
+  return new Promise((resolve, reject) => {
+    db.all(`PRAGMA wal_checkpoint(${checkpointMode})`, (err, rows = []) => {
+      if (err) {
+        reject(err)
+        return
+      }
+      resolve(rows)
+    })
+  })
+}
+
+const checkpointWal = async (mode = 'PASSIVE') => {
+  await ensureDbReady()
+  return runWalCheckpointNow(mode)
+}
+
+const scheduleWalCheckpoint = () => {
+  successfulWriteCount += 1
+  if (
+    successfulWriteCount < WAL_CHECKPOINT_WRITE_INTERVAL ||
+    checkpointInFlight ||
+    transactionContext.getStore()?.inTransaction ||
+    !dbInitialized
+  ) {
+    return
+  }
+
+  successfulWriteCount = 0
+  checkpointInFlight = true
+  setTimeout(() => {
+    runWalCheckpointNow('PASSIVE')
+      .catch((err) => {
+        console.error('ADB WAL checkpoint failed', err)
+      })
+      .finally(() => {
+        checkpointInFlight = false
+      })
+  }, 0)
+}
 
 const enqueueDbWrite = (task) => {
   if (transactionContext.getStore()?.inTransaction) {
@@ -72,6 +135,10 @@ const enqueueDbWrite = (task) => {
       console.error('ADB write queue: previous task failed, continuing with next', err)
     })
     .then(task)
+    .then((result) => {
+      scheduleWalCheckpoint()
+      return result
+    })
   // M-30: 定期压缩 Promise 链，防止长时间运行下链无限增长导致内存压力
   if (writeQueueSize >= 1000) {
     nextTask.finally(() => {
@@ -112,7 +179,7 @@ const convertDbObj2BizObj = (data) => {
   return bizData
 }
 
-const queryAll = (sql, params = []) => {
+const queryAllNow = (sql, params = []) => {
   return new Promise((resolve, reject) => {
     const stmt = db.prepare(sql)
     stmt.all(params, function (err, row = []) {
@@ -131,7 +198,12 @@ const queryAll = (sql, params = []) => {
   })
 }
 
-const queryOne = (sql, params = []) => {
+const queryAll = async (sql, params = []) => {
+  await ensureDbReady()
+  return queryAllNow(sql, params)
+}
+
+const queryOneNow = (sql, params = []) => {
   return new Promise((resolve, reject) => {
     const stmt = db.prepare(sql)
     stmt.get(params, function (err, row) {
@@ -151,7 +223,12 @@ const queryOne = (sql, params = []) => {
   })
 }
 
-const queryCount = (sql, params = []) => {
+const queryOne = async (sql, params = []) => {
+  await ensureDbReady()
+  return queryOneNow(sql, params)
+}
+
+const queryCountNow = (sql, params = []) => {
   return new Promise((resolve, reject) => {
     const stmt = db.prepare(sql)
     stmt.get(params, function (err, row) {
@@ -172,6 +249,11 @@ const queryCount = (sql, params = []) => {
   })
 }
 
+const queryCount = async (sql, params = []) => {
+  await ensureDbReady()
+  return queryCountNow(sql, params)
+}
+
 const runStrictNow = (sql, params = []) => {
   return new Promise((resolve, reject) => {
     const stmt = db.prepare(sql)
@@ -187,11 +269,12 @@ const runStrictNow = (sql, params = []) => {
   })
 }
 
-const runStrict = (sql, params = []) => {
+const runStrict = async (sql, params = []) => {
+  await ensureDbReady()
   return enqueueDbWrite(() => runStrictNow(sql, params))
 }
 
-const run = (sql, params = []) => {
+const run = async (sql, params = []) => {
   return runStrict(sql, params).catch((err) => {
     console.error(
       `SQL run failed (non-fatal): ${sql}, params: ${JSON.stringify(params)}, error: ${err}`
@@ -201,6 +284,7 @@ const run = (sql, params = []) => {
 }
 
 const runInTransaction = async (callback) => {
+  await ensureDbReady()
   if (transactionContext.getStore()?.inTransaction) {
     return callback()
   }
@@ -221,9 +305,17 @@ const runInTransaction = async (callback) => {
 }
 
 const runPragma = () => {
-  return new Promise((resolve) => {
-    db.run('PRAGMA journal_mode=WAL', () => {
-      db.run('PRAGMA synchronous=NORMAL', () => {
+  return new Promise((resolve, reject) => {
+    db.run('PRAGMA journal_mode=WAL', (journalErr) => {
+      if (journalErr) {
+        reject(journalErr)
+        return
+      }
+      db.run('PRAGMA synchronous=NORMAL', (syncErr) => {
+        if (syncErr) {
+          reject(syncErr)
+          return
+        }
         resolve()
       })
     })
@@ -245,12 +337,12 @@ const buildInsertSql = (sqlPrefix, tableName, data) => {
   return { sql, params }
 }
 
-const insert = (sqlPrefix, tableName, data) => {
+const insert = async (sqlPrefix, tableName, data) => {
   const { sql, params } = buildInsertSql(sqlPrefix, tableName, data)
   return run(sql, params)
 }
 
-const insertStrict = (sqlPrefix, tableName, data) => {
+const insertStrict = async (sqlPrefix, tableName, data) => {
   const { sql, params } = buildInsertSql(sqlPrefix, tableName, data)
   return runStrict(sql, params)
 }
@@ -267,7 +359,7 @@ const insertOrIgnore = (tableName, data) => {
   return insert('insert or ignore into', tableName, data)
 }
 
-const update = (tableName, data, paramData) => {
+const update = async (tableName, data, paramData) => {
   const columnsMap = globalColumnMap[tableName]
   const dbColumns = []
   const params = []
@@ -297,7 +389,7 @@ const createTable = async () => {
   }
   for (const item of alter_tables) {
     const tableName = item.tableName || item.table_Name
-    const fieldList = await queryAll(`PRAGMA table_info(${tableName})`, [])
+    const fieldList = await queryAllNow(`PRAGMA table_info(${tableName})`, [])
     const field = fieldList.some((row) => row.name === item.field)
     if (!field && item.sql) {
       await runRawSql(item.sql)
@@ -310,13 +402,25 @@ const init = async () => {
   await createTable()
 }
 
-const dbReady = init().catch((err) => {
+dbReadyPromise = init()
+  .then(() => {
+    dbInitialized = true
+  })
+  .catch((err) => {
+    dbInitError = err
+    console.error('Database initialization failed', err)
+    throw err
+  })
+
+const dbReady = dbReadyPromise.catch((err) => {
   console.error('Database initialization failed', err)
   throw err
 })
 
 export {
   dbReady,
+  ensureDbReady,
+  checkpointWal,
   createTable,
   insertOrReplace,
   insertOrReplaceStrict,

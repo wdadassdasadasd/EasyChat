@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const insertedRows = []
+const strictRuns = []
 
 vi.mock('../../../src/main/store', () => ({
   default: {
@@ -42,13 +43,17 @@ vi.mock('../../../src/main/db/ADB', () => ({
   }),
   run: vi.fn(async () => 1),
   runInTransaction: vi.fn(async (callback) => callback()),
-  runStrict: vi.fn(async () => 1),
+  runStrict: vi.fn(async (sql, params) => {
+    strictRuns.push({ sql, params })
+    return 1
+  }),
   update: vi.fn(async () => 1)
 }))
 
 describe('ChatMessageModel saveMessageBatch', () => {
   beforeEach(() => {
     insertedRows.length = 0
+    strictRuns.length = 0
   })
 
   it('preserves existing unread and top state when receive session patch omits them', async () => {
@@ -268,6 +273,39 @@ describe('ChatMessageModel selectMessageList', () => {
     const result = await selectMessageList({ sessionId: 's1' })
     expect(result.dataList).toBeDefined()
     expect(typeof result.hasMore).toBe('boolean')
+  })
+})
+
+describe('ChatMessageModel clearMessageAndSessionSummaryBySessionId', () => {
+  beforeEach(() => {
+    strictRuns.length = 0
+  })
+
+  it('clears cursor, messages, and session summary in one transaction', async () => {
+    const { runInTransaction } = await import('../../../src/main/db/ADB')
+    const { clearMessageAndSessionSummaryBySessionId } = await import(
+      '../../../src/main/db/ChatMessageModel'
+    )
+
+    const session = await clearMessageAndSessionSummaryBySessionId('s1')
+
+    expect(runInTransaction).toHaveBeenCalled()
+    expect(session).toMatchObject({
+      sessionId: 's1',
+      lastMessage: '',
+      noReadCount: 0
+    })
+    expect(strictRuns.some((run) => run.sql.includes('chat_session_clear'))).toBe(true)
+    expect(strictRuns.some((run) => run.sql.includes('delete from chat_message'))).toBe(true)
+    expect(strictRuns.some((run) => run.sql.includes('update chat_session_user'))).toBe(true)
+  })
+
+  it('returns null for empty sessionId', async () => {
+    const { clearMessageAndSessionSummaryBySessionId } = await import(
+      '../../../src/main/db/ChatMessageModel'
+    )
+
+    await expect(clearMessageAndSessionSummaryBySessionId('')).resolves.toBeNull()
   })
 })
 

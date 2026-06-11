@@ -473,6 +473,36 @@ const clearMessageBySessionId = async (sessionId) => {
   })
 }
 
+const clearMessageAndSessionSummaryBySessionId = async (sessionId) => {
+  if (!sessionId) {
+    return null
+  }
+
+  return runInTransaction(async () => {
+    const maxMessageId = await getMaxMessageIdBySessionId(sessionId)
+    await saveClearInfoBySessionId(sessionId, maxMessageId)
+
+    const deleteSql = 'delete from chat_message where user_id=? and session_id=?'
+    await runStrict(deleteSql, [store.getUserId(), sessionId])
+
+    const sessionSql = 'select * from chat_session_user where user_id=? and session_id=?'
+    const session = await queryOne(sessionSql, [store.getUserId(), sessionId])
+    if (!session) {
+      return null
+    }
+
+    const updateSessionSql =
+      'update chat_session_user set last_message=?, no_read_count=? where user_id=? and session_id=?'
+    await runStrict(updateSessionSql, ['', 0, store.getUserId(), sessionId])
+
+    return {
+      ...session,
+      lastMessage: '',
+      noReadCount: 0
+    }
+  })
+}
+
 const escapeLikeKeyword = (keyword = '') => {
   return String(keyword).replace(/[\\%_]/g, (match) => `\\${match}`)
 }
@@ -511,5 +541,6 @@ export {
   selectMessageList,
   selectMessageContextByMessageId,
   clearMessageBySessionId,
+  clearMessageAndSessionSummaryBySessionId,
   searchMessageBySessionId
 }

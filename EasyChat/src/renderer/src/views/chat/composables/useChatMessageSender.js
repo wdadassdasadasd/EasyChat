@@ -112,6 +112,48 @@ export const useChatMessageSender = ({
     return saveResult
   }
 
+  const isRequestFailure = (result) => {
+    return result && result.success === false
+  }
+
+  const getSendFailureMessage = (result, fallback = '消息发送失败，请检查网络后重试。') => {
+    if (!isRequestFailure(result)) {
+      return fallback
+    }
+    if (result.kind === 'timeout') {
+      return '消息发送超时，请检查网络后重试。'
+    }
+    if (result.kind === 'auth_expired') {
+      return '登录已过期，请重新登录后再发送。'
+    }
+    if (result.kind === 'api_code' && result.msg) {
+      return result.msg
+    }
+    if (result.kind === 'http_status') {
+      return '服务器暂时不可用，请稍后重试。'
+    }
+    if (result.kind === 'canceled') {
+      return '请求已取消。'
+    }
+    return fallback
+  }
+
+  const getUploadFailureMessage = (result, canceled = false) => {
+    if (canceled || result?.kind === 'canceled') {
+      return '文件上传已取消。'
+    }
+    if (result?.kind === 'timeout') {
+      return '文件上传超时，请检查网络后重试。'
+    }
+    if (result?.kind === 'api_code' && result.msg) {
+      return result.msg
+    }
+    if (result?.kind === 'http_status') {
+      return '文件上传服务暂时不可用，请稍后重试。'
+    }
+    return '文件上传失败，请检查网络后重试。'
+  }
+
   const persistPendingMessage = async (message) => {
     const saveResult = await saveSendMessageToLocal({
       mode: 'pending',
@@ -331,14 +373,12 @@ export const useChatMessageSender = ({
         messageType: 2,
         messageContent
       },
-      showLoading: false
+      showLoading: false,
+      returnError: true
     })
 
-    if (!result) {
-      await markMessageFailed(
-        localMessage,
-        'Message send failed. Retry after checking the network.'
-      )
+    if (!result || isRequestFailure(result)) {
+      await markMessageFailed(localMessage, getSendFailureMessage(result))
       return
     }
 
@@ -397,7 +437,7 @@ export const useChatMessageSender = ({
     })
     uploadControllers.delete(String(message.messageId))
 
-    if (!uploadResult) {
+    if (!uploadResult || isRequestFailure(uploadResult)) {
       const latestMessage = messageList.value.find((item) => {
         return item.messageId == message.messageId
       })
@@ -407,10 +447,7 @@ export const useChatMessageSender = ({
       const canceled = controller.signal.aborted
       Object.assign(message, { uploadCanceled: canceled })
       updateMessageById?.(message.messageId, { uploadCanceled: canceled })
-      await markMessageFailed(
-        message,
-        canceled ? 'File upload canceled.' : 'File upload failed. The message can be retried.'
-      )
+      await markMessageFailed(message, getUploadFailureMessage(uploadResult, canceled))
       return
     }
 
@@ -509,13 +546,14 @@ export const useChatMessageSender = ({
         fileName: file.name,
         fileType
       },
-      showLoading: false
+      showLoading: false,
+      returnError: true
     })
 
-    if (!result) {
+    if (!result || isRequestFailure(result)) {
       await markMessageFailed(
         localMessage,
-        'Media message send failed. Retry after checking the network.'
+        getSendFailureMessage(result, '媒体消息发送失败，请检查网络后重试。')
       )
       return
     }
@@ -669,7 +707,7 @@ export const useChatMessageSender = ({
     }).catch((error) => {
       console.error('cancel media upload failed', error)
     })
-    markMessageFailed(message, 'File upload canceled.').catch((error) => {
+    markMessageFailed(message, '文件上传已取消。').catch((error) => {
       console.error('save canceled media status failed', error)
     })
   }

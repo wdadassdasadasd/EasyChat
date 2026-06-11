@@ -14,8 +14,10 @@ export const useChatSessions = ({ proxy, route }) => {
   let selectSession = () => {}
   let loadSessionDataHandler = null
   let markSessionReadHandler = null
+  let topChatSessionHandler = null
   // 标记已读的待确认操作映射：contactId → { previousNoReadCount, timeoutTimer }
   const pendingReadMap = new Map()
+  const pendingTopMap = new Map()
 
   const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0)
 
@@ -215,6 +217,24 @@ export const useChatSessions = ({ proxy, route }) => {
       }
     }
     window.electron.ipcRenderer.on('markSessionReadCallback', markSessionReadHandler)
+
+    topChatSessionHandler = (e, data = {}) => {
+      const contactId = data?.contactId
+      if (!contactId) return
+
+      const entry = pendingTopMap.get(contactId)
+      if (!entry || Number(data.topType) !== Number(entry.requestedTopType)) {
+        return
+      }
+
+      clearTimeout(entry.timeoutTimer)
+      pendingTopMap.delete(contactId)
+
+      if (!data?.success) {
+        entry.rollback()
+      }
+    }
+    window.electron.ipcRenderer.on('topChatSessionCallback', topChatSessionHandler)
   }
 
   const removeSessionListener = () => {
@@ -226,15 +246,22 @@ export const useChatSessions = ({ proxy, route }) => {
       window.electron.ipcRenderer.removeListener('markSessionReadCallback', markSessionReadHandler)
       markSessionReadHandler = null
     }
+    if (topChatSessionHandler) {
+      window.electron.ipcRenderer.removeListener('topChatSessionCallback', topChatSessionHandler)
+      topChatSessionHandler = null
+    }
     // 清理所有未完成的标记操作。
     pendingReadMap.forEach((entry) => {
       clearTimeout(entry.timeoutTimer)
     })
     pendingReadMap.clear()
+    pendingTopMap.forEach((entry) => {
+      clearTimeout(entry.timeoutTimer)
+    })
+    pendingTopMap.clear()
   }
 
-  const setChatSessionTop = (contactId, topType) => {
-    // 置顶先乐观更新本地列表，再通知主进程持久化，保证右键菜单反馈及时。
+  const applySessionTopType = (contactId, topType) => {
     const session = chatSessionList.value.find((item) => item.contactId == contactId)
     if (session) {
       session.topType = topType
@@ -245,6 +272,39 @@ export const useChatSessions = ({ proxy, route }) => {
       })
     }
     sortChatSessionList(chatSessionList.value)
+  }
+
+  const setChatSessionTop = (contactId, topType) => {
+    const pendingTopSession = chatSessionList.value.find((item) => item.contactId == contactId)
+    const previousTopType =
+      pendingTopSession?.topType ??
+      (currentChatSession.value.contactId == contactId ? currentChatSession.value.topType : 0) ??
+      0
+    const previousEntry = pendingTopMap.get(contactId)
+    if (previousEntry) {
+      clearTimeout(previousEntry.timeoutTimer)
+      pendingTopMap.delete(contactId)
+    }
+
+    applySessionTopType(contactId, topType)
+
+    const rollback = () => {
+      applySessionTopType(contactId, previousTopType)
+      proxy.Message.error('会话置顶保存失败，已恢复。')
+    }
+    const entry = {
+      requestedTopType: topType,
+      rollback,
+      timeoutTimer: null
+    }
+    entry.timeoutTimer = setTimeout(() => {
+      if (pendingTopMap.get(contactId) !== entry) {
+        return
+      }
+      pendingTopMap.delete(contactId)
+      rollback()
+    }, 5000)
+    pendingTopMap.set(contactId, entry)
     window.electron.ipcRenderer.send('topChatSession', { contactId, topType })
   }
 
@@ -267,7 +327,7 @@ export const useChatSessions = ({ proxy, route }) => {
   const patchChatSessions = (sessions = [], { readContactIds = [] } = {}) => {
     const readContactIdSet = new Set(readContactIds.map((item) => String(item)))
     const sessionList = Array.isArray(sessions) ? sessions : []
-    const patchedGeneration = ++_patchReadGeneration
+    const patchedGeneration = `patch-${++_patchReadGeneration}`
 
     sessionList.forEach((rawSession = {}) => {
       if (!rawSession.contactId) {
@@ -319,7 +379,7 @@ export const useChatSessions = ({ proxy, route }) => {
     // 已读状态乐观更新：先清零内存中的未读数再通知主进程落盘。
     const session = chatSessionList.value.find((item) => item.contactId == contactId)
     const previousNoReadCount = session ? session.noReadCount : 0
-    const markGeneration = ++_readGeneration
+    const markGeneration = `read-${++_readGeneration}`
     if (session) {
       session.noReadCount = 0
       session._readGeneration = markGeneration

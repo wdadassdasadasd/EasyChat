@@ -16,11 +16,10 @@ import {
   selectUserSessionList,
   delChatSession,
   markSessionRead,
-  topChatSession,
-  clearChatSessionSummaryBySessionId
+  topChatSession
 } from './db/ChatSessionUserModel.js'
 import {
-  clearMessageBySessionId,
+  clearMessageAndSessionSummaryBySessionId,
   replacePendingMessage,
   savePendingMessage,
   searchMessageBySessionId,
@@ -243,9 +242,8 @@ const onClearChatMessage = () => {
     'clearChatMessageCallback',
     async (e, { sessionId } = {}) => {
       try {
-        // 清空记录写入 clear 游标后删除当前本地消息，后续旧 WebSocket 回补会被过滤。
-        await clearMessageBySessionId(sessionId)
-        const session = await clearChatSessionSummaryBySessionId(sessionId)
+        // Clear cursor, message rows, and session summary must commit together.
+        const session = await clearMessageAndSessionSummaryBySessionId(sessionId)
         e.sender.send('clearChatMessageCallback', {
           success: true,
           sessionId,
