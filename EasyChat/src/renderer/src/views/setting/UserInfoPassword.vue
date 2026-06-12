@@ -61,7 +61,7 @@ const savePassword = () => {
                 });
                 if (!result) return;
                 proxy.Message.success('修改成功，请重新登录', () => {
-                    window.electron.ipcRenderer.send('reLogin');
+                    window.api.sendReLogin();
                 });
             }
         });

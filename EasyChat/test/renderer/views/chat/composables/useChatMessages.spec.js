@@ -20,29 +20,39 @@ vi.mock('@/views/chat/composables/useMessageScroll', () => ({
 
 let useChatMessages
 
-const createIpcMock = () => {
+const createApiMock = () => {
   const handlers = {}
+  const unsubscribeReceiveMessage = vi.fn(() => delete handlers.receiveMessage)
+  const unsubscribeReceiveMessageBatch = vi.fn(() => delete handlers.receiveMessageBatch)
+  const unsubscribeLoadChatMessage = vi.fn(() => delete handlers.loadChatMessageCallback)
   return {
     handlers,
-    ipcRenderer: {
-      on: vi.fn((channel, handler) => {
-        handlers[channel] = handler
+    api: {
+      onReceiveMessage: vi.fn((handler) => {
+        handlers.receiveMessage = handler
+        return unsubscribeReceiveMessage
       }),
-      removeListener: vi.fn((channel) => {
-        delete handlers[channel]
+      onReceiveMessageBatch: vi.fn((handler) => {
+        handlers.receiveMessageBatch = handler
+        return unsubscribeReceiveMessageBatch
       }),
-      invoke: vi.fn(async () => ({ success: true })),
-      send: vi.fn()
+      onLoadChatMessageCallback: vi.fn((handler) => {
+        handlers.loadChatMessageCallback = handler
+        return unsubscribeLoadChatMessage
+      }),
+      unsubscribeReceiveMessage,
+      unsubscribeReceiveMessageBatch,
+      unsubscribeLoadChatMessage,
+      sendLoadChatMessage: vi.fn(),
+      invokeSaveSendMessage: vi.fn(async () => ({ success: true }))
     }
   }
 }
 
 const createHarness = () => {
-  const { handlers, ipcRenderer } = createIpcMock()
+  const { handlers, api } = createApiMock()
   global.window = {
-    electron: {
-      ipcRenderer
-    },
+    api,
     requestAnimationFrame: (callback) => setTimeout(callback, 0)
   }
   global.document = {
@@ -80,6 +90,7 @@ const createHarness = () => {
   chat.registerMessageListeners()
 
   return {
+    api,
     chat,
     currentChatSession,
     handlers,
@@ -121,13 +132,10 @@ describe('useChatMessages receive flow', () => {
       sendUserId: 'u3'
     }
 
-    handlers.receiveMessageBatch(
-      {},
-      {
+    handlers.receiveMessageBatch({
         messages: [currentMessage, otherMessage, currentMessage],
         sessions: [{ contactId: 'u2', sessionId: 's1' }]
-      }
-    )
+      })
 
     expect(chat.messageList.value).toEqual([currentMessage])
     expect(markSessionRead).toHaveBeenCalledWith('u2')
@@ -140,15 +148,12 @@ describe('useChatMessages receive flow', () => {
     const { chat, currentChatSession, handlers } = createHarness()
     currentChatSession.value = { contactId: 'u2', sessionId: 's1', contactType: 0 }
 
-    await handlers.loadChatMessageCallback(
-      {},
-      {
+    await handlers.loadChatMessageCallback({
         dataList: [{ messageId: 9, sessionId: 's2' }],
         hasMore: false,
         sessionId: 's2',
         loadSeq: 1
-      }
-    )
+      })
 
     expect(chat.messageList.value).toEqual([])
   })
@@ -156,13 +161,10 @@ describe('useChatMessages receive flow', () => {
   it('surfaces batch receive failures without mutating the message list', () => {
     const { chat, handlers, proxy } = createHarness()
 
-    handlers.receiveMessageBatch(
-      {},
-      {
+    handlers.receiveMessageBatch({
         success: false,
         error: 'db failed'
-      }
-    )
+      })
 
     expect(chat.messageList.value).toEqual([])
     expect(proxy.Message.error).toHaveBeenCalledWith('db failed')
@@ -171,16 +173,13 @@ describe('useChatMessages receive flow', () => {
   it('resyncs sessions and refreshes current chat tail when batch receive requires recovery', () => {
     const { chat, handlers, loadChatSession, patchChatSessions, proxy, window } = createHarness()
 
-    handlers.receiveMessageBatch(
-      {},
-      {
+    handlers.receiveMessageBatch({
         success: false,
         kind: 'queue_overflow',
         resyncRequired: true,
         error: '消息同步异常，正在尝试恢复。',
         sessions: [{ contactId: 'u2', sessionId: 's1', lastMessage: 'latest' }]
-      }
-    )
+      })
 
     expect(chat.messageList.value).toEqual([])
     expect(proxy.Message.error).toHaveBeenCalledWith('消息同步异常，正在尝试恢复。')
@@ -188,8 +187,7 @@ describe('useChatMessages receive flow', () => {
       { contactId: 'u2', sessionId: 's1', lastMessage: 'latest' }
     ])
     expect(loadChatSession).toHaveBeenCalled()
-    expect(window.electron.ipcRenderer.send).toHaveBeenCalledWith(
-      'loadChatMessage',
+    expect(window.api.sendLoadChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 's1',
         loadMode: 'tail'
@@ -208,9 +206,7 @@ describe('useChatMessages receive flow', () => {
     chat.onSendChatMessage({ contactId: 'u2', contactType: 0, messageContent: 'echo' })
     await vi.waitFor(() => expect(proxy.Request).toHaveBeenCalledTimes(1))
 
-    handlers.receiveMessageBatch(
-      {},
-      {
+    handlers.receiveMessageBatch({
         messages: [
           {
             messageId: 777,
@@ -224,8 +220,7 @@ describe('useChatMessages receive flow', () => {
           }
         ],
         sessions: [{ contactId: 'u2', sessionId: 's1' }]
-      }
-    )
+      })
 
     expect(chat.messageList.value.map((message) => message.messageId)).toHaveLength(2)
 
@@ -245,7 +240,7 @@ describe('useChatMessages receive flow', () => {
     await vi.waitFor(() => {
       expect(chat.messageList.value.map((message) => message.messageId)).toEqual([777])
     })
-    expect(window.electron.ipcRenderer.invoke.mock.calls.map((call) => call[1].mode)).toEqual([
+    expect(window.api.invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual([
       'pending',
       'replace'
     ])
@@ -256,17 +251,8 @@ describe('useChatMessages receive flow', () => {
 
     chat.registerMessageListeners()
 
-    expect(window.electron.ipcRenderer.removeListener).toHaveBeenCalledWith(
-      'receiveMessage',
-      expect.any(Function)
-    )
-    expect(window.electron.ipcRenderer.removeListener).toHaveBeenCalledWith(
-      'receiveMessageBatch',
-      expect.any(Function)
-    )
-    expect(window.electron.ipcRenderer.removeListener).toHaveBeenCalledWith(
-      'loadChatMessageCallback',
-      expect.any(Function)
-    )
+    expect(window.api.unsubscribeReceiveMessage).toHaveBeenCalled()
+    expect(window.api.unsubscribeReceiveMessageBatch).toHaveBeenCalled()
+    expect(window.api.unsubscribeLoadChatMessage).toHaveBeenCalled()
   })
 })

@@ -59,27 +59,27 @@ const isMax=ref(false);
 const isTop=ref(false);
 
 let winStateHandler = null;
+let unsubscribeWinState = null;
 
 onMounted(()=>{
     isMax.value=false;
     // 监听主进程窗口状态变更（如 Win+↑/↓ 快捷键、拖拽标题栏等），保持按钮图标同步。
-    winStateHandler = (_e, payload) => {
+    winStateHandler = (payload) => {
         if (payload && typeof payload.maximized === 'boolean') {
             isMax.value = payload.maximized;
         }
     };
-    window.electron.ipcRenderer.on('winStateChange', winStateHandler);
+    unsubscribeWinState = window.api.onWinStateChange(winStateHandler);
 })
 
 onUnmounted(() => {
-    if (winStateHandler) {
-        window.electron.ipcRenderer.removeListener('winStateChange', winStateHandler);
-        winStateHandler = null;
-    }
+    unsubscribeWinState?.();
+    unsubscribeWinState = null;
+    winStateHandler = null;
 })
 
 const winOp=(action,data)=>{
-    window.electron.ipcRenderer.send("winTitleOp",{
+    window.api.sendWinTitleOp({
         action,
         data
     })

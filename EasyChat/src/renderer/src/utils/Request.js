@@ -26,7 +26,9 @@ const hideLoadingIfDone = () => {
   if (loadingCount <= 0) {
     try {
       loading?.close()
-    } catch (e) {}
+    } catch (e) {
+      // Loading cleanup is best effort during navigation and teardown.
+    }
     loading = null
     loadingCount = 0
   }
@@ -54,7 +56,7 @@ const resetLoginState = async () => {
     localStorage.removeItem('userInfo')
   }
 
-  await window.electron?.ipcRenderer?.invoke('logout').catch(() => false)
+  await window.api?.invokeLogout().catch(() => false)
 
   router.push('/login')
 }

@@ -136,10 +136,10 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
   const createVideoCoverWithFfmpeg = async (file) => {
     // Electron 环境下优先用 ffmpeg 提取封面，绕过浏览器 HEVC 解码限制。
     const filePath = file.path || window.api?.getPathForFile?.(file) || ''
-    if (!filePath || !window.electron?.ipcRenderer?.invoke) {
+    if (!filePath || !window.api) {
       return null
     }
-    const result = await window.electron.ipcRenderer.invoke('generateVideoThumbnail', {
+    const result = await window.api.invokeGenerateVideoThumbnail({
       filePath
     })
     if (!result?.success || !result?.arrayBuffer) {

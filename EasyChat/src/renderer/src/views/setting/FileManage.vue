@@ -70,12 +70,21 @@ const folderInfo = ref({
 });
 
 const invokeFolder = async (channel) => {
-    if (!window.electron?.ipcRenderer?.invoke) {
+    if (!window.api) {
         proxy.Message.error('当前环境不支持文件夹操作');
         return null;
     }
     try {
-        return await window.electron.ipcRenderer.invoke(channel);
+        const invokeMap = {
+            getLocalFileFolder: () => window.api.invokeGetLocalFileFolder(),
+            changeLocalFileFolder: () => window.api.invokeChangeLocalFileFolder(),
+            resetLocalFileFolder: () => window.api.invokeResetLocalFileFolder(),
+            openLocalFileFolder: () => window.api.invokeOpenLocalFileFolder()
+        }
+        if (invokeMap[channel]) {
+            return await invokeMap[channel]()
+        }
+        return null
     } catch (e) {
         console.error(`[FileManage] IPC ${channel} failed`, e);
         proxy.Message.error('操作失败，请重试');

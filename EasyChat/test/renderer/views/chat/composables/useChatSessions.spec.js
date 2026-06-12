@@ -11,21 +11,32 @@ let useChatSessions
 const createHarness = () => {
   const handlers = {}
   const sent = []
+  const unsubscribeLoadSessionData = vi.fn(() => delete handlers.loadSessionDataCallback)
+  const unsubscribeMarkSessionRead = vi.fn(() => delete handlers.markSessionReadCallback)
+  const unsubscribeTopChatSession = vi.fn(() => delete handlers.topChatSessionCallback)
   global.window = {
-    electron: {
-      ipcRenderer: {
-        on: vi.fn((channel, handler) => {
-          handlers[channel] = handler
-        }),
-        removeListener: vi.fn((channel, handler) => {
-          if (handlers[channel] === handler) {
-            delete handlers[channel]
-          }
-        }),
-        send: vi.fn((channel, payload) => {
-          sent.push({ channel, payload })
-        })
-      }
+    api: {
+      onLoadSessionDataCallback: vi.fn((handler) => {
+        handlers.loadSessionDataCallback = handler
+        return unsubscribeLoadSessionData
+      }),
+      onMarkSessionReadCallback: vi.fn((handler) => {
+        handlers.markSessionReadCallback = handler
+        return unsubscribeMarkSessionRead
+      }),
+      onTopChatSessionCallback: vi.fn((handler) => {
+        handlers.topChatSessionCallback = handler
+        return unsubscribeTopChatSession
+      }),
+      unsubscribeLoadSessionData,
+      unsubscribeMarkSessionRead,
+      unsubscribeTopChatSession,
+      sendMarkSessionRead: vi.fn((contactId) => {
+        sent.push({ method: 'sendMarkSessionRead', contactId })
+      }),
+      sendTopChatSession: vi.fn((data) => {
+        sent.push({ method: 'sendTopChatSession', data })
+      })
     }
   }
 
@@ -70,8 +81,8 @@ const createHarness = () => {
   sessions.currentChatSession.value = sessions.chatSessionList.value[0]
 
   return {
+    api: global.window.api,
     handlers,
-    ipcRenderer: global.window.electron.ipcRenderer,
     proxy,
     sent,
     sessions
@@ -99,7 +110,7 @@ describe('useChatSessions', () => {
     sessions.markSessionRead('c1')
     expect(sessions.chatSessionList.value[0].noReadCount).toBe(0)
 
-    handlers.markSessionReadCallback({}, { contactId: 'c1', success: true })
+    handlers.markSessionReadCallback({ contactId: 'c1', success: true })
     vi.advanceTimersByTime(5000)
 
     expect(sessions.chatSessionList.value[0].noReadCount).toBe(0)
@@ -110,7 +121,7 @@ describe('useChatSessions', () => {
     sessions.registerSessionListener()
 
     sessions.markSessionRead('c1')
-    handlers.markSessionReadCallback({}, { contactId: 'c1', success: false })
+    handlers.markSessionReadCallback({ contactId: 'c1', success: false })
 
     expect(sessions.chatSessionList.value[0].noReadCount).toBe(3)
   })
@@ -121,7 +132,7 @@ describe('useChatSessions', () => {
 
     sessions.markSessionRead('c1')
     sessions.patchChatSessions([{ contactId: 'c1', noReadCountDelta: 2 }])
-    handlers.markSessionReadCallback({}, { contactId: 'c1', success: false })
+    handlers.markSessionReadCallback({ contactId: 'c1', success: false })
 
     expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').noReadCount).toBe(2)
   })
@@ -131,7 +142,7 @@ describe('useChatSessions', () => {
     sessions.registerSessionListener()
 
     sessions.setChatSessionTop('c1', 1)
-    handlers.topChatSessionCallback({}, { contactId: 'c1', topType: 1, success: true })
+    handlers.topChatSessionCallback({ contactId: 'c1', topType: 1, success: true })
     vi.advanceTimersByTime(5000)
 
     expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').topType).toBe(1)
@@ -142,7 +153,7 @@ describe('useChatSessions', () => {
     sessions.registerSessionListener()
 
     sessions.setChatSessionTop('c1', 1)
-    handlers.topChatSessionCallback({}, { contactId: 'c1', topType: 1, success: false })
+    handlers.topChatSessionCallback({ contactId: 'c1', topType: 1, success: false })
 
     expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').topType).toBe(0)
     expect(proxy.Message.error).toHaveBeenCalled()
@@ -160,7 +171,7 @@ describe('useChatSessions', () => {
   })
 
   it('removes registered listeners and clears pending timers', () => {
-    const { handlers, ipcRenderer, proxy, sessions } = createHarness()
+    const { api, handlers, proxy, sessions } = createHarness()
     sessions.registerSessionListener()
     sessions.markSessionRead('c1')
     sessions.setChatSessionTop('c1', 1)
@@ -169,10 +180,7 @@ describe('useChatSessions', () => {
     vi.advanceTimersByTime(5000)
 
     expect(Object.keys(handlers)).toEqual([])
-    expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
-      'topChatSessionCallback',
-      expect.any(Function)
-    )
+    expect(api.unsubscribeTopChatSession).toHaveBeenCalled()
     expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').topType).toBe(1)
     expect(proxy.Message.error).not.toHaveBeenCalled()
   })

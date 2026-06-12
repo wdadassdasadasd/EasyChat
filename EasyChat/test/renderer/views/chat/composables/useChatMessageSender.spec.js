@@ -33,7 +33,7 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
     }
     return next ?? null
   })
-  const invoke = vi.fn(async () => {
+  const invokeSaveSendMessage = vi.fn(async () => {
     return invokeResults.shift() ?? { success: true, session: currentChatSession.value }
   })
   const patchChatSessions = vi.fn()
@@ -55,12 +55,8 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
 
   global.window = {
     api: {
-      getPathForFile: (file) => file.path || ''
-    },
-    electron: {
-      ipcRenderer: {
-        invoke
-      }
+      getPathForFile: (file) => file.path || '',
+      invokeSaveSendMessage
     }
   }
   global.URL.createObjectURL = vi.fn(() => 'blob://preview')
@@ -105,7 +101,7 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
 
   return {
     currentChatSession,
-    invoke,
+    invokeSaveSendMessage,
     messageList,
     patchChatSessions,
     proxy,
@@ -124,11 +120,13 @@ describe('useChatMessageSender', () => {
   })
 
   afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
     delete global.window
   })
 
   it('saves a pending text message and replaces it after server success', async () => {
-    const { invoke, messageList, request, sender } = createHarness({
+    const { invokeSaveSendMessage, messageList, request, sender } = createHarness({
       requestResults: [
         {
           data: {
@@ -152,12 +150,12 @@ describe('useChatMessageSender', () => {
     expect(messageList.value).toHaveLength(1)
     expect(messageList.value[0].messageId).toBe(101)
     expect(messageList.value[0].status).toBe(1)
-    expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'replace'])
-    expect(invoke.mock.calls[0][1].message.status).toBe(2)
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'replace'])
+    expect(invokeSaveSendMessage.mock.calls[0][0].message.status).toBe(2)
   })
 
   it('keeps a failed text message in the list for retry', async () => {
-    const { invoke, messageList, proxy, request, sender } = createHarness({
+    const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
       requestResults: [null]
     })
 
@@ -169,7 +167,7 @@ describe('useChatMessageSender', () => {
     expect(Number(messageList.value[0].messageId)).toBeLessThan(0)
     expect(messageList.value[0].status).toBe(0)
     expect(proxy.Message.error).toHaveBeenCalled()
-    expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'status'])
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'status'])
     expect(request.mock.calls[0][0].returnError).toBe(true)
   })
 
@@ -194,7 +192,7 @@ describe('useChatMessageSender', () => {
   })
 
   it('marks text message as localSyncFailed when server send succeeds but local replace fails', async () => {
-    const { invoke, messageList, proxy, request, sender } = createHarness({
+    const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
       invokeResults: [
         { success: true },
         { success: false, error: 'replace failed' }
@@ -219,7 +217,7 @@ describe('useChatMessageSender', () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
     await flush()
 
-    expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'replace'])
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'replace'])
     expect(messageList.value).toHaveLength(1)
     expect(messageList.value[0]).toMatchObject({
       messageId: 111,
@@ -232,7 +230,7 @@ describe('useChatMessageSender', () => {
   })
 
   it('does not send HTTP when pending save fails', async () => {
-    const { invoke, messageList, proxy, request, sender } = createHarness({
+    const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
       invokeResults: [{ success: false, error: 'db unavailable' }],
       requestResults: [
         {
@@ -254,8 +252,8 @@ describe('useChatMessageSender', () => {
     await flush()
 
     expect(request).not.toHaveBeenCalled()
-    expect(invoke).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'status'])
+    expect(invokeSaveSendMessage).toHaveBeenCalledTimes(2)
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'status'])
     expect(messageList.value).toHaveLength(1)
     expect(messageList.value[0].status).toBe(0)
     expect(proxy.Message.error).toHaveBeenCalledWith(
@@ -418,11 +416,14 @@ describe('useChatMessageSender', () => {
     )
   })
 
-  it('does not upload media when server message replace fails locally', async () => {
-    const { messageList, proxy, request, sender } = createHarness({
+  it('continues media upload after local replace retry succeeds', async () => {
+    vi.useFakeTimers()
+    const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
       invokeResults: [
         { success: true },
-        { success: false, error: 'replace failed' }
+        { success: false, error: 'replace failed' },
+        { success: true },
+        { success: true }
       ],
       requestResults: [
         {
@@ -449,9 +450,9 @@ describe('useChatMessageSender', () => {
       file: { name: 'no-upload.txt', size: 12, path: 'D:/tmp/no-upload.txt' },
       cover: { name: 'cover.png' }
     })
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
-    await flush()
+    await vi.advanceTimersByTimeAsync(0)
 
+    expect(request).toHaveBeenCalledTimes(1)
     expect(messageList.value).toHaveLength(1)
     expect(messageList.value[0]).toMatchObject({
       messageId: 313,
@@ -462,6 +463,22 @@ describe('useChatMessageSender', () => {
     expect(proxy.Message.error).toHaveBeenCalledWith(
       '消息已发出，但本地记录保存失败，请稍后重新打开会话同步。'
     )
+    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual([
+      'pending',
+      'replace',
+      'replace',
+      'status'
+    ])
+    expect(messageList.value[0]).toMatchObject({
+      messageId: 313,
+      status: 1,
+      localSyncFailed: false,
+      uploading: false
+    })
   })
 
   it('keeps a media message successful when file ack arrives before upload failure', async () => {
@@ -469,7 +486,7 @@ describe('useChatMessageSender', () => {
     const uploadPromise = new Promise((resolve) => {
       resolveUpload = resolve
     })
-    const { invoke, messageList, proxy, request, sender } = createHarness({
+    const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
       requestResults: [
         {
           data: {
@@ -511,7 +528,7 @@ describe('useChatMessageSender', () => {
     expect(messageList.value[0].uploading).toBe(false)
     expect(messageList.value[0].uploadAcked).toBe(true)
     expect(proxy.Message.error).not.toHaveBeenCalled()
-    expect(invoke.mock.calls.map((call) => call[1].mode)).toEqual(['pending', 'replace'])
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'replace'])
   })
 
   it('updates upload progress while uploading a media message', async () => {

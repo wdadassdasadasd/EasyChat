@@ -327,7 +327,7 @@ export const useChatMessages = ({
       pendingPrependScrollState = capturePrependScrollState()
       messageLoadingMore.value = true
     }
-    window.electron.ipcRenderer.send('loadChatMessage', {
+    window.api.sendLoadChatMessage({
       sessionId: currentChatSession.value.sessionId,
       beforeMessageId,
       loadMode: refreshTail ? 'tail' : undefined,
@@ -376,7 +376,7 @@ export const useChatMessages = ({
     loadChatMessage()
   }
 
-  const onLoadChatMessageCallback = async (e, payload = {}) => {
+  const onLoadChatMessageCallback = async (payload = {}) => {
     const { dataList, hasMore, loadMode, sessionId, loadSeq, targetMessageId } = payload
     if (payload?.success === false) {
       messageLoadingMore.value = false
@@ -451,7 +451,7 @@ export const useChatMessages = ({
     startMessagePanelRender()
     messageLoadingMore.value = true
     pendingPrependScrollState = null
-    window.electron.ipcRenderer.send('loadChatMessage', {
+    window.api.sendLoadChatMessage({
       sessionId: currentChatSession.value.sessionId,
       targetMessageId: message.messageId,
       loadSeq: getActiveMessageLoadSeq()
@@ -506,11 +506,14 @@ export const useChatMessages = ({
   let receiveMessageHandler = null
   let receiveMessageBatchHandler = null
   let loadChatMessageHandler = null
+  let unsubscribeReceiveMessage = null
+  let unsubscribeReceiveMessageBatch = null
+  let unsubscribeLoadChatMessage = null
 
   const registerMessageListeners = () => {
     removeMessageListeners()
 
-    receiveMessageHandler = (e, message) => {
+    receiveMessageHandler = (message) => {
       console.log('收到消息', message)
       if (typeof message === 'string') {
         try {
@@ -558,9 +561,9 @@ export const useChatMessages = ({
         }
       ])
     }
-    window.electron.ipcRenderer.on('receiveMessage', receiveMessageHandler)
+    unsubscribeReceiveMessage = window.api.onReceiveMessage(receiveMessageHandler)
 
-    receiveMessageBatchHandler = (e, payload = {}) => {
+    receiveMessageBatchHandler = (payload = {}) => {
       if (payload?.success === false) {
         proxy.Message.error(payload.error || '消息同步异常，正在尝试恢复。')
         if (payload.resyncRequired) {
@@ -572,23 +575,26 @@ export const useChatMessages = ({
       const sessions = Array.isArray(payload.sessions) ? payload.sessions : []
       handleReceiveMessages(messages, sessions)
     }
-    window.electron.ipcRenderer.on('receiveMessageBatch', receiveMessageBatchHandler)
+    unsubscribeReceiveMessageBatch = window.api.onReceiveMessageBatch(receiveMessageBatchHandler)
 
     loadChatMessageHandler = onLoadChatMessageCallback
-    window.electron.ipcRenderer.on('loadChatMessageCallback', loadChatMessageHandler)
+    unsubscribeLoadChatMessage = window.api.onLoadChatMessageCallback(loadChatMessageHandler)
   }
 
   const removeMessageListeners = () => {
     if (receiveMessageHandler) {
-      window.electron.ipcRenderer.removeListener('receiveMessage', receiveMessageHandler)
+      unsubscribeReceiveMessage?.()
+      unsubscribeReceiveMessage = null
       receiveMessageHandler = null
     }
     if (receiveMessageBatchHandler) {
-      window.electron.ipcRenderer.removeListener('receiveMessageBatch', receiveMessageBatchHandler)
+      unsubscribeReceiveMessageBatch?.()
+      unsubscribeReceiveMessageBatch = null
       receiveMessageBatchHandler = null
     }
     if (loadChatMessageHandler) {
-      window.electron.ipcRenderer.removeListener('loadChatMessageCallback', loadChatMessageHandler)
+      unsubscribeLoadChatMessage?.()
+      unsubscribeLoadChatMessage = null
       loadChatMessageHandler = null
     }
   }

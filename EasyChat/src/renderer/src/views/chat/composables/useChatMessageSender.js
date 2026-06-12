@@ -55,7 +55,7 @@ export const useChatMessageSender = ({
   }
 
   const saveSendMessageToLocal = async (payload) => {
-    return await window.electron.ipcRenderer.invoke('saveSendMessage', payload)
+    return await window.api.invokeSaveSendMessage(payload)
   }
 
   const nextLocalMessageId = () => {
@@ -263,7 +263,12 @@ export const useChatMessageSender = ({
     }
   }
 
-  const markMessageLocalSyncFailed = (localMessage, serverMessage, error) => {
+  const markMessageLocalSyncFailed = (
+    localMessage,
+    serverMessage,
+    error,
+    { recoveredStatus = 1, onRecovered } = {}
+  ) => {
     const nextMessage = {
       ...localMessage,
       ...serverMessage,
@@ -278,7 +283,69 @@ export const useChatMessageSender = ({
     }
     console.error('message sent but local replace failed', error)
     proxy.Message.error('消息已发出，但本地记录保存失败，请稍后重新打开会话同步。')
+
+    // P0-4: 后台异步重试 replace，最多重试 3 次，指数退避
+    scheduleLocalSyncRetry(
+      localMessage.messageId,
+      {
+        ...localMessage,
+        ...serverMessage,
+        status: recoveredStatus,
+        uploading: recoveredStatus === 2,
+        uploadError: '',
+        localSyncFailed: false
+      },
+      1,
+      3,
+      onRecovered
+    )
+
     return nextMessage
+  }
+
+  const scheduleLocalSyncRetry = (
+    localMessageId,
+    recoveryMessage,
+    attempt,
+    maxRetries,
+    onRecovered
+  ) => {
+    if (attempt > maxRetries) {
+      console.error('local sync retry exhausted after', maxRetries, 'attempts')
+      return
+    }
+    const delay = Math.min(2000 * attempt, 10000)
+    const timer = setTimeout(async () => {
+      // 从列表中移除此 timer
+      const idx = localSyncRetryTimers.indexOf(timer)
+      if (idx >= 0) localSyncRetryTimers.splice(idx, 1)
+      try {
+        await persistServerMessage(localMessageId, {
+          ...recoveryMessage
+        })
+        const recoveredMessage = {
+          ...recoveryMessage
+        }
+        const wasReplaced =
+          replaceMessageById?.(localMessageId, recoveredMessage) ||
+          replaceMessageById?.(recoveredMessage.messageId, recoveredMessage)
+        if (!wasReplaced) {
+          appendSentMessageIfMissing(recoveredMessage)
+        }
+        onRecovered?.(recoveredMessage)
+        console.log('local sync retry succeeded on attempt', attempt)
+      } catch (retryError) {
+        console.error('local sync retry failed (attempt', attempt, ')', retryError)
+        scheduleLocalSyncRetry(
+          localMessageId,
+          recoveryMessage,
+          attempt + 1,
+          maxRetries,
+          onRecovered
+        )
+      }
+    }, delay)
+    localSyncRetryTimers.push(timer)
   }
 
   const markMessageSending = async (message, patch = {}) => {
@@ -582,7 +649,12 @@ export const useChatMessageSender = ({
         status: 2
       })
     } catch (error) {
-      markMessageLocalSyncFailed(localMessage, message, error)
+      markMessageLocalSyncFailed(localMessage, message, error, {
+        recoveredStatus: 2,
+        onRecovered: (recoveredMessage) => {
+          enqueueUploadTask(() => uploadMessageFile(recoveredMessage, file, cover))
+        }
+      })
       return
     }
     enqueueUploadTask(() => uploadMessageFile(serverMessage, file, cover))
@@ -712,6 +784,8 @@ export const useChatMessageSender = ({
     })
   }
 
+  const localSyncRetryTimers = []
+
   const cleanupUploadControllers = () => {
     uploadControllers.forEach((controller) => {
       try {
@@ -725,9 +799,20 @@ export const useChatMessageSender = ({
     blobUrlsToRevoke.forEach((url) => {
       try {
         URL.revokeObjectURL(url)
-      } catch (e) {}
+      } catch (e) {
+        // Blob URL may already have been revoked.
+      }
     })
     blobUrlsToRevoke.clear()
+    // P0-4: 清理后台重试定时器
+    localSyncRetryTimers.forEach((timer) => {
+      try {
+        clearTimeout(timer)
+      } catch (e) {
+        // Timer cleanup is best effort during component teardown.
+      }
+    })
+    localSyncRetryTimers.length = 0
   }
 
   return {

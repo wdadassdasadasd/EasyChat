@@ -171,6 +171,8 @@ const showGroupMemberNick = ref(true);
 const messageListRef = ref(null);
 const wsStatusText = ref('');
 let clearChatMessageHandler = null;
+let unsubscribeClearChatMessage = null;
+let unsubscribeWsStatus = null;
 
 const currentUserId = computed(() => {
     return userInfoStore.getInfo()?.userId;
@@ -256,7 +258,7 @@ const totalUnreadCount = computed(() => {
     }, 0);
 });
 
-const wsStatusHandler = (_e, payload = {}) => {
+const wsStatusHandler = (payload = {}) => {
     if (payload.status === 'connected') {
         wsStatusText.value = '';
         loadChatSession();
@@ -320,8 +322,9 @@ const handleClearMessages = () => {
         message: '确认清空聊天记录吗？',
         okfun: () => {
             const sessionId = currentChatSession.value.sessionId;
-            clearChatMessageHandler = (e, data) => {
-                window.electron.ipcRenderer.removeListener('clearChatMessageCallback', clearChatMessageHandler)
+            clearChatMessageHandler = (data) => {
+                unsubscribeClearChatMessage?.()
+                unsubscribeClearChatMessage = null
                 clearChatMessageHandler = null
                 if (data?.success && data.sessionId === sessionId) {
                     clearCurrentMessages();
@@ -335,8 +338,8 @@ const handleClearMessages = () => {
                     proxy.Message.error('清空聊天记录失败');
                 }
             };
-            window.electron.ipcRenderer.on('clearChatMessageCallback', clearChatMessageHandler);
-            window.electron.ipcRenderer.send('clearChatMessage', { sessionId });
+            unsubscribeClearChatMessage = window.api.onClearChatMessageCallback(clearChatMessageHandler);
+            window.api.sendClearChatMessage({ sessionId });
         }
     });
 };
@@ -348,7 +351,7 @@ onMounted(() => {
     // 挂载时先注册 IPC 监听，再触发会话加载和路由打开，避免回调早于监听导致首屏丢消息。
     registerMessageListeners();//消息监听
     registerSessionListener();//会话监听
-    window.electron.ipcRenderer.on('wsStatusChange', wsStatusHandler);
+    unsubscribeWsStatus = window.api.onWsStatusChange(wsStatusHandler);
     loadChatSession();//会话加载
     openChatFromRoute();//路由跳转
 });
@@ -389,9 +392,11 @@ onUnmounted(() => {
     groupDetailVisible.value = false;
     userDetailVisible.value = false;
     removeSessionListener();
-    window.electron.ipcRenderer.removeListener('wsStatusChange', wsStatusHandler);
+    unsubscribeWsStatus?.();
+    unsubscribeWsStatus = null;
     if (clearChatMessageHandler) {
-        window.electron.ipcRenderer.removeListener('clearChatMessageCallback', clearChatMessageHandler);
+        unsubscribeClearChatMessage?.();
+        unsubscribeClearChatMessage = null;
         clearChatMessageHandler = null;
     }
     closeVideoPreviewDialog();

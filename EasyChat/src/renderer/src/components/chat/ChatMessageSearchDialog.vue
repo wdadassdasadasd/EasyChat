@@ -58,6 +58,7 @@ const messageSearchResults = ref([]);
 const messageSearching = ref(false);
 const searchExecuted = ref(false);
 let messageSearchSeq = 0;
+let unsubscribeSearchCallback = null;
 
 const currentUserId = computed(() => {
     return String(userInfoStore.getInfo()?.userId || '');
@@ -90,14 +91,14 @@ const searchChatMessages = () => {
     const currentSeq = ++messageSearchSeq;
     messageSearching.value = true;
     searchExecuted.value = true;
-    window.electron.ipcRenderer.send('searchChatMessage', {
+    window.api.sendSearchChatMessage({
         sessionId,
         keyword,
         searchSeq: currentSeq
     });
 };
 
-const handleSearchChatMessageCallback = (e, data) => {
+const handleSearchChatMessageCallback = (data) => {
     if (!props.modelValue || data?.searchSeq !== messageSearchSeq || data?.sessionId !== props.currentChatSession.sessionId) {
         return;
     }
@@ -161,11 +162,12 @@ watch(
 );
 
 onMounted(() => {
-    window.electron.ipcRenderer.on('searchChatMessageCallback', handleSearchChatMessageCallback);
+    unsubscribeSearchCallback = window.api.onSearchChatMessageCallback(handleSearchChatMessageCallback);
 });
 
 onUnmounted(() => {
-    window.electron.ipcRenderer.removeListener('searchChatMessageCallback', handleSearchChatMessageCallback);
+    unsubscribeSearchCallback?.();
+    unsubscribeSearchCallback = null;
 });
 </script>
 

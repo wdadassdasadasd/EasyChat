@@ -28,6 +28,76 @@ import {
   selectMessageList,
   updateLocalMessageStatus
 } from './db/ChatMessageModel.js'
+
+const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
+const MAX_LOCAL_REPLACE_RECOVERY_ITEMS = 100
+
+const getLocalReplaceRecoveryQueue = () => {
+  const queue = store.getUserData(LOCAL_REPLACE_RECOVERY_KEY)
+  return Array.isArray(queue) ? queue : []
+}
+
+const saveLocalReplaceRecoveryQueue = (queue) => {
+  if (queue.length === 0) {
+    store.deleteUserData(LOCAL_REPLACE_RECOVERY_KEY)
+    return
+  }
+  store.setUserData(
+    LOCAL_REPLACE_RECOVERY_KEY,
+    queue.slice(-MAX_LOCAL_REPLACE_RECOVERY_ITEMS)
+  )
+}
+
+const getLocalReplaceRecoveryId = (payload = {}) => {
+  return `${payload.localMessageId ?? ''}:${payload.message?.messageId ?? ''}`
+}
+
+const queueLocalReplaceRecovery = (payload = {}) => {
+  if (payload.mode !== 'replace' || !payload.localMessageId || !payload.message?.messageId) {
+    return false
+  }
+  const recoveryId = getLocalReplaceRecoveryId(payload)
+  const queue = getLocalReplaceRecoveryQueue().filter(
+    (item) => getLocalReplaceRecoveryId(item) !== recoveryId
+  )
+  queue.push(payload)
+  saveLocalReplaceRecoveryQueue(queue)
+  return true
+}
+
+const removeLocalReplaceRecovery = (payload = {}) => {
+  const recoveryId = getLocalReplaceRecoveryId(payload)
+  const queue = getLocalReplaceRecoveryQueue()
+  const nextQueue = queue.filter((item) => getLocalReplaceRecoveryId(item) !== recoveryId)
+  if (nextQueue.length !== queue.length) {
+    saveLocalReplaceRecoveryQueue(nextQueue)
+  }
+}
+
+const recoverLocalReplaceQueue = async () => {
+  const queue = getLocalReplaceRecoveryQueue()
+  if (queue.length === 0) {
+    return { recoveredCount: 0, remainingCount: 0 }
+  }
+
+  const remaining = []
+  let recoveredCount = 0
+  for (const payload of queue) {
+    try {
+      const result = await saveSendMessageToLocal(payload)
+      if (result?.success) {
+        recoveredCount += 1
+      } else {
+        remaining.push(payload)
+      }
+    } catch (error) {
+      remaining.push(payload)
+      console.error('Failed to replay local message replacement', error)
+    }
+  }
+  saveLocalReplaceRecoveryQueue(remaining)
+  return { recoveredCount, remainingCount: remaining.length }
+}
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister = (mainWindow, callback) => {
   ipcMain.on('loginOrRegister', (e, isLogin) => {
@@ -42,6 +112,10 @@ const onLoginSuccess = (mainWindow, callback) => {
     store.setUserData('token', config.token)
     await addUserSetting(config.userId, config.email)
     try {
+      const replaceRecovery = await recoverLocalReplaceQueue()
+      if (replaceRecovery.recoveredCount) {
+        console.log(`Recovered local message replacements: ${replaceRecovery.recoveredCount}`)
+      }
       const result = await recoverStalePendingMessages()
       if (result?.recoveredCount) {
         console.log(`Recovered stale pending messages: ${result.recoveredCount}`)
@@ -133,8 +207,13 @@ const onGetLocalStore = () => {
 const onLoadSessionData = () => {
   registerSafeIpcOn('loadSessionData', 'loadSessionDataCallback', async (e) => {
     // renderer 左侧会话列表只读本地 SQLite，WebSocket/发送链路负责提前把会话写入表。
-    const result = await selectUserSessionList()
-    e.sender.send('loadSessionDataCallback', result)
+    try {
+      const result = await selectUserSessionList()
+      e.sender.send('loadSessionDataCallback', result)
+    } catch (error) {
+      // P0-3: DB 读错误显式传播到 renderer，避免 renderer 将错误对象当作空列表
+      e.sender.send('loadSessionDataCallback', buildIpcErrorPayload('loadSessionDataCallback', error))
+    }
   })
 }
 
@@ -168,18 +247,28 @@ const onTopChatSessionSafe = () => {
 
 const onLoadChatMessage = () => {
   registerSafeIpcOn('loadChatMessage', 'loadChatMessageCallback', async (e, data) => {
-    // 历史消息分页在主进程完成，sessionId/loadSeq 原样带回给 renderer 做防串线校验。
-    const result = data?.targetMessageId
-      ? {
-          dataList: await selectMessageContextByMessageId({
-            sessionId: data.sessionId,
-            messageId: data.targetMessageId
-          }),
-          hasMore: true,
-          targetMessageId: data.targetMessageId,
-          loadMode: 'context'
-        }
-      : await selectMessageList(data)
+    // P0-3: 包裹 DB 查询以捕获错误，显式传播到 renderer
+    let result
+    try {
+      result = data?.targetMessageId
+        ? {
+            dataList: await selectMessageContextByMessageId({
+              sessionId: data.sessionId,
+              messageId: data.targetMessageId
+            }),
+            hasMore: true,
+            targetMessageId: data.targetMessageId,
+            loadMode: 'context'
+          }
+        : await selectMessageList(data)
+    } catch (error) {
+      e.sender.send('loadChatMessageCallback', {
+        ...buildIpcErrorPayload('loadChatMessageCallback', error),
+        sessionId: data?.sessionId,
+        loadSeq: data?.loadSeq
+      })
+      return
+    }
     e.sender.send('loadChatMessageCallback', {
       ...result,
       sessionId: data?.sessionId,
@@ -253,9 +342,19 @@ const saveSendMessageToLocal = async ({
 const onSaveSendMessage = () => {
   ipcMain.handle('saveSendMessage', async (_e, payload) => {
     try {
-      return await saveSendMessageToLocal(payload)
+      const result = await saveSendMessageToLocal(payload)
+      if (result?.success && payload?.mode === 'replace') {
+        removeLocalReplaceRecovery(payload)
+      }
+      return result
     } catch (error) {
-      return buildIpcErrorPayload('saveSendMessage', error)
+      let recoveryQueued = false
+      try {
+        recoveryQueued = queueLocalReplaceRecovery(payload)
+      } catch (recoveryError) {
+        console.error('Failed to queue local message replacement recovery', recoveryError)
+      }
+      return buildIpcErrorPayload('saveSendMessage', error, { recoveryQueued })
     }
   })
 }
@@ -286,7 +385,18 @@ const onClearChatMessage = () => {
 const onSearchChatMessage = () => {
   registerSafeIpcOn('searchChatMessage', 'searchChatMessageCallback', async (e, data = {}) => {
     // 搜索只查当前 session 的本地消息，并把 searchSeq 带回 renderer 丢弃过期结果。
-    const dataList = await searchMessageBySessionId(data)
+    let dataList
+    try {
+      dataList = await searchMessageBySessionId(data)
+    } catch (error) {
+      e.sender.send('searchChatMessageCallback', {
+        ...buildIpcErrorPayload('searchChatMessageCallback', error),
+        sessionId: data.sessionId,
+        keyword: data.keyword,
+        searchSeq: data.searchSeq
+      })
+      return
+    }
     e.sender.send('searchChatMessageCallback', {
       sessionId: data.sessionId,
       keyword: data.keyword,
@@ -576,7 +686,9 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
         output.on('error', (error) => {
           try {
             fs.unlinkSync(tempPath)
-          } catch (e) {}
+          } catch (e) {
+            // Best-effort cleanup after stream failure.
+          }
           finish({ success: false, error: getErrorMessage(error) })
         })
         // M-2: 处理响应流错误，清理临时文件
@@ -585,7 +697,9 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
             if (fs.existsSync(tempPath)) {
               fs.unlinkSync(tempPath)
             }
-          } catch (e) {}
+          } catch (e) {
+            // Best-effort cleanup after response failure.
+          }
           finish({ success: false, error: getErrorMessage(error) })
         })
       })
@@ -596,7 +710,9 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
           if (fs.existsSync(tempPath)) {
             fs.unlinkSync(tempPath)
           }
-        } catch (e) {}
+        } catch (e) {
+          // Best-effort cleanup after request failure.
+        }
         activeDownloads.delete(String(messageId))
         resolve({ success: false, error: getErrorMessage(error) })
       })
@@ -638,11 +754,15 @@ const onChatFileDownload = () => {
           if (file.endsWith('.download') && file.includes(tempPattern)) {
             try {
               fs.unlinkSync(path.join(folderInfo.localFileFolder, file))
-            } catch (e) {}
+            } catch (e) {
+              // Best-effort cleanup for canceled downloads.
+            }
           }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      // Cancel remains successful even if temporary-file cleanup fails.
+    }
     return { success: true }
   })
 

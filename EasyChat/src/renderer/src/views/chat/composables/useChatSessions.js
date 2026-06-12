@@ -15,6 +15,9 @@ export const useChatSessions = ({ proxy, route }) => {
   let loadSessionDataHandler = null
   let markSessionReadHandler = null
   let topChatSessionHandler = null
+  let unsubscribeLoadSessionData = null
+  let unsubscribeMarkSessionRead = null
+  let unsubscribeTopChatSession = null
   // 标记已读的待确认操作映射：contactId → { previousNoReadCount, timeoutTimer }
   const pendingReadMap = new Map()
   const pendingTopMap = new Map()
@@ -49,7 +52,7 @@ export const useChatSessions = ({ proxy, route }) => {
   }
 
   const loadChatSession = () => {
-    window.electron.ipcRenderer.send('loadSessionData')
+    window.api.sendLoadSessionData()
   }
 
   const sortChatSessionList = (dataList) => {
@@ -188,9 +191,10 @@ export const useChatSessions = ({ proxy, route }) => {
   const registerSessionListener = () => {
     removeSessionListener()
 
-    loadSessionDataHandler = async (e, dataList) => {
+    loadSessionDataHandler = async (dataList) => {
+      // P0-3: DB 错误时 dataList 为 {success:false, error, kind}，非数组
       if (dataList && !Array.isArray(dataList) && dataList.success === false) {
-        proxy.Message.error(dataList.error || 'Load sessions failed')
+        proxy.Message.error(dataList.error || '会话列表加载失败，数据库可能不可用。')
         return
       }
       // 主进程返回的是本地 SQLite 会话列表；renderer 补齐名称后再排序展示。
@@ -199,10 +203,10 @@ export const useChatSessions = ({ proxy, route }) => {
       chatSessionList.value = hydratedList
       openChatFromRoute()
     }
-    window.electron.ipcRenderer.on('loadSessionDataCallback', loadSessionDataHandler)
+    unsubscribeLoadSessionData = window.api.onLoadSessionDataCallback(loadSessionDataHandler)
 
     // 单一定时监听器：用 pendingReadMap 匹配 contactId，避免 O(n²) 链式重注册。
-    markSessionReadHandler = (e, data = {}) => {
+    markSessionReadHandler = (data = {}) => {
       const contactId = data?.contactId
       if (!contactId) return
 
@@ -216,9 +220,9 @@ export const useChatSessions = ({ proxy, route }) => {
         entry.restoreNoReadCount()
       }
     }
-    window.electron.ipcRenderer.on('markSessionReadCallback', markSessionReadHandler)
+    unsubscribeMarkSessionRead = window.api.onMarkSessionReadCallback(markSessionReadHandler)
 
-    topChatSessionHandler = (e, data = {}) => {
+    topChatSessionHandler = (data = {}) => {
       const contactId = data?.contactId
       if (!contactId) return
 
@@ -234,20 +238,23 @@ export const useChatSessions = ({ proxy, route }) => {
         entry.rollback()
       }
     }
-    window.electron.ipcRenderer.on('topChatSessionCallback', topChatSessionHandler)
+    unsubscribeTopChatSession = window.api.onTopChatSessionCallback(topChatSessionHandler)
   }
 
   const removeSessionListener = () => {
     if (loadSessionDataHandler) {
-      window.electron.ipcRenderer.removeListener('loadSessionDataCallback', loadSessionDataHandler)
+      unsubscribeLoadSessionData?.()
+      unsubscribeLoadSessionData = null
       loadSessionDataHandler = null
     }
     if (markSessionReadHandler) {
-      window.electron.ipcRenderer.removeListener('markSessionReadCallback', markSessionReadHandler)
+      unsubscribeMarkSessionRead?.()
+      unsubscribeMarkSessionRead = null
       markSessionReadHandler = null
     }
     if (topChatSessionHandler) {
-      window.electron.ipcRenderer.removeListener('topChatSessionCallback', topChatSessionHandler)
+      unsubscribeTopChatSession?.()
+      unsubscribeTopChatSession = null
       topChatSessionHandler = null
     }
     // 清理所有未完成的标记操作。
@@ -305,7 +312,7 @@ export const useChatSessions = ({ proxy, route }) => {
       rollback()
     }, 5000)
     pendingTopMap.set(contactId, entry)
-    window.electron.ipcRenderer.send('topChatSession', { contactId, topType })
+    window.api.sendTopChatSession({ contactId, topType })
   }
 
   const updateCurrentChatSession = (sessionInfo = {}) => {
@@ -426,7 +433,7 @@ export const useChatSessions = ({ proxy, route }) => {
       restoreNoReadCount
     })
 
-    window.electron.ipcRenderer.send('markSessionRead', contactId)
+    window.api.sendMarkSessionRead(contactId)
   }
 
   const setTop = (data) => {
@@ -439,7 +446,7 @@ export const useChatSessions = ({ proxy, route }) => {
     if (currentChatSession.value.contactId == contactId) {
       currentChatSession.value = {}
     }
-    window.electron.ipcRenderer.send('delChatSession', contactId)
+    window.api.sendDelChatSession(contactId)
   }
 
   const onContextmenu = (data, e) => {

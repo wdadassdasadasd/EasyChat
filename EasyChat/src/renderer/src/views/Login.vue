@@ -81,7 +81,7 @@ const rules={
 const isLogin=ref(true);
 const changeOpType=()=>{
   isLogin.value=!isLogin.value;
-  window.electron.ipcRenderer.send("loginOrRegister",isLogin.value);
+  window.api.sendLoginOrRegister(isLogin.value);
   nextTick(()=>{
     formDataRef.value.resetFields();
     formData.value={};
@@ -199,7 +199,7 @@ const submit=async()=>{
     const screenWidth=window.screen.width;
     const screenHeight=window.screen.height;
 
-    window.electron.ipcRenderer.send('openChat',{
+    window.api.sendOpenChat({
       email:result.data.email,
       token:result.data.token,
       userId:result.data.userId,
@@ -208,8 +208,8 @@ const submit=async()=>{
       screenWidth:screenWidth,
       screenHeight:screenHeight
     });
-     
-    window.electron.ipcRenderer.send('SetLocalStore',{key:'devWsDomain',value:proxy.Api.devWsDomain});
+
+    window.api.sendSetLocalStore({key:'devWsDomain',value:proxy.Api.devWsDomain});
   } else {
     proxy.Message.success('注册成功，请登录');
     changeOpType();
@@ -217,10 +217,10 @@ const submit=async()=>{
 }
 
 const init=()=>{
-  window.electron.ipcRenderer.send("SetLocalStore",{key:'prodDomain',value:proxy.Api.prodDomain});
-  window.electron.ipcRenderer.send("SetLocalStore",{key:'devDomain',value:proxy.Api.devDomain});
-  window.electron.ipcRenderer.send("SetLocalStore",{key:'prodWsDomain',value:proxy.Api.prodWsDomain}); 
-  window.electron.ipcRenderer.send("SetLocalStore",{key:'devWsDomain',value:proxy.Api.devWsDomain})
+  window.api.sendSetLocalStore({key:'prodDomain',value:proxy.Api.prodDomain});
+  window.api.sendSetLocalStore({key:'devDomain',value:proxy.Api.devDomain});
+  window.api.sendSetLocalStore({key:'prodWsDomain',value:proxy.Api.prodWsDomain});
+  window.api.sendSetLocalStore({key:'devWsDomain',value:proxy.Api.devWsDomain})
 
 
 }

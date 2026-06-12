@@ -142,10 +142,14 @@ vi.mock('https', () => ({
 // ── reset before each test ──
 let ipcExports
 beforeEach(async () => {
+  vi.clearAllMocks()
   mockSender.send.mockClear()
   mockSender.isDestroyed.mockReturnValue(false)
   vi.resetModules()
   ipcExports = await import('../../src/main/ipc')
+  const store = (await import('../../src/main/store')).default
+  store.getUserData.mockReset()
+  store.getUserData.mockReturnValue(undefined)
 })
 
 // ═══════════════════════════════════════════════
@@ -209,6 +213,42 @@ describe('IPC: openChat', () => {
       expect.objectContaining({ userId: 'u1', token: 'token-1' }),
       mockSender
     )
+  })
+
+  it('replays durable local replacements before stale pending recovery', async () => {
+    const store = (await import('../../src/main/store')).default
+    const { replacePendingMessage, recoverStalePendingMessages } = await import(
+      '../../src/main/db/ChatMessageModel'
+    )
+    const payload = {
+      mode: 'replace',
+      localMessageId: -9,
+      message: { messageId: 900, sessionId: 's1' },
+      chatSession: { contactId: 'c1' }
+    }
+    store.getUserData.mockImplementation((key) => {
+      return key === 'localReplaceRecoveryQueue' ? [payload] : undefined
+    })
+    const callback = vi.fn()
+
+    ipcExports.onLoginSuccess({}, callback)
+    await mockIpcOn.openChat(ipcEvent(), {
+      userId: 'u1',
+      token: 'token-1',
+      email: 'u1@example.com'
+    })
+
+    expect(replacePendingMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localMessageId: -9,
+        message: expect.objectContaining({ messageId: 900 })
+      })
+    )
+    expect(store.deleteUserData).toHaveBeenCalledWith('localReplaceRecoveryQueue')
+    expect(recoverStalePendingMessages).toHaveBeenCalled()
+    expect(
+      replacePendingMessage.mock.invocationCallOrder.at(-1)
+    ).toBeLessThan(recoverStalePendingMessages.mock.invocationCallOrder.at(-1))
   })
 })
 
@@ -434,6 +474,28 @@ describe('IPC: saveSendMessage', () => {
       { message: { messageId: 400, sessionId: 's1' }, chatSession: { contactId: 'c1' } }
     )
     expect(result.success).toBe(true)
+  })
+
+  it('queues a durable recovery payload when local replace throws', async () => {
+    const store = (await import('../../src/main/store')).default
+    const { replacePendingMessage } = await import('../../src/main/db/ChatMessageModel')
+    store.getUserData.mockReturnValueOnce([])
+    replacePendingMessage.mockRejectedValueOnce(new Error('database unavailable'))
+    const payload = {
+      mode: 'replace',
+      localMessageId: -10,
+      message: { messageId: 1000, sessionId: 's1' },
+      chatSession: { contactId: 'c1' }
+    }
+
+    const result = await handler({}, payload)
+
+    expect(result).toMatchObject({
+      success: false,
+      kind: 'db_error',
+      recoveryQueued: true
+    })
+    expect(store.setUserData).toHaveBeenCalledWith('localReplaceRecoveryQueue', [payload])
   })
 })
 

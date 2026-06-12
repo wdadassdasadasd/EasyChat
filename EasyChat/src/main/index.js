@@ -46,7 +46,7 @@ function createWindow() {
     backgroundColor: '#ffffff',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       // C-1: 启用 contextIsolation，隔离预加载与渲染进程上下文
       contextIsolation: true
     }
@@ -243,7 +243,9 @@ app.on('before-quit', () => {
   try {
     const { closeWs } = require('./wsClient')
     closeWs()
-  } catch (e) {}
+  } catch (e) {
+    // Best-effort shutdown cleanup.
+  }
 })
 
 // In this file you can include the rest of your app"s specific main process

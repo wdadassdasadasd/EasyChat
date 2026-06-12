@@ -246,10 +246,10 @@ const saveCover = ({ avatarFile, avatarCover }) => {
 
 const resetToLogin = async () => {
     userInfoStore.clearUserInfo();
-    if (window.electron?.ipcRenderer?.invoke) {
-        await window.electron.ipcRenderer.invoke('logout').catch(() => false);
+    if (window.api) {
+        await window.api.invokeLogout().catch(() => false);
     } else {
-        window.electron?.ipcRenderer?.send('reLogin');
+        window.api?.sendReLogin();
     }
     router.push('/login');
 };

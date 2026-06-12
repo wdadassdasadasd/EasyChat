@@ -108,7 +108,7 @@ export const useFileTransfer = ({ proxy }) => {
 
   const readLocalVideoBlob = async (message) => {
     const filePath = message?.filePath
-    if (!filePath || !window.electron?.ipcRenderer?.invoke) {
+    if (!filePath || !window.api) {
       return null
     }
 
@@ -117,7 +117,7 @@ export const useFileTransfer = ({ proxy }) => {
       return null
     }
 
-    const result = await window.electron.ipcRenderer.invoke('readLocalVideoFile', { filePath })
+    const result = await window.api.invokeReadLocalVideoFile({ filePath })
     const buffer = result?.arrayBuffer || result?.buffer
     if (!result?.success || !buffer) {
       return null
@@ -211,7 +211,7 @@ export const useFileTransfer = ({ proxy }) => {
 
     patchDownloadState(message, { status: 'downloading', progress: 0, error: '', path: '' })
     isReceivingFile.value = true
-    const progressHandler = (_e, payload = {}) => {
+    const progressHandler = (payload = {}) => {
       if (String(payload.messageId) !== String(message.messageId)) {
         return
       }
@@ -222,10 +222,10 @@ export const useFileTransfer = ({ proxy }) => {
         path: ''
       })
     }
-    window.electron.ipcRenderer.on('downloadChatFileProgress', progressHandler)
+    const unsubscribeProgress = window.api.onDownloadChatFileProgress(progressHandler)
     let result
     try {
-      result = await window.electron.ipcRenderer.invoke('downloadChatFile', {
+      result = await window.api.invokeDownloadChatFile({
         url,
         fileName: Utils.getFileMessageName(message),
         fileSize: declaredSize,
@@ -233,7 +233,7 @@ export const useFileTransfer = ({ proxy }) => {
         messageId: message.messageId
       })
     } finally {
-      window.electron.ipcRenderer.removeListener('downloadChatFileProgress', progressHandler)
+      unsubscribeProgress?.()
     }
     isReceivingFile.value = false
 
@@ -297,12 +297,12 @@ export const useFileTransfer = ({ proxy }) => {
   }
 
   const openSelectedVideoExternal = async () => {
-    if (!selectedVideoMessage.value || !window.electron?.ipcRenderer?.invoke) {
+    if (!selectedVideoMessage.value || !window.api) {
       return
     }
 
     if (selectedVideoMessage.value.filePath) {
-      const result = await window.electron.ipcRenderer.invoke('openLocalVideoFile', {
+      const result = await window.api.invokeOpenLocalVideoFile({
         filePath: selectedVideoMessage.value.filePath
       })
       if (result?.success) {
@@ -312,7 +312,7 @@ export const useFileTransfer = ({ proxy }) => {
 
     const state = getDownloadState(selectedVideoMessage.value)
     if (state.path) {
-      const result = await window.electron.ipcRenderer.invoke('openDownloadedFile', {
+      const result = await window.api.invokeOpenDownloadedFile({
         filePath: state.path
       })
       if (result?.success) {
@@ -326,7 +326,7 @@ export const useFileTransfer = ({ proxy }) => {
     }
 
     const buffer = await blob.arrayBuffer()
-    const result = await window.electron.ipcRenderer.invoke('openTempVideoFile', {
+    const result = await window.api.invokeOpenTempVideoFile({
       fileName: Utils.getFileMessageName(selectedVideoMessage.value),
       buffer
     })
@@ -354,7 +354,7 @@ export const useFileTransfer = ({ proxy }) => {
     if (!path) {
       return
     }
-    const result = await window.electron.ipcRenderer.invoke('openDownloadedFile', {
+    const result = await window.api.invokeOpenDownloadedFile({
       filePath: path
     })
     if (!result?.success) {
@@ -367,7 +367,7 @@ export const useFileTransfer = ({ proxy }) => {
     if (!path) {
       return
     }
-    await window.electron.ipcRenderer.invoke('showDownloadedFileInFolder', { filePath: path })
+    await window.api.invokeShowDownloadedFileInFolder({ filePath: path })
   }
 
   return {
