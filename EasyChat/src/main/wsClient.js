@@ -10,9 +10,15 @@ import {
   RECEIVE_FLUSH_DELAY,
   RECEIVE_FLUSH_MAX,
   WS_MESSAGE_PROCESS_TIMEOUT,
+  WS_RESET_FLUSH_TIMEOUT,
   WS_RECONNECT_DELAY,
   WS_MAX_RECONNECT_TIMES
 } from './constants'
+import {
+  appendReceiveRecoveryMessages,
+  compactReceiveRecoveryMessages,
+  readReceiveRecoveryMessages
+} from './receiveRecoveryStore.js'
 
 const NODE_ENV = process.env.NODE_ENV
 
@@ -32,6 +38,8 @@ let receiveFlushing = false
 let wsRuntimeGeneration = 0
 let messageProcessingQueue = Promise.resolve()
 let awaitingPong = false
+let resetRuntimePromise = null
+let recoveryReplayPromise = null
 const RECEIVE_SAVE_MAX_RETRY = 3
 const RECEIVE_QUEUE_MAX = RECEIVE_FLUSH_MAX * 20
 const wsDiagnostics = {
@@ -141,30 +149,94 @@ const closeCurrentSocket = () => {
   ws = null
 }
 
-const resetWsRuntime = () => {
-  clearHeartbeatTimer()
-  clearReconnectTimer()
-  // 重连前先尝试将队列中的消息刷盘，避免消息静默丢失
-  if (receiveQueue.length > 0 && !receiveFlushing) {
-    const pending = receiveQueue.splice(0)
-    // 异步刷盘不等待结果；wsRuntimeGeneration 递增后 saveAndPublishMessageBatch
-    // 会自行跳过 renderer push，消息仅落 DB，由重连后的 init 消息补推。
-    saveAndPublishMessageBatch(pending).catch((error) => {
-      console.error('failed to flush receive queue before reset', error)
-    })
-    // 不等待刷盘结果，但保留 generation 标记让 saveAndPublishMessageBatch 内部丢弃 push
+const persistRecoveryMessages = async (messages, kind, error) => {
+  if (!messages.length) {
+    return true
   }
-  receiveQueue = []
-  receiveFlushing = false
-  lockReconnect = false
-  messageProcessingQueue = Promise.resolve()
-  // L-1: 防止单调递增溢出（约 9e15 次重连后），循环复用 0..MAX_SAFE_INTEGER
+  try {
+    await appendReceiveRecoveryMessages(store.getUserId(), messages)
+    publishReceiveRecoveryNeeded({
+      error,
+      messages,
+      stats: { kind, persistedCount: messages.length }
+    })
+    return true
+  } catch (persistError) {
+    console.error('Failed to persist receive recovery messages', persistError)
+    publishReceiveRecoveryNeeded({
+      error: persistError,
+      messages,
+      stats: { kind: 'recovery_log_write_failed', failedCount: messages.length }
+    })
+    return false
+  }
+}
+
+const replayReceiveRecovery = async () => {
+  if (recoveryReplayPromise) {
+    return recoveryReplayPromise
+  }
+  recoveryReplayPromise = (async () => {
+    const messages = await readReceiveRecoveryMessages(store.getUserId())
+    if (!messages.length) {
+      return { recoveredCount: 0 }
+    }
+    try {
+      await saveAndPublishMessageBatch(messages)
+      await compactReceiveRecoveryMessages(store.getUserId(), messages)
+      return { recoveredCount: messages.length }
+    } catch (error) {
+      console.error('Failed to replay receive recovery messages', error)
+      throw error
+    }
+  })().finally(() => {
+    recoveryReplayPromise = null
+  })
+  return recoveryReplayPromise
+}
+
+const incrementRuntimeGeneration = () => {
   if (wsRuntimeGeneration >= Number.MAX_SAFE_INTEGER) {
     wsRuntimeGeneration = 0
   } else {
     wsRuntimeGeneration += 1
   }
-  closeCurrentSocket()
+}
+
+const resetWsRuntime = async () => {
+  if (resetRuntimePromise) {
+    return resetRuntimePromise
+  }
+  resetRuntimePromise = (async () => {
+    clearHeartbeatTimer()
+    clearReconnectTimer()
+    clearReceiveFlushTimer()
+    const pendingProcessing = messageProcessingQueue
+    try {
+      await runWithTimeout(
+        async () => {
+          await pendingProcessing
+          await flushReceiveQueue()
+        },
+        WS_RESET_FLUSH_TIMEOUT,
+        'WebSocket reset flush timed out'
+      )
+    } catch (error) {
+      const pending = receiveQueue.slice()
+      const persisted = await persistRecoveryMessages(pending, 'reset_flush_failed', error)
+      if (persisted) {
+        receiveQueue.splice(0, pending.length)
+      }
+    }
+    receiveFlushing = false
+    lockReconnect = false
+    messageProcessingQueue = Promise.resolve()
+    incrementRuntimeGeneration()
+    closeCurrentSocket()
+  })().finally(() => {
+    resetRuntimePromise = null
+  })
+  return resetRuntimePromise
 }
 
 const getMessageContactId = (message = {}) => {
@@ -237,8 +309,10 @@ const publishWsStatus = (payload) => {
 }
 
 const getResyncSessions = (messages = []) => {
-  return getLatestSessionList(messages).map(({ noReadCountDelta, ...sessionInfo }) => {
-    return sessionInfo
+  return getLatestSessionList(messages).map((sessionInfo) => {
+    const cleanSession = { ...sessionInfo }
+    delete cleanSession.noReadCountDelta
+    return cleanSession
   })
 }
 
@@ -366,17 +440,14 @@ const flushReceiveQueue = async () => {
         })
         if (failedMessages.length > 0) {
           const failedSet = new Set(failedMessages)
-          receiveQueue = receiveQueue.filter((message) => {
-            return !failedSet.has(message)
-          })
-          publishReceiveRecoveryNeeded({
-            error,
-            messages: failedMessages,
-            stats: {
-              kind: 'db_write_failed',
-              failedCount: failedMessages.length
-            }
-          })
+          const persisted = await persistRecoveryMessages(failedMessages, 'db_write_failed', error)
+          if (persisted) {
+            receiveQueue = receiveQueue.filter((message) => {
+              return !failedSet.has(message)
+            })
+          } else {
+            void reconnect()
+          }
         }
         break
       }
@@ -385,26 +456,47 @@ const flushReceiveQueue = async () => {
     receiveFlushing = false
     if (receiveQueue.length > 0) {
       scheduleReceiveFlush()
+    } else {
+      replayReceiveRecovery().catch((error) => {
+        console.error('Idle receive recovery replay failed', error)
+      })
     }
   }
 }
 
-const enqueueReceiveMessage = (message) => {
-  if (receiveQueue.length >= RECEIVE_QUEUE_MAX) {
-    const overflowCount = receiveQueue.length - RECEIVE_QUEUE_MAX + 1
-    const droppedMessages = receiveQueue.splice(0, overflowCount)
-    publishReceiveRecoveryNeeded({
-      error: new Error('接收消息过多，部分消息未能及时写入本地，正在尝试重新同步。'),
-      messages: droppedMessages,
-      stats: {
-        kind: 'queue_overflow',
-        droppedCount: overflowCount
-      }
-    })
+const isCurrentRuntimeGeneration = (expectedGeneration) => {
+  return expectedGeneration === wsRuntimeGeneration
+}
+
+const enqueueReceiveMessage = async (message, expectedGeneration) => {
+  return await enqueueReceiveMessages([message], expectedGeneration)
+}
+
+const enqueueReceiveMessages = async (messages, expectedGeneration) => {
+  if (!messages.length || !isCurrentRuntimeGeneration(expectedGeneration)) {
+    return true
   }
-  receiveQueue.push(message)
+  const combinedQueue = receiveQueue.concat(messages)
+  if (combinedQueue.length > RECEIVE_QUEUE_MAX) {
+    const overflowCount = combinedQueue.length - RECEIVE_QUEUE_MAX
+    const droppedMessages = combinedQueue.slice(0, overflowCount)
+    const error = new Error('接收消息过多，已保存溢出消息并将在队列空闲后恢复。')
+    const persisted = await persistRecoveryMessages(droppedMessages, 'queue_overflow', error)
+    if (!persisted) {
+      recordWsError(error)
+      void reconnect()
+      return false
+    }
+    if (!isCurrentRuntimeGeneration(expectedGeneration)) {
+      return false
+    }
+    receiveQueue = combinedQueue.slice(overflowCount)
+  } else {
+    receiveQueue = combinedQueue
+  }
   updateWsDiagnostics({ queueSize: receiveQueue.length })
   scheduleReceiveFlush()
+  return true
 }
 
 const startHeartbeat = () => {
@@ -443,13 +535,13 @@ const startHeartbeat = () => {
           })
           clearHeartbeatTimer()
           closeCurrentSocket()
-          reconnect()
+          void reconnect()
         }, HEARTBEAT_PONG_TIMEOUT)
       } catch (error) {
         console.error('failed to send heartbeat ping', error)
         recordWsError(error)
         clearHeartbeatTimer()
-        reconnect()
+        void reconnect()
       }
     }
   }
@@ -459,13 +551,14 @@ const startHeartbeat = () => {
 }
 
 const enqueueMessageProcessing = (message) => {
+  const expectedGeneration = wsRuntimeGeneration
   messageProcessingQueue = messageProcessingQueue
     .catch((error) => {
       console.error('previous WebSocket message task failed, continuing', error)
     })
     .then(() => {
       return runWithTimeout(
-        () => handleWsMessage(message),
+        () => handleWsMessage(message, expectedGeneration),
         WS_MESSAGE_PROCESS_TIMEOUT,
         'WebSocket message processing timed out'
       )
@@ -484,7 +577,13 @@ const enqueueMessageProcessing = (message) => {
   return messageProcessingQueue
 }
 
-const initWs = (config, sender) => {
+const buildWsUrl = (domain, token) => {
+  const url = new URL(domain)
+  url.searchParams.set('token', token)
+  return url.toString()
+}
+
+const initWs = async (config, sender) => {
   resetWsDiagnostics()
   const domainKey = NODE_ENV !== 'development' ? 'prodWsDomain' : 'devWsDomain'
   const wsDomain = store.getData(domainKey)
@@ -502,18 +601,21 @@ const initWs = (config, sender) => {
     })
     return
   }
-  resetWsRuntime()
-  wsUrl = `${wsDomain}?token=${config.token}`
+  await resetWsRuntime()
+  wsUrl = buildWsUrl(wsDomain, config.token)
   needReconnect = true
   maxReConnectTimes = WS_MAX_RECONNECT_TIMES
+  await replayReceiveRecovery().catch((error) => {
+    console.error('Startup receive recovery replay failed', error)
+  })
   publishWsStatus({ status: 'connecting', retryLeft: maxReConnectTimes })
   createWs()
 }
 
-const closeWs = () => {
+const closeWs = async () => {
   needReconnect = false
   maxReConnectTimes = 0
-  resetWsRuntime()
+  await resetWsRuntime()
   publishWsStatus({ status: 'closed', retryLeft: 0 })
   webContentsSender = null
 }
@@ -559,21 +661,28 @@ const isValidWsMessage = (message = {}) => {
   return message.messageId != null && Boolean(message.sessionId)
 }
 
-const handleSingleWsMessage = async (message) => {
+const handleSingleWsMessage = async (message, expectedGeneration) => {
+  if (!isCurrentRuntimeGeneration(expectedGeneration)) {
+    return
+  }
   const messageType = Number(message.messageType)
 
   switch (messageType) {
     case 0: {
       await flushReceiveQueue()
+      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
       const chatSessionList = (message.extendData?.chatSessionList || []).filter((item) => {
         return item.contactName !== WS_SYSTEM_CONTACT_FILTER
       })
 
       await saveOrUpdateChatSessionBatch4Init(chatSessionList)
+      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
 
       const chatMessageList = message.extendData?.chatMessageList || []
       await saveMessageBatch(chatMessageList)
+      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
       await updateNoReadCount(store.getUserId(), message.extendData?.contact?.applyCount || 0)
+      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
 
       sendToRenderer('receiveMessage', {
         messageType: message.messageType
@@ -583,21 +692,37 @@ const handleSingleWsMessage = async (message) => {
 
     case 6: {
       await flushReceiveQueue()
+      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
       await updateMessageStatus(message.messageId, message.status ?? 1)
+      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
       sendToRenderer('receiveMessage', message)
       break
     }
 
     default: {
-      enqueueReceiveMessage(message)
+      await enqueueReceiveMessage(message, expectedGeneration)
       break
     }
   }
 }
 
-const handleWsMessage = async (payload) => {
+const handleWsMessage = async (payload, expectedGeneration) => {
   const messages = normalizeWsMessages(payload)
+  let pendingRegularMessages = []
+  const flushPendingRegularMessages = async () => {
+    if (
+      !pendingRegularMessages.length ||
+      !isCurrentRuntimeGeneration(expectedGeneration)
+    ) {
+      return
+    }
+    await enqueueReceiveMessages(pendingRegularMessages, expectedGeneration)
+    pendingRegularMessages = []
+  }
   for (const message of messages) {
+    if (!isCurrentRuntimeGeneration(expectedGeneration)) {
+      return
+    }
     if (!isValidWsMessage(message)) {
       console.warn('drop invalid WebSocket message', message)
       updateWsDiagnostics({
@@ -606,8 +731,15 @@ const handleWsMessage = async (payload) => {
       })
       continue
     }
-    await handleSingleWsMessage(message)
+    const messageType = Number(message.messageType)
+    if (messageType === 0 || messageType === 6) {
+      await flushPendingRegularMessages()
+      await handleSingleWsMessage(message, expectedGeneration)
+    } else {
+      pendingRegularMessages.push(message)
+    }
   }
+  await flushPendingRegularMessages()
 }
 
 const createWs = () => {
@@ -623,7 +755,7 @@ const createWs = () => {
     console.error('failed to create WebSocket', error)
     recordWsError(error)
     lockReconnect = false
-    reconnect()
+    void reconnect()
     return
   }
 
@@ -658,7 +790,7 @@ const createWs = () => {
   ws.onclose = function () {
     console.log('WebSocket closed, reconnecting')
     clearHeartbeatTimer()
-    reconnect()
+    void reconnect()
   }
 
   ws.onerror = function (error) {
@@ -674,7 +806,7 @@ const createWs = () => {
   }
 }
 
-const reconnect = () => {
+const reconnect = async () => {
   if (!needReconnect) {
     console.log('WebSocket closed intentionally')
     return
@@ -685,6 +817,11 @@ const reconnect = () => {
   lockReconnect = true
 
   closeCurrentSocket()
+  await resetWsRuntime()
+  if (!needReconnect) {
+    return
+  }
+  lockReconnect = true
 
   if (maxReConnectTimes > 0) {
     console.log('prepare reconnect, remaining times: ' + maxReConnectTimes, new Date().getTime())
@@ -704,4 +841,11 @@ const reconnect = () => {
   }
 }
 
-export { initWs, closeWs, normalizeWsMessages, isValidWsMessage, getWsDiagnostics }
+export {
+  buildWsUrl,
+  initWs,
+  closeWs,
+  normalizeWsMessages,
+  isValidWsMessage,
+  getWsDiagnostics
+}

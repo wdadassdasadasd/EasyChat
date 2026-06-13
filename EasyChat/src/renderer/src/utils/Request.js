@@ -223,12 +223,7 @@ const request = (config) => {
     }
   }
   if (import.meta.env.DEV) {
-    console.log(
-      '[Request调试] 请求URL:',
-      url,
-      'Token:',
-      token ? token.substring(0, 8) + '...' : '空'
-    )
+    console.log('[Request调试] 请求URL:', url)
   }
   // 登录/注册/验证码接口不需要鉴权，避免携带脏 token 触发后端异常
   if (url && url.startsWith('/account/')) {

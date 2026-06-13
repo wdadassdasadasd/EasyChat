@@ -19,6 +19,7 @@ const globalColumnMap = {
     fileSize: 'file_size',
     fileName: 'file_name',
     filePath: 'file_path',
+    uploadSourceId: 'upload_source_id',
     fileType: 'file_type'
   },
   chat_session_user: {

@@ -207,18 +207,17 @@ export const useChatSessions = ({ proxy, route }) => {
 
     // 单一定时监听器：用 pendingReadMap 匹配 contactId，避免 O(n²) 链式重注册。
     markSessionReadHandler = (data = {}) => {
-      const contactId = data?.contactId
+      const contactId = String(data?.contactId || '')
       if (!contactId) return
 
       const entry = pendingReadMap.get(contactId)
-      if (!entry) return
+      if (!entry || data.operationId !== entry.operationId) return
 
       clearTimeout(entry.timeoutTimer)
-      pendingReadMap.delete(contactId)
-
-      if (!data?.success && typeof entry.restoreNoReadCount === 'function') {
+      if (!data?.success) {
         entry.restoreNoReadCount()
       }
+      pendingReadMap.delete(contactId)
     }
     unsubscribeMarkSessionRead = window.api.onMarkSessionReadCallback(markSessionReadHandler)
 
@@ -343,6 +342,7 @@ export const useChatSessions = ({ proxy, route }) => {
 
       const { noReadCountDelta = 0, ...sessionInfo } = rawSession
       const contactId = String(sessionInfo.contactId)
+      const pendingRead = pendingReadMap.get(contactId)
       const index = chatSessionList.value.findIndex((item) => {
         return String(item.contactId) === contactId
       })
@@ -355,8 +355,14 @@ export const useChatSessions = ({ proxy, route }) => {
         nextSession.noReadCount = 0
       } else if (Number(noReadCountDelta) > 0) {
         nextSession.noReadCount = Number(previous.noReadCount || 0) + Number(noReadCountDelta)
+        if (pendingRead) {
+          pendingRead.receivedDelta += Number(noReadCountDelta)
+        }
       } else if (sessionInfo.noReadCount == null && previous.noReadCount != null) {
         nextSession.noReadCount = previous.noReadCount
+      }
+      if (pendingRead && sessionInfo.noReadCount != null && Number(noReadCountDelta) === 0) {
+        pendingRead.hasAuthoritativePatch = true
       }
 
       // 外部推送更新未读数时打上新的 generation，防止 markSessionRead 超时回滚覆写
@@ -384,14 +390,16 @@ export const useChatSessions = ({ proxy, route }) => {
     }
 
     // 已读状态乐观更新：先清零内存中的未读数再通知主进程落盘。
-    const session = chatSessionList.value.find((item) => item.contactId == contactId)
-    const previousNoReadCount = session ? session.noReadCount : 0
+    const contactKey = String(contactId)
+    const session = chatSessionList.value.find((item) => String(item.contactId) === contactKey)
+    const previousNoReadCount = Number(session?.noReadCount || 0)
     const markGeneration = `read-${++_readGeneration}`
+    const operationId = `${markGeneration}-${Date.now()}`
     if (session) {
       session.noReadCount = 0
       session._readGeneration = markGeneration
     }
-    if (currentChatSession.value.contactId == contactId) {
+    if (String(currentChatSession.value.contactId || '') === contactKey) {
       currentChatSession.value = Object.assign({}, currentChatSession.value, {
         noReadCount: 0,
         _readGeneration: markGeneration
@@ -399,41 +407,55 @@ export const useChatSessions = ({ proxy, route }) => {
     }
 
     const restoreNoReadCount = () => {
-      const targetSession = chatSessionList.value.find((item) => item.contactId == contactId)
+      const entry = pendingReadMap.get(contactKey)
+      if (!entry || entry.operationId !== operationId || entry.hasAuthoritativePatch) {
+        return
+      }
+      const restoredNoReadCount = entry.previousNoReadCount + entry.receivedDelta
+      const targetSession = chatSessionList.value.find(
+        (item) => String(item.contactId) === contactKey
+      )
       // 使用 generation 替代 noReadCount===0 判断：仅在 5s 内未被 patchChatSessions
       // 或再次 markSessionRead 更新过时才回滚，防止覆盖外部推送的最新未读数。
-      if (targetSession && targetSession._readGeneration === markGeneration) {
-        targetSession.noReadCount = previousNoReadCount
+      if (targetSession) {
+        targetSession.noReadCount = restoredNoReadCount
       }
       if (
-        currentChatSession.value.contactId == contactId &&
-        currentChatSession.value._readGeneration === markGeneration
+        String(currentChatSession.value.contactId || '') === contactKey
       ) {
         currentChatSession.value = Object.assign({}, currentChatSession.value, {
-          noReadCount: previousNoReadCount
+          noReadCount: restoredNoReadCount
         })
       }
     }
 
     // 清除该 contactId 之前未完成的标记操作（避免重复计时器堆积）。
-    const previousEntry = pendingReadMap.get(contactId)
+    const previousEntry = pendingReadMap.get(contactKey)
     if (previousEntry) {
       clearTimeout(previousEntry.timeoutTimer)
-      pendingReadMap.delete(contactId)
+      pendingReadMap.delete(contactKey)
     }
 
+    const entry = {
+      operationId,
+      previousNoReadCount,
+      receivedDelta: 0,
+      hasAuthoritativePatch: false,
+      timeoutTimer: null,
+      restoreNoReadCount
+    }
     const timeoutTimer = setTimeout(() => {
-      pendingReadMap.delete(contactId)
+      if (pendingReadMap.get(contactKey) !== entry) {
+        return
+      }
       restoreNoReadCount()
+      pendingReadMap.delete(contactKey)
     }, 5000)
 
-    pendingReadMap.set(contactId, {
-      previousNoReadCount,
-      timeoutTimer,
-      restoreNoReadCount
-    })
+    entry.timeoutTimer = timeoutTimer
+    pendingReadMap.set(contactKey, entry)
 
-    window.api.sendMarkSessionRead(contactId)
+    window.api.sendMarkSessionRead({ contactId, operationId })
   }
 
   const setTop = (data) => {

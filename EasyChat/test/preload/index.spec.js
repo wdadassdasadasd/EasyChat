@@ -24,6 +24,14 @@ describe('preload API bridge', () => {
   let api
 
   beforeAll(async () => {
+    global.File = class File {
+      constructor(name, options = {}) {
+        this.name = name
+        this.size = options.size || 0
+        this.type = options.type || ''
+        this.lastModified = options.lastModified || 0
+      }
+    }
     Object.defineProperty(process, 'contextIsolated', {
       configurable: true,
       value: true
@@ -57,6 +65,29 @@ describe('preload API bridge', () => {
     expect(electronMocks.ipcRenderer.removeListener).toHaveBeenCalledWith(
       'receiveMessage',
       wrappedListener
+    )
+  })
+
+  it('registers only real File objects through the named upload source channel', async () => {
+    electronMocks.ipcRenderer.invoke.mockResolvedValueOnce({
+      success: true,
+      uploadSourceId: 'source-1'
+    })
+    const file = new File('a.txt', { size: 12, type: 'text/plain', lastModified: 10 })
+
+    await expect(api.registerUploadSource(file)).resolves.toMatchObject({
+      uploadSourceId: 'source-1'
+    })
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenCalledWith(
+      'registerUploadSource',
+      expect.objectContaining({
+        filePath: 'D:/tmp/file.txt',
+        name: 'a.txt',
+        size: 12
+      })
+    )
+    await expect(api.registerUploadSource({ name: 'fake.txt' })).rejects.toThrow(
+      'only accepts File'
     )
   })
 })

@@ -30,7 +30,10 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   'openTempVideoFile',
   'readLocalVideoFile',
   'openLocalVideoFile',
-  'generateVideoThumbnail',
+  'registerUploadSource',
+  'readUploadSourceChunk',
+  'releaseUploadSource',
+  'generateUploadSourceThumbnail',
   'downloadChatFile',
   'cancelDownloadChatFile',
   'openDownloadedFile',
@@ -83,8 +86,8 @@ const api = {
   sendLoadSessionData() {
     electronAPI.ipcSend('loadSessionData')
   },
-  sendMarkSessionRead(contactId) {
-    electronAPI.ipcSend('markSessionRead', contactId)
+  sendMarkSessionRead(data) {
+    electronAPI.ipcSend('markSessionRead', data)
   },
   sendDelChatSession(contactId) {
     electronAPI.ipcSend('delChatSession', contactId)
@@ -145,8 +148,30 @@ const api = {
   invokeOpenLocalVideoFile(data) {
     return electronAPI.ipcInvoke('openLocalVideoFile', data)
   },
-  invokeGenerateVideoThumbnail(data) {
-    return electronAPI.ipcInvoke('generateVideoThumbnail', data)
+  registerUploadSource(file) {
+    if (typeof File === 'undefined' || !(file instanceof File)) {
+      return Promise.reject(new TypeError('registerUploadSource only accepts File objects'))
+    }
+    const filePath = webUtils.getPathForFile(file)
+    if (!filePath) {
+      return Promise.reject(new Error('The selected file has no local path'))
+    }
+    return electronAPI.ipcInvoke('registerUploadSource', {
+      filePath,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified
+    })
+  },
+  invokeReadUploadSourceChunk(data) {
+    return electronAPI.ipcInvoke('readUploadSourceChunk', data)
+  },
+  invokeReleaseUploadSource(data) {
+    return electronAPI.ipcInvoke('releaseUploadSource', data)
+  },
+  invokeGenerateUploadSourceThumbnail(data) {
+    return electronAPI.ipcInvoke('generateUploadSourceThumbnail', data)
   },
   invokeDownloadChatFile(data) {
     return electronAPI.ipcInvoke('downloadChatFile', data)

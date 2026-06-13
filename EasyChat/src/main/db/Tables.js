@@ -14,6 +14,7 @@ const add_tables = [
     '  file_size bigint,' +
     '  file_name varchar,' +
     '  file_path varchar,' +
+    '  upload_source_id varchar,' +
     '  file_type integer,' +
     '  primary key(user_id, message_id)' +
     ');',
@@ -68,7 +69,13 @@ const optional_tables = [
 //   field: 'extra_info',
 //   sql: 'alter table chat_message add column extra_info varchar'
 // },
-const alter_tables = []
+const alter_tables = [
+  {
+    tableName: 'chat_message',
+    field: 'upload_source_id',
+    sql: 'alter table chat_message add column upload_source_id varchar'
+  }
+]
 
 const add_index = [
   'create index if not exists idx_session_id' + ' on chat_message(' + ' session_id asc' + ');',

@@ -55,6 +55,12 @@ vi.mock('../../src/main/db/UserSettingModel', () => ({
   updateNoReadCount: vi.fn()
 }))
 
+vi.mock('../../src/main/receiveRecoveryStore', () => ({
+  appendReceiveRecoveryMessages: vi.fn(async () => {}),
+  compactReceiveRecoveryMessages: vi.fn(async () => 0),
+  readReceiveRecoveryMessages: vi.fn(async () => [])
+}))
+
 describe('wsClient message normalization', () => {
   beforeEach(async () => {
     vi.useRealTimers()
@@ -162,6 +168,13 @@ describe('wsClient message normalization', () => {
     expect(isValidWsMessage({})).toBe(false)
   })
 
+  it('constructs the compatible WS query token with URL encoding', async () => {
+    const { buildWsUrl } = await import('../../src/main/wsClient')
+    expect(buildWsUrl('ws://localhost/ws?client=desktop', 'a+b&c')).toBe(
+      'ws://localhost/ws?client=desktop&token=a%2Bb%26c'
+    )
+  })
+
   it('publishes stale status and reconnects when pong times out', async () => {
     vi.useFakeTimers()
     const { initWs, closeWs } = await import('../../src/main/wsClient')
@@ -170,7 +183,7 @@ describe('wsClient message normalization', () => {
       isDestroyed: vi.fn(() => false)
     }
 
-    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
     const socket = wsInstances.at(-1)
     socket.onopen()
 
@@ -189,7 +202,7 @@ describe('wsClient message normalization', () => {
     )
     expect(socket.close).toHaveBeenCalled()
 
-    closeWs()
+    await closeWs()
     vi.useRealTimers()
   })
 
@@ -202,7 +215,7 @@ describe('wsClient message normalization', () => {
       isDestroyed: vi.fn(() => false)
     }
 
-    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
     const socket = wsInstances.at(-1)
     socket.onopen()
     const messages = Array.from({ length: 2105 }, (_, index) => ({
@@ -232,7 +245,7 @@ describe('wsClient message normalization', () => {
       )
     })
 
-    closeWs()
+    await closeWs()
   })
 
   it('emits db_write_failed after repeated receive flush failures', async () => {
@@ -245,7 +258,7 @@ describe('wsClient message normalization', () => {
       isDestroyed: vi.fn(() => false)
     }
 
-    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
     const socket = wsInstances.at(-1)
     socket.onopen()
     socket.emit('pong')
@@ -276,7 +289,7 @@ describe('wsClient message normalization', () => {
         })
     )
 
-    closeWs()
+    await closeWs()
     vi.useRealTimers()
   })
 
@@ -292,7 +305,7 @@ describe('wsClient message normalization', () => {
       isDestroyed: vi.fn(() => false)
     }
 
-    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
     const socket = wsInstances.at(-1)
     socket.onopen()
     socket.emit('pong')
@@ -316,7 +329,52 @@ describe('wsClient message normalization', () => {
       })
     )
 
-    closeWs()
+    await closeWs()
+    vi.useRealTimers()
+  })
+
+  it('does not publish a stale INIT result after the runtime generation changes', async () => {
+    vi.useFakeTimers()
+    const { saveOrUpdateChatSessionBatch4Init } = await import(
+      '../../src/main/db/ChatSessionUserModel'
+    )
+    let resolveInitSave
+    saveOrUpdateChatSessionBatch4Init.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveInitSave = resolve
+        })
+    )
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onmessage({
+      data: JSON.stringify({
+        messageType: 0,
+        extendData: {
+          chatSessionList: [{ contactId: 'u2', contactName: 'User Two' }],
+          chatMessageList: []
+        }
+      })
+    })
+
+    await vi.advanceTimersByTimeAsync(15000)
+    await closeWs()
+    sender.send.mockClear()
+
+    resolveInitSave()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(sender.send).not.toHaveBeenCalledWith(
+      'receiveMessage',
+      expect.objectContaining({ messageType: 0 })
+    )
     vi.useRealTimers()
   })
 
@@ -329,7 +387,7 @@ describe('wsClient message normalization', () => {
       isDestroyed: vi.fn(() => false)
     }
 
-    initWs({ token: 'secret-token', userId: 'u1' }, sender)
+    await initWs({ token: 'secret-token', userId: 'u1' }, sender)
 
     expect(wsInstances).toHaveLength(0)
     expect(sender.send).toHaveBeenCalledWith(
@@ -353,8 +411,8 @@ describe('wsClient message normalization', () => {
       isDestroyed: vi.fn(() => false)
     }
 
-    initWs({ token: 'token-1', userId: 'u1' }, sender)
-    closeWs()
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+    await closeWs()
 
     expect(sender.send).toHaveBeenCalledWith(
       'wsStatusChange',
@@ -390,7 +448,7 @@ describe('wsClient message normalization', () => {
       isDestroyed: vi.fn(() => false)
     }
 
-    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
     const socket = wsInstances.at(-1)
     socket.onopen()
     socket.emit('pong')
@@ -416,7 +474,7 @@ describe('wsClient message normalization', () => {
       })
     )
 
-    closeWs()
+    await closeWs()
     vi.useRealTimers()
   })
 
@@ -427,7 +485,7 @@ describe('wsClient message normalization', () => {
       isDestroyed: vi.fn(() => false)
     }
 
-    initWs({ token: 'token-1', userId: 'u1' }, sender)
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
     const socket = wsInstances.at(-1)
     socket.onopen()
     socket.emit('pong')
@@ -436,6 +494,6 @@ describe('wsClient message normalization', () => {
       expect(getWsDiagnostics().invalidMessageCount).toBe(1)
     })
 
-    closeWs()
+    await closeWs()
   })
 })

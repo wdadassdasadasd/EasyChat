@@ -133,14 +133,13 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     })
   }
 
-  const createVideoCoverWithFfmpeg = async (file) => {
+  const createVideoCoverWithFfmpeg = async (uploadSourceId) => {
     // Electron 环境下优先用 ffmpeg 提取封面，绕过浏览器 HEVC 解码限制。
-    const filePath = file.path || window.api?.getPathForFile?.(file) || ''
-    if (!filePath || !window.api) {
+    if (!uploadSourceId || !window.api) {
       return null
     }
-    const result = await window.api.invokeGenerateVideoThumbnail({
-      filePath
+    const result = await window.api.invokeGenerateUploadSourceThumbnail({
+      uploadSourceId
     })
     if (!result?.success || !result?.arrayBuffer) {
       return null
@@ -148,9 +147,9 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     return new Blob([result.arrayBuffer], { type: 'image/jpeg' })
   }
 
-  const createVideoCover = async (file) => {
+  const createVideoCover = async (file, uploadSourceId) => {
     // 优先用 ffmpeg 提取封面，绕过浏览器 HEVC 解码限制；失败时回退到 video 元素截帧。
-    const ffmpegCover = await createVideoCoverWithFfmpeg(file)
+    const ffmpegCover = await createVideoCoverWithFfmpeg(uploadSourceId)
     if (ffmpegCover) {
       return ffmpegCover
     }
@@ -270,15 +269,25 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     }
 
     const order = nextPendingMediaOrder()
-    pendingFileList.value.push({
+    let uploadSourceId = ''
+    if (fileType === 1) {
+      const sourceResult = await window.api.registerUploadSource(file).catch(() => null)
+      uploadSourceId = sourceResult?.uploadSourceId || ''
+    }
+    const pendingFile = {
       id: `${Date.now()}_${Math.random()}`,
       order,
       file,
-      cover: fileType === 1 ? await createVideoCover(file) : await createFileCover(),
+      cover: fileType === 1 ? null : await createFileCover(),
+      uploadSourceId,
       fileType,
       name: file.name,
       size: file.size
-    })
+    }
+    pendingFileList.value.push(pendingFile)
+    if (fileType === 1) {
+      pendingFile.cover = await createVideoCover(file, uploadSourceId)
+    }
   }
 
   const addPendingMedia = async (file) => {
@@ -313,11 +322,24 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     pendingImageList.value = []
   }
 
+  const releasePendingUploadSource = (item) => {
+    if (!item?.uploadSourceId) return
+    window.api
+      .invokeReleaseUploadSource({ uploadSourceId: item.uploadSourceId })
+      .catch(() => {})
+  }
+
   const removePendingFile = (id) => {
+    pendingFileList.value
+      .filter((item) => item.id === id)
+      .forEach(releasePendingUploadSource)
     pendingFileList.value = pendingFileList.value.filter((item) => item.id !== id)
   }
 
-  const clearPendingFiles = () => {
+  const clearPendingFiles = ({ releaseSources = true } = {}) => {
+    if (releaseSources) {
+      pendingFileList.value.forEach(releasePendingUploadSource)
+    }
     pendingFileList.value = []
   }
 
@@ -388,13 +410,14 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         contactId: currentChatSession.value.contactId,
         contactType: currentChatSession.value.contactType,
         file: media.file,
-        cover: media.cover
+        cover: media.cover,
+        uploadSourceId: media.uploadSourceId
       })
     })
 
     clearPendingImages()
 
-    clearPendingFiles()
+    clearPendingFiles({ releaseSources: false })
 
     if (messageContent) {
       emit('sendMessage', {
@@ -415,7 +438,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
         URL.revokeObjectURL(item.previewUrl)
       }
     })
-    pendingFileList.value = []
+    clearPendingFiles()
   })
 
   return {

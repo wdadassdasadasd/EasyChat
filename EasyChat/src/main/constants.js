@@ -14,6 +14,9 @@ export const HEARTBEAT_PONG_TIMEOUT = HEARTBEAT_INTERVAL * 2
 // 单个 WebSocket 消息处理最大耗时（ms），防止处理链永久阻塞
 export const WS_MESSAGE_PROCESS_TIMEOUT = 15000
 
+// 重连/退出前等待消息处理与刷盘完成的最长时间。
+export const WS_RESET_FLUSH_TIMEOUT = 20000
+
 // 消息队列刷盘延迟（ms）
 export const RECEIVE_FLUSH_DELAY = 50
 

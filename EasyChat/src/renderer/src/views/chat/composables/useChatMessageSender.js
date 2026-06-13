@@ -225,7 +225,8 @@ export const useChatMessageSender = ({
     messageContent,
     file,
     fileType,
-    filePath
+    filePath,
+    uploadSourceId
   }) => {
     return {
       messageId: nextLocalMessageId(),
@@ -237,6 +238,7 @@ export const useChatMessageSender = ({
       fileSize: file?.size,
       fileName: file?.name,
       filePath,
+      uploadSourceId,
       fileType,
       sendUserId: currentUserId?.value,
       sendTime: Date.now(),
@@ -493,8 +495,18 @@ export const useChatMessageSender = ({
     updateUploadProgress(message.uploadProgress || 0)
 
     // 媒体消息先创建消息记录，文件上传只更新该消息状态。
+    let uploadCover = cover
+    if (!uploadCover && message.fileType === 1 && message.uploadSourceId) {
+      const thumbnailResult = await window.api
+        .invokeGenerateUploadSourceThumbnail({ uploadSourceId: message.uploadSourceId })
+        .catch(() => null)
+      if (thumbnailResult?.success && thumbnailResult.arrayBuffer) {
+        uploadCover = new Blob([thumbnailResult.arrayBuffer], { type: 'image/jpeg' })
+      }
+    }
+
     const uploadResult = await uploadMediaFile({
-      cover,
+      cover: uploadCover,
       file,
       fileType: message.fileType,
       message,
@@ -511,7 +523,7 @@ export const useChatMessageSender = ({
       if (latestMessage?.uploadAcked || latestMessage?.status == 1) {
         return
       }
-      const canceled = controller.signal.aborted
+      const canceled = uploadResult?.kind === 'canceled'
       Object.assign(message, { uploadCanceled: canceled })
       updateMessageById?.(message.messageId, { uploadCanceled: canceled })
       await markMessageFailed(message, getUploadFailureMessage(uploadResult, canceled))
@@ -534,24 +546,58 @@ export const useChatMessageSender = ({
       console.error('save uploaded media status failed', error)
       proxy.Message.error('File uploaded, but local message status could not be saved.')
     })
+    if (message.uploadSourceId) {
+      await window.api
+        .invokeReleaseUploadSource({ uploadSourceId: message.uploadSourceId })
+        .catch((error) => console.error('release upload source failed', error))
+    }
   }
 
   const sendMediaMessage = async (
-    { contactId, contactType, file, cover },
+    { contactId, contactType, file, cover, uploadSourceId: registeredUploadSourceId },
     fileType,
     retryMessage = null
   ) => {
+    const releaseUnusedRegisteredSource = async () => {
+      if (!registeredUploadSourceId || retryMessage?.uploadSourceId) {
+        return
+      }
+      await window.api
+        .invokeReleaseUploadSource({ uploadSourceId: registeredUploadSourceId })
+        .catch((error) => console.error('release unused upload source failed', error))
+    }
+
     if (!file) {
+      await releaseUnusedRegisteredSource()
       return
     }
 
     const sizeResult = validateFileSize(file, fileType)
     if (!sizeResult.valid) {
+      await releaseUnusedRegisteredSource()
       proxy.Message.warning(sizeResult.message)
       return
     }
 
-    const filePath = file.path || window.api?.getPathForFile?.(file) || ''
+    let uploadSourceId = retryMessage?.uploadSourceId || registeredUploadSourceId
+    if (!uploadSourceId) {
+      let sourceResult
+      try {
+        sourceResult = await window.api.registerUploadSource(file)
+      } catch (error) {
+        console.error('register upload source failed', error)
+        proxy.Message.warning('无法读取所选文件，请重新选择后再试。')
+        return
+      }
+      if (!sourceResult?.success || !sourceResult.uploadSourceId) {
+        proxy.Message.warning(sourceResult?.error || '无法注册上传文件，请重新选择后再试。')
+        return
+      }
+      uploadSourceId = sourceResult.uploadSourceId
+    }
+    const filePath = ''
+    const sourceFile =
+      typeof file.slice === 'function' ? file : { ...file, uploadSourceId }
     const localMessage =
       retryMessage ||
       createPendingMessage({
@@ -559,13 +605,20 @@ export const useChatMessageSender = ({
         contactType,
         messageType: 5,
         messageContent: file.name,
-        file,
+        file: sourceFile,
         fileType,
-        filePath
+        filePath,
+        uploadSourceId
       })
-    localMessage.retryFile = file
+    localMessage.uploadSourceId = uploadSourceId
+    localMessage.retryFile = sourceFile
     localMessage.retryCover = cover
-    if (!localMessage.localPreviewUrl && (fileType === 0 || fileType === 1)) {
+    if (
+      !localMessage.localPreviewUrl &&
+      (fileType === 0 || fileType === 1) &&
+      typeof Blob !== 'undefined' &&
+      file instanceof Blob
+    ) {
       localMessage.localPreviewUrl = URL.createObjectURL(file)
       // H-16: 记录需要清理的 blob URL，消息替换/移除时 revoke
       blobUrlsToRevoke.add(localMessage.localPreviewUrl)
@@ -634,13 +687,14 @@ export const useChatMessageSender = ({
     if (filePath) {
       message.filePath = filePath
     }
+    message.uploadSourceId = uploadSourceId
 
     let serverMessage = null
     try {
       serverMessage = await replaceLocalWithServerMessage(localMessage, message, {
         localPreviewUrl: localMessage.localPreviewUrl,
         localCoverUrl: localMessage.localCoverUrl,
-        retryFile: file,
+        retryFile: sourceFile,
         retryCover: cover,
         uploading: true,
         uploadProgress: 0,
@@ -652,12 +706,12 @@ export const useChatMessageSender = ({
       markMessageLocalSyncFailed(localMessage, message, error, {
         recoveredStatus: 2,
         onRecovered: (recoveredMessage) => {
-          enqueueUploadTask(() => uploadMessageFile(recoveredMessage, file, cover))
+          enqueueUploadTask(() => uploadMessageFile(recoveredMessage, sourceFile, cover))
         }
       })
       return
     }
-    enqueueUploadTask(() => uploadMessageFile(serverMessage, file, cover))
+    enqueueUploadTask(() => uploadMessageFile(serverMessage, sourceFile, cover))
   }
 
   const sendImageMessage = (payload) => {
@@ -703,6 +757,11 @@ export const useChatMessageSender = ({
       targetMessage.uploadCanceled = false
       targetMessage.uploadAcked = true
       targetMessage.forceGet = Date.now()
+      if (targetMessage.uploadSourceId) {
+        window.api
+          .invokeReleaseUploadSource({ uploadSourceId: targetMessage.uploadSourceId })
+          .catch((error) => console.error('release acknowledged upload source failed', error))
+      }
     }
     // 文件 ACK 不影响会话列表排序。
   }
@@ -713,8 +772,18 @@ export const useChatMessageSender = ({
     }
 
     if (message.messageType == 5) {
-      if (!message.retryFile) {
-        proxy.Message.warning('This file can only be retried before the app is restarted.')
+      const retryFile =
+        message.retryFile ||
+        (message.uploadSourceId
+          ? {
+              uploadSourceId: message.uploadSourceId,
+              name: message.fileName || message.messageContent,
+              size: Number(message.fileSize || 0),
+              type: ''
+            }
+          : null)
+      if (!retryFile) {
+        proxy.Message.warning('原文件来源已丢失，请重新选择文件后发送。')
         return
       }
       if (Number(message.messageId) > 0) {
@@ -726,7 +795,7 @@ export const useChatMessageSender = ({
         })
           .then(() => {
             enqueueUploadTask(() =>
-              uploadMessageFile(message, message.retryFile, message.retryCover)
+              uploadMessageFile(message, retryFile, message.retryCover)
             )
           })
           .catch((error) => {
@@ -739,7 +808,7 @@ export const useChatMessageSender = ({
           {
             contactId: message.contactId,
             contactType: message.contactType,
-            file: message.retryFile,
+            file: retryFile,
             cover: message.retryCover
           },
           message.fileType,

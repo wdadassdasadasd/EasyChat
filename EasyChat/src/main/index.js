@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, Menu, Tray } from 'electron'
+import { app, dialog, shell, BrowserWindow, Menu, Tray } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -19,8 +19,13 @@ import {
   onLoadChatMessage,
   onSaveSendMessage,
   onClearChatMessage,
-  onSearchChatMessage
+  onSearchChatMessage,
+  onUploadSources
 } from './ipc.js'
+import { dbReady } from './db/ADB.js'
+import { initializeLogger } from './logger.js'
+
+initializeLogger()
 
 const NODE_ENV = process.env.NODE_ENV
 
@@ -168,6 +173,7 @@ function createWindow() {
     onLocalFileFolder()
     onOpenTempVideoFile()
     onChatFileDownload()
+    onUploadSources()
 
     winTitleOp((e, { action, data }) => {
       const webContents = e.sender
@@ -209,7 +215,7 @@ function createWindow() {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -219,6 +225,18 @@ app.whenReady().then(() => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
+
+  try {
+    await dbReady
+  } catch (error) {
+    console.error('Database initialization blocked application startup', error)
+    dialog.showErrorBox(
+      'EasyChat 启动失败',
+      '本地数据库初始化失败，应用无法安全启动。请检查磁盘空间和目录权限后重试。'
+    )
+    app.quit()
+    return
+  }
 
   createWindow()
 
@@ -239,13 +257,17 @@ app.on('window-all-closed', () => {
 })
 
 // M-10: 应用退出时清理资源
-app.on('before-quit', () => {
-  try {
-    const { closeWs } = require('./wsClient')
-    closeWs()
-  } catch (e) {
-    // Best-effort shutdown cleanup.
+let shutdownStarted = false
+app.on('before-quit', (event) => {
+  if (shutdownStarted) {
+    return
   }
+  shutdownStarted = true
+  event.preventDefault()
+  import('./wsClient.js')
+    .then(({ closeWs }) => closeWs())
+    .catch((error) => console.error('WebSocket shutdown failed', error))
+    .finally(() => app.quit())
 })
 
 // In this file you can include the rest of your app"s specific main process

@@ -1,5 +1,4 @@
 import { app, dialog, ipcMain, shell } from 'electron'
-import { spawn } from 'child_process'
 import fs from 'fs'
 import http from 'http'
 import https from 'https'
@@ -28,6 +27,12 @@ import {
   selectMessageList,
   updateLocalMessageStatus
 } from './db/ChatMessageModel.js'
+import {
+  generateUploadSourceThumbnail,
+  readUploadSourceChunk,
+  registerUploadSource,
+  releaseUploadSource
+} from './uploadSourceRegistry.js'
 
 const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
 const MAX_LOCAL_REPLACE_RECOVERY_ITEMS = 100
@@ -123,8 +128,8 @@ const onLoginSuccess = (mainWindow, callback) => {
     } catch (error) {
       console.error('Failed to recover stale pending messages', error)
     }
+    await initWs(config, e.sender)
     callback(config)
-    initWs(config, e.sender)
   })
 }
 
@@ -279,29 +284,47 @@ const onLoadChatMessage = () => {
 }
 
 const onMarkSessionRead = () => {
-  registerSafeIpcOn('markSessionRead', 'markSessionReadCallback', async (e, contactId) => {
+  registerSafeIpcOn('markSessionRead', 'markSessionReadCallback', async (e, data = {}) => {
+    const contactId = typeof data === 'object' ? data.contactId : data
+    const operationId = typeof data === 'object' ? data.operationId : undefined
     // 已读会同步清零本地会话未读数，renderer 收到新会话列表后红点也会随之刷新。
     await markSessionRead(contactId)
     e.sender.send('markSessionReadCallback', {
       contactId,
+      operationId,
       success: true
     })
   })
 }
 
 const onResetToLogin = (_mainWindow, callback) => {
-  const reset = () => {
-    closeWs()
+  const reset = async () => {
+    await closeWs()
     callback()
     return true
   }
 
-  ipcMain.handle('logout', () => {
-    return reset()
+  ipcMain.handle('logout', async () => {
+    return await reset()
   })
 
-  ipcMain.on('reLogin', () => {
-    reset()
+  ipcMain.on('reLogin', async () => {
+    await reset()
+  })
+}
+
+const onUploadSources = () => {
+  ipcMain.handle('registerUploadSource', async (_e, data = {}) => {
+    return await registerUploadSource(data)
+  })
+  ipcMain.handle('readUploadSourceChunk', async (_e, data = {}) => {
+    return await readUploadSourceChunk(data)
+  })
+  ipcMain.handle('releaseUploadSource', async (_e, data = {}) => {
+    return releaseUploadSource(data)
+  })
+  ipcMain.handle('generateUploadSourceThumbnail', async (_e, data = {}) => {
+    return await generateUploadSourceThumbnail(data)
   })
 }
 
@@ -512,50 +535,6 @@ const onOpenTempVideoFile = () => {
     }
   })
 }
-
-// M-13: ffmpeg 视频封面提取，若系统未安装 ffmpeg 则返回失败由渲染进程降级处理
-ipcMain.handle('generateVideoThumbnail', async (_e, data = {}) => {
-  const { filePath } = data
-  if (!filePath || !fs.existsSync(filePath)) {
-    return { success: false, error: 'File not found' }
-  }
-
-  return new Promise((resolve) => {
-    const chunks = []
-    const ffmpeg = spawn('ffmpeg', [
-      '-i',
-      filePath,
-      '-ss',
-      '00:00:01',
-      '-vframes',
-      '1',
-      '-f',
-      'image2pipe',
-      '-vcodec',
-      'mjpeg',
-      '-'
-    ])
-
-    ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk))
-    ffmpeg.stdout.on('end', () => {
-      const buffer = Buffer.concat(chunks)
-      if (buffer.length > 0) {
-        const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-        resolve({ success: true, arrayBuffer: ab })
-      }
-    })
-
-    ffmpeg.on('error', (err) => {
-      resolve({ success: false, error: err.message })
-    })
-
-    ffmpeg.on('close', (code) => {
-      if (code !== 0 && chunks.length === 0) {
-        resolve({ success: false, error: `ffmpeg exited with code ${code}` })
-      }
-    })
-  })
-})
 
 const activeDownloads = new Map()
 
@@ -806,6 +785,7 @@ export {
   onSaveSendMessage,
   onClearChatMessage,
   onSearchChatMessage,
+  onUploadSources,
   onLocalFileFolder,
   onOpenTempVideoFile,
   onChatFileDownload

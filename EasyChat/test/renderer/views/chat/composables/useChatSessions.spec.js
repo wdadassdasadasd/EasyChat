@@ -31,8 +31,8 @@ const createHarness = () => {
       unsubscribeLoadSessionData,
       unsubscribeMarkSessionRead,
       unsubscribeTopChatSession,
-      sendMarkSessionRead: vi.fn((contactId) => {
-        sent.push({ method: 'sendMarkSessionRead', contactId })
+      sendMarkSessionRead: vi.fn((data) => {
+        sent.push({ method: 'sendMarkSessionRead', data })
       }),
       sendTopChatSession: vi.fn((data) => {
         sent.push({ method: 'sendTopChatSession', data })
@@ -104,36 +104,55 @@ describe('useChatSessions', () => {
   })
 
   it('keeps optimistic unread clear when markSessionRead succeeds', () => {
-    const { handlers, sessions } = createHarness()
+    const { handlers, sent, sessions } = createHarness()
     sessions.registerSessionListener()
 
     sessions.markSessionRead('c1')
     expect(sessions.chatSessionList.value[0].noReadCount).toBe(0)
 
-    handlers.markSessionReadCallback({ contactId: 'c1', success: true })
+    handlers.markSessionReadCallback({ ...sent.at(-1).data, success: true })
     vi.advanceTimersByTime(5000)
 
     expect(sessions.chatSessionList.value[0].noReadCount).toBe(0)
   })
 
   it('rolls unread count back when markSessionRead fails', () => {
-    const { handlers, sessions } = createHarness()
+    const { handlers, sent, sessions } = createHarness()
     sessions.registerSessionListener()
 
     sessions.markSessionRead('c1')
-    handlers.markSessionReadCallback({ contactId: 'c1', success: false })
+    handlers.markSessionReadCallback({ ...sent.at(-1).data, success: false })
 
     expect(sessions.chatSessionList.value[0].noReadCount).toBe(3)
   })
 
-  it('does not overwrite new unread patch when markSessionRead later fails', () => {
-    const { handlers, sessions } = createHarness()
+  it('restores previous unread plus messages received during a failed operation', () => {
+    const { handlers, sent, sessions } = createHarness()
     sessions.registerSessionListener()
 
     sessions.markSessionRead('c1')
     sessions.patchChatSessions([{ contactId: 'c1', noReadCountDelta: 2 }])
-    handlers.markSessionReadCallback({ contactId: 'c1', success: false })
+    handlers.markSessionReadCallback({ ...sent.at(-1).data, success: false })
 
+    expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').noReadCount).toBe(
+      5
+    )
+  })
+
+  it('ignores an older callback after a newer mark-read operation starts', () => {
+    const { handlers, sent, sessions } = createHarness()
+    sessions.registerSessionListener()
+
+    sessions.markSessionRead('c1')
+    const firstOperation = sent.at(-1).data
+    sessions.patchChatSessions([{ contactId: 'c1', noReadCountDelta: 2 }])
+    sessions.markSessionRead('c1')
+    const secondOperation = sent.at(-1).data
+
+    handlers.markSessionReadCallback({ ...firstOperation, success: false })
+    expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').noReadCount).toBe(0)
+
+    handlers.markSessionReadCallback({ ...secondOperation, success: false })
     expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').noReadCount).toBe(2)
   })
 

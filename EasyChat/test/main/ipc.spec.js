@@ -15,8 +15,12 @@ vi.mock('electron', () => ({
     openExternal: vi.fn()
   },
   ipcMain: {
-    on: vi.fn((channel, handler) => { mockIpcOn[channel] = handler }),
-    handle: vi.fn((channel, handler) => { mockIpcHandle[channel] = handler })
+    on: vi.fn((channel, handler) => {
+      mockIpcOn[channel] = handler
+    }),
+    handle: vi.fn((channel, handler) => {
+      mockIpcHandle[channel] = handler
+    })
   }
 }))
 
@@ -40,6 +44,13 @@ vi.mock('../../src/main/wsClient', () => ({
   closeWs: vi.fn()
 }))
 
+vi.mock('../../src/main/uploadSourceRegistry', () => ({
+  generateUploadSourceThumbnail: vi.fn(async () => ({ success: true })),
+  readUploadSourceChunk: vi.fn(async () => ({ success: true, arrayBuffer: new ArrayBuffer(1) })),
+  registerUploadSource: vi.fn(async () => ({ success: true, uploadSourceId: 'source-1' })),
+  releaseUploadSource: vi.fn(() => ({ success: true, released: true }))
+}))
+
 vi.mock('../../src/main/db/ChatSessionUserModel', () => ({
   selectUserSessionList: vi.fn(async () => [
     { contactId: 'c1', sessionId: 's1', contactType: 0, contactName: 'Test User' }
@@ -48,25 +59,32 @@ vi.mock('../../src/main/db/ChatSessionUserModel', () => ({
   markSessionRead: vi.fn(async () => 1),
   topChatSession: vi.fn(async () => 1),
   clearChatSessionSummaryBySessionId: vi.fn(async (sid) => ({
-    sessionId: sid, contactId: 'c1', lastMessage: '', noReadCount: 0
+    sessionId: sid,
+    contactId: 'c1',
+    lastMessage: '',
+    noReadCount: 0
   }))
 }))
 
 vi.mock('../../src/main/db/ChatMessageModel', () => ({
   clearMessageAndSessionSummaryBySessionId: vi.fn(async (sid) => ({
-    sessionId: sid, contactId: 'c1', lastMessage: '', noReadCount: 0
+    sessionId: sid,
+    contactId: 'c1',
+    lastMessage: '',
+    noReadCount: 0
   })),
   clearMessageBySessionId: vi.fn(async () => 1),
   recoverStalePendingMessages: vi.fn(async () => ({ success: true, recoveredCount: 2 })),
   replacePendingMessage: vi.fn(async ({ message, localMessageId }) => ({
-    success: true, messageId: message?.messageId, localMessageId
+    success: true,
+    messageId: message?.messageId,
+    localMessageId
   })),
   savePendingMessage: vi.fn(async ({ message }) => ({
-    success: true, messageId: message?.messageId
+    success: true,
+    messageId: message?.messageId
   })),
-  searchMessageBySessionId: vi.fn(async () => [
-    { messageId: 1, messageContent: 'found match' }
-  ]),
+  searchMessageBySessionId: vi.fn(async () => [{ messageId: 1, messageContent: 'found match' }]),
   selectMessageContextByMessageId: vi.fn(async () => [
     { messageId: 5, messageContent: 'context msg' }
   ]),
@@ -75,7 +93,9 @@ vi.mock('../../src/main/db/ChatMessageModel', () => ({
     hasMore: false
   })),
   updateLocalMessageStatus: vi.fn(async ({ messageId, status }) => ({
-    success: true, messageId, status
+    success: true,
+    messageId,
+    status
   }))
 }))
 
@@ -178,7 +198,9 @@ describe('IPC: GetLocalStore', () => {
 
   it('sends undefined on store error', async () => {
     const store = (await import('../../src/main/store')).default
-    store.getData.mockImplementationOnce(() => { throw new Error('boom') })
+    store.getData.mockImplementationOnce(() => {
+      throw new Error('boom')
+    })
 
     ipcExports.onGetLocalStore()
     const handler = mockIpcOn['GetLocalStore']
@@ -215,11 +237,36 @@ describe('IPC: openChat', () => {
     )
   })
 
+  it('waits for WebSocket initialization before opening the chat window', async () => {
+    const { initWs } = await import('../../src/main/wsClient')
+    let resolveInit
+    initWs.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveInit = resolve
+        })
+    )
+    const callback = vi.fn()
+
+    ipcExports.onLoginSuccess({}, callback)
+    const openChatPromise = mockIpcOn.openChat(ipcEvent(), {
+      userId: 'u1',
+      token: 'token-1',
+      email: 'u1@example.com'
+    })
+
+    await vi.waitFor(() => expect(initWs).toHaveBeenCalled())
+    expect(callback).not.toHaveBeenCalled()
+
+    resolveInit()
+    await openChatPromise
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }))
+  })
+
   it('replays durable local replacements before stale pending recovery', async () => {
     const store = (await import('../../src/main/store')).default
-    const { replacePendingMessage, recoverStalePendingMessages } = await import(
-      '../../src/main/db/ChatMessageModel'
-    )
+    const { replacePendingMessage, recoverStalePendingMessages } =
+      await import('../../src/main/db/ChatMessageModel')
     const payload = {
       mode: 'replace',
       localMessageId: -9,
@@ -246,9 +293,9 @@ describe('IPC: openChat', () => {
     )
     expect(store.deleteUserData).toHaveBeenCalledWith('localReplaceRecoveryQueue')
     expect(recoverStalePendingMessages).toHaveBeenCalled()
-    expect(
-      replacePendingMessage.mock.invocationCallOrder.at(-1)
-    ).toBeLessThan(recoverStalePendingMessages.mock.invocationCallOrder.at(-1))
+    expect(replacePendingMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      recoverStalePendingMessages.mock.invocationCallOrder.at(-1)
+    )
   })
 })
 
@@ -293,10 +340,10 @@ describe('IPC: delChatSession', () => {
     expect(handler).toBeDefined()
 
     await handler(ipcEvent(), 'c1')
-    expect(mockSender.send).toHaveBeenCalledWith(
-      'delChatSessionCallback',
-      { contactId: 'c1', success: true }
-    )
+    expect(mockSender.send).toHaveBeenCalledWith('delChatSessionCallback', {
+      contactId: 'c1',
+      success: true
+    })
   })
 })
 
@@ -307,10 +354,11 @@ describe('IPC: topChatSession', () => {
     expect(handler).toBeDefined()
 
     await handler(ipcEvent(), { contactId: 'c1', topType: 1 })
-    expect(mockSender.send).toHaveBeenCalledWith(
-      'topChatSessionCallback',
-      { contactId: 'c1', topType: 1, success: true }
-    )
+    expect(mockSender.send).toHaveBeenCalledWith('topChatSessionCallback', {
+      contactId: 'c1',
+      topType: 1,
+      success: true
+    })
   })
 })
 
@@ -320,11 +368,12 @@ describe('IPC: markSessionRead', () => {
     const handler = mockIpcOn['markSessionRead']
     expect(handler).toBeDefined()
 
-    await handler(ipcEvent(), 'c1')
-    expect(mockSender.send).toHaveBeenCalledWith(
-      'markSessionReadCallback',
-      { contactId: 'c1', success: true }
-    )
+    await handler(ipcEvent(), { contactId: 'c1', operationId: 'read-1' })
+    expect(mockSender.send).toHaveBeenCalledWith('markSessionReadCallback', {
+      contactId: 'c1',
+      operationId: 'read-1',
+      success: true
+    })
   })
 })
 
@@ -460,10 +509,7 @@ describe('IPC: saveSendMessage', () => {
   })
 
   it('updates message status', async () => {
-    const result = await handler(
-      {},
-      { message: { messageId: 300 }, mode: 'status', status: 1 }
-    )
+    const result = await handler({}, { message: { messageId: 300 }, mode: 'status', status: 1 })
     expect(result.success).toBe(true)
     expect(result.status).toBe(1)
   })
@@ -499,32 +545,15 @@ describe('IPC: saveSendMessage', () => {
   })
 })
 
-// ═══════════════════════════════════════════════
-// generateVideoThumbnail (top‑level ipcMain.handle)
-// ═══════════════════════════════════════════════
-describe('IPC: generateVideoThumbnail', () => {
-  it('returns error when filePath missing', async () => {
-    const handler = mockIpcHandle['generateVideoThumbnail']
-    expect(handler).toBeDefined()
+describe('IPC: upload sources', () => {
+  it('registers only the named source-based handlers', async () => {
+    ipcExports.onUploadSources()
 
-    const result = await handler({}, {})
-    expect(result.success).toBe(false)
-    expect(result.error).toBe('File not found')
-  })
-
-  it('returns error when file does not exist', async () => {
-    const handler = mockIpcHandle['generateVideoThumbnail']
-
-    const result = await handler({}, { filePath: '/tmp/nope.mp4' })
-    expect(result.success).toBe(false)
-  })
-
-  it('returns thumbnail arrayBuffer on success', async () => {
-    const handler = mockIpcHandle['generateVideoThumbnail']
-
-    const result = await handler({}, { filePath: '/tmp/exists.mp4' })
-    expect(result.success).toBe(true)
-    expect(result.arrayBuffer).toBeInstanceOf(ArrayBuffer)
+    expect(mockIpcHandle['generateVideoThumbnail']).toBeUndefined()
+    expect(mockIpcHandle['registerUploadSource']).toBeDefined()
+    expect(mockIpcHandle['readUploadSourceChunk']).toBeDefined()
+    expect(mockIpcHandle['releaseUploadSource']).toBeDefined()
+    expect(mockIpcHandle['generateUploadSourceThumbnail']).toBeDefined()
   })
 })
 
@@ -553,7 +582,9 @@ describe('IPC: downloadChatFile', () => {
 
     // Second call must be rejected immediately
     const result = await handler(ipcEvent(), {
-      url: 'http://x.com/f', messageId: 'dup1', fileName: 'f.mp4'
+      url: 'http://x.com/f',
+      messageId: 'dup1',
+      fileName: 'f.mp4'
     })
     expect(result.success).toBe(false)
     expect(result.error).toContain('already downloading')
@@ -645,9 +676,8 @@ describe('registerSafeIpcOn error wrapping', () => {
   })
 
   it('sends error when clearChatMessage DB call fails', async () => {
-    const { clearMessageAndSessionSummaryBySessionId } = await import(
-      '../../src/main/db/ChatMessageModel'
-    )
+    const { clearMessageAndSessionSummaryBySessionId } =
+      await import('../../src/main/db/ChatMessageModel')
     clearMessageAndSessionSummaryBySessionId.mockRejectedValueOnce(new Error('txn fail'))
 
     ipcExports.onClearChatMessage()

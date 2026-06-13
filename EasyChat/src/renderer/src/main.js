@@ -41,6 +41,9 @@ import Avatar from './components/Avatar.vue'
 import AvatarBase from './components/AvatarBase.vue'
 import AvatarUpload from './components/AvatarUpload.vue'
 import { Confirm } from './utils/Confirm.js'
+import { initializeRendererLogger } from './utils/Logger.js'
+
+initializeRendererLogger()
 const app = createApp(App)
 
 const iconComponents = {

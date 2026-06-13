@@ -56,7 +56,17 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
   global.window = {
     api: {
       getPathForFile: (file) => file.path || '',
-      invokeSaveSendMessage
+      invokeSaveSendMessage,
+      registerUploadSource: vi.fn(async (file) => ({
+        success: true,
+        uploadSourceId: `source-${file.name}`
+      })),
+      invokeReadUploadSourceChunk: vi.fn(async ({ start, end }) => ({
+        success: true,
+        arrayBuffer: new ArrayBuffer(end - start)
+      })),
+      invokeReleaseUploadSource: vi.fn(async () => ({ success: true })),
+      invokeGenerateUploadSourceThumbnail: vi.fn(async () => ({ success: false }))
     }
   }
   global.URL.createObjectURL = vi.fn(() => 'blob://preview')
@@ -150,7 +160,10 @@ describe('useChatMessageSender', () => {
     expect(messageList.value).toHaveLength(1)
     expect(messageList.value[0].messageId).toBe(101)
     expect(messageList.value[0].status).toBe(1)
-    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'replace'])
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual([
+      'pending',
+      'replace'
+    ])
     expect(invokeSaveSendMessage.mock.calls[0][0].message.status).toBe(2)
   })
 
@@ -167,7 +180,10 @@ describe('useChatMessageSender', () => {
     expect(Number(messageList.value[0].messageId)).toBeLessThan(0)
     expect(messageList.value[0].status).toBe(0)
     expect(proxy.Message.error).toHaveBeenCalled()
-    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'status'])
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual([
+      'pending',
+      'status'
+    ])
     expect(request.mock.calls[0][0].returnError).toBe(true)
   })
 
@@ -193,10 +209,7 @@ describe('useChatMessageSender', () => {
 
   it('marks text message as localSyncFailed when server send succeeds but local replace fails', async () => {
     const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
-      invokeResults: [
-        { success: true },
-        { success: false, error: 'replace failed' }
-      ],
+      invokeResults: [{ success: true }, { success: false, error: 'replace failed' }],
       requestResults: [
         {
           data: {
@@ -217,7 +230,10 @@ describe('useChatMessageSender', () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
     await flush()
 
-    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'replace'])
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual([
+      'pending',
+      'replace'
+    ])
     expect(messageList.value).toHaveLength(1)
     expect(messageList.value[0]).toMatchObject({
       messageId: 111,
@@ -253,7 +269,10 @@ describe('useChatMessageSender', () => {
 
     expect(request).not.toHaveBeenCalled()
     expect(invokeSaveSendMessage).toHaveBeenCalledTimes(2)
-    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'status'])
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual([
+      'pending',
+      'status'
+    ])
     expect(messageList.value).toHaveLength(1)
     expect(messageList.value[0].status).toBe(0)
     expect(proxy.Message.error).toHaveBeenCalledWith(
@@ -411,9 +430,7 @@ describe('useChatMessageSender', () => {
 
     expect(messageList.value[0].status).toBe(0)
     expect(proxy.Message.error).toHaveBeenCalledWith('文件上传已取消。')
-    expect(proxy.Message.error).not.toHaveBeenCalledWith(
-      '文件上传失败，请检查网络后重试。'
-    )
+    expect(proxy.Message.error).not.toHaveBeenCalledWith('文件上传失败，请检查网络后重试。')
   })
 
   it('continues media upload after local replace retry succeeds', async () => {
@@ -528,7 +545,10 @@ describe('useChatMessageSender', () => {
     expect(messageList.value[0].uploading).toBe(false)
     expect(messageList.value[0].uploadAcked).toBe(true)
     expect(proxy.Message.error).not.toHaveBeenCalled()
-    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual(['pending', 'replace'])
+    expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual([
+      'pending',
+      'replace'
+    ])
   })
 
   it('updates upload progress while uploading a media message', async () => {
@@ -588,6 +608,26 @@ describe('useChatMessageSender', () => {
     expect(request).not.toHaveBeenCalled()
     expect(messageList.value).toHaveLength(0)
     expect(proxy.Message.warning).toHaveBeenCalled()
+  })
+
+  it('releases a pre-registered upload source when validation rejects the file', async () => {
+    const { sender } = createHarness()
+
+    sender.onSendImageMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: {
+        name: 'huge.png',
+        size: 21 * 1024 * 1024,
+        type: 'image/png'
+      },
+      uploadSourceId: 'source-huge'
+    })
+    await flush()
+
+    expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledWith({
+      uploadSourceId: 'source-huge'
+    })
   })
 
   it('falls back to legacy upload when chunk init is unavailable', async () => {
