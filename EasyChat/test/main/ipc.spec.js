@@ -45,6 +45,7 @@ vi.mock('../../src/main/wsClient', () => ({
 }))
 
 vi.mock('../../src/main/uploadSourceRegistry', () => ({
+  MAX_CHUNK_SIZE: 4 * 1024 * 1024,
   generateUploadSourceThumbnail: vi.fn(async () => ({ success: true })),
   readUploadSourceChunk: vi.fn(async () => ({ success: true, arrayBuffer: new ArrayBuffer(1) })),
   registerUploadSource: vi.fn(async () => ({ success: true, uploadSourceId: 'source-1' })),
@@ -121,6 +122,7 @@ vi.mock('path', () => ({
   default: {
     extname: vi.fn((n) => '.' + String(n).split('.').pop()),
     basename: vi.fn((n) => n),
+    isAbsolute: vi.fn((p) => /^([A-Za-z]:[\\/]|\/)/.test(String(p))),
     join: vi.fn((...args) => args.join('/'))
   }
 }))
@@ -181,8 +183,17 @@ describe('IPC: SetLocalStore', () => {
     const handler = mockIpcOn['SetLocalStore']
     expect(handler).toBeDefined()
 
-    handler(ipcEvent(), { key: 'k', value: 'v' })
+    handler(ipcEvent(), { key: 'devDomain', value: 'http://localhost:5050' })
     // fire-and-forget, no callback sent
+  })
+
+  it('rejects unknown keys without writing to the store', async () => {
+    const store = (await import('../../src/main/store')).default
+    ipcExports.onSetLocalStore()
+
+    mockIpcOn.SetLocalStore(ipcEvent(), { key: 'token', value: 'stolen' })
+
+    expect(store.setData).not.toHaveBeenCalled()
   })
 })
 
@@ -192,7 +203,7 @@ describe('IPC: GetLocalStore', () => {
     const handler = mockIpcOn['GetLocalStore']
     expect(handler).toBeDefined()
 
-    handler(ipcEvent(), 'myKey')
+    handler(ipcEvent(), 'devDomain')
     expect(mockSender.send).toHaveBeenCalledWith('getLocalStoreCallback', 'test-value')
   })
 
@@ -205,7 +216,7 @@ describe('IPC: GetLocalStore', () => {
     ipcExports.onGetLocalStore()
     const handler = mockIpcOn['GetLocalStore']
 
-    handler(ipcEvent(), 'badKey')
+    handler(ipcEvent(), 'devDomain')
     expect(mockSender.send).toHaveBeenCalledWith('getLocalStoreCallback', undefined)
   })
 })
@@ -514,12 +525,35 @@ describe('IPC: saveSendMessage', () => {
     expect(result.status).toBe(1)
   })
 
-  it('defaults mode to replace', async () => {
+  it('rejects implicit replace without a local message id', async () => {
     const result = await handler(
       {},
       { message: { messageId: 400, sessionId: 's1' }, chatSession: { contactId: 'c1' } }
     )
-    expect(result.success).toBe(true)
+    expect(result).toMatchObject({
+      success: false,
+      kind: 'validation_error',
+      recoveryQueued: false
+    })
+  })
+
+  it('rejects malformed text messages before calling the database', async () => {
+    const { savePendingMessage } = await import('../../src/main/db/ChatMessageModel')
+    const result = await handler(
+      {},
+      {
+        mode: 'pending',
+        message: {
+          messageId: -1,
+          sessionId: 's1',
+          messageType: 2,
+          messageContent: 'x'.repeat(501)
+        }
+      }
+    )
+
+    expect(result).toMatchObject({ success: false, kind: 'validation_error' })
+    expect(savePendingMessage).not.toHaveBeenCalled()
   })
 
   it('queues a durable recovery payload when local replace throws', async () => {
@@ -555,6 +589,19 @@ describe('IPC: upload sources', () => {
     expect(mockIpcHandle['releaseUploadSource']).toBeDefined()
     expect(mockIpcHandle['generateUploadSourceThumbnail']).toBeDefined()
   })
+
+  it('rejects missing chunk ranges before reading the upload source', async () => {
+    const { readUploadSourceChunk } = await import('../../src/main/uploadSourceRegistry')
+    ipcExports.onUploadSources()
+
+    const result = await mockIpcHandle.readUploadSourceChunk(
+      ipcEvent(),
+      { uploadSourceId: 'source-1', end: 1024 }
+    )
+
+    expect(result).toMatchObject({ success: false, kind: 'validation_error' })
+    expect(readUploadSourceChunk).not.toHaveBeenCalled()
+  })
 })
 
 // ═══════════════════════════════════════════════
@@ -567,7 +614,7 @@ describe('IPC: downloadChatFile', () => {
 
     const result = await handler(ipcEvent(), {})
     expect(result.success).toBe(false)
-    expect(result.error).toContain('url')
+    expect(result.kind).toBe('validation_error')
   })
 
   it('rejects duplicate download', async () => {
@@ -589,6 +636,50 @@ describe('IPC: downloadChatFile', () => {
     expect(result.success).toBe(false)
     expect(result.error).toContain('already downloading')
   }, 10000)
+
+  it('rejects unsafe redirects and clears the active download state', async () => {
+    const http = (await import('http')).default
+    const createRequest = () => ({ on: vi.fn(), destroy: vi.fn(), abort: vi.fn() })
+    http.get
+      .mockImplementationOnce((_url, callback) => {
+        const request = createRequest()
+        setImmediate(() =>
+          callback({
+            statusCode: 302,
+            headers: { location: 'file:///etc/passwd' },
+            resume: vi.fn()
+          })
+        )
+        return request
+      })
+      .mockImplementationOnce((_url, callback) => {
+        const request = createRequest()
+        setImmediate(() =>
+          callback({
+            statusCode: 500,
+            headers: {},
+            resume: vi.fn()
+          })
+        )
+        return request
+      })
+
+    ipcExports.onChatFileDownload()
+    const handler = mockIpcHandle.downloadChatFile
+    const payload = {
+      url: 'http://x.com/file',
+      messageId: 'redirect-1',
+      fileName: 'file.bin'
+    }
+
+    const first = await handler(ipcEvent(), payload)
+    const second = await handler(ipcEvent(), payload)
+
+    expect(first.success).toBe(false)
+    expect(first.error).toContain('redirect rejected')
+    expect(second.error).toContain('HTTP 500')
+    expect(http.get).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('IPC: cancelDownloadChatFile', () => {
@@ -661,6 +752,19 @@ describe('IPC: local file folder', () => {
 // registerSafeIpcOn: error path coverage
 // ═══════════════════════════════════════════════
 describe('registerSafeIpcOn error wrapping', () => {
+  it('returns validation_error without calling the database', async () => {
+    const { topChatSession } = await import('../../src/main/db/ChatSessionUserModel')
+    ipcExports.onTopChatSession()
+
+    await mockIpcOn.topChatSession(ipcEvent(), { contactId: '', topType: 9 })
+
+    expect(topChatSession).not.toHaveBeenCalled()
+    expect(mockSender.send).toHaveBeenCalledWith(
+      'topChatSessionCallback',
+      expect.objectContaining({ success: false, kind: 'validation_error' })
+    )
+  })
+
   it('sends error when markSessionRead DB call fails', async () => {
     const { markSessionRead } = await import('../../src/main/db/ChatSessionUserModel')
     markSessionRead.mockRejectedValueOnce(new Error('DB timeout'))

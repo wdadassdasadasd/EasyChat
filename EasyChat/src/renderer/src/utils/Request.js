@@ -10,6 +10,36 @@ let loading = null
 let loadingCount = 0
 // A-4: 请求去重缓存 — 相同 url+params 的并发请求复用 pending Promise，避免重复请求
 const inFlightCache = new Map()
+
+export const stableStringify = (value) => {
+  const seen = new WeakSet()
+  const normalize = (current) => {
+    if (current === null || typeof current !== 'object') {
+      return current
+    }
+    if (seen.has(current)) {
+      throw new TypeError('Cannot serialize circular request parameters')
+    }
+    seen.add(current)
+    try {
+      if (Array.isArray(current)) {
+        return current.map((item) => normalize(item))
+      }
+      if (typeof current.toJSON === 'function') {
+        return normalize(current.toJSON())
+      }
+      return Object.keys(current)
+        .sort()
+        .reduce((result, key) => {
+          result[key] = normalize(current[key])
+          return result
+        }, {})
+    } finally {
+      seen.delete(current)
+    }
+  }
+  return JSON.stringify(normalize(value))
+}
 // H-7: loading 状态安全操作，确保 close 异常不破坏计数
 const showLoadingIfNeeded = () => {
   if (!loading) {
@@ -230,8 +260,10 @@ const request = (config) => {
     token = ''
   }
   let headers = {
-    'X-Requested-With': 'XMLHttpRequest',
-    token: token
+    'X-Requested-With': 'XMLHttpRequest'
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
   }
   if (!shouldUseFormData) {
     headers['Content-Type'] = contentType
@@ -241,7 +273,7 @@ const request = (config) => {
   let dedupKey = null
   if (!shouldUseFormData && !signal) {
     try {
-      dedupKey = `${url}::${JSON.stringify(params || {})}`
+      dedupKey = `${url}::${stableStringify(params || {})}`
     } catch (e) {
       // 参数中包含不可序列化的值（循环引用等），跳过缓存
       dedupKey = null

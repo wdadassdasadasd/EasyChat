@@ -159,4 +159,95 @@ describe('Request returnError', () => {
       url: '/chat/sendMessage'
     })
   })
+
+  it('sends only the standard bearer authorization header', async () => {
+    localStorage.setItem('userInfo', JSON.stringify({ token: 'token-1' }))
+    postMock.mockResolvedValueOnce({ data: { code: 200 } })
+    const request = (await import('@/utils/Request')).default
+
+    await request({
+      url: '/chat/sendMessage',
+      params: { messageContent: 'hello' },
+      showLoading: false
+    })
+
+    const requestConfig = postMock.mock.calls[0][2]
+    expect(requestConfig.headers.Authorization).toBe('Bearer token-1')
+    expect(requestConfig.headers).not.toHaveProperty('token')
+  })
+
+  it('does not send authorization to account endpoints', async () => {
+    localStorage.setItem('userInfo', JSON.stringify({ token: 'stale-token' }))
+    postMock.mockResolvedValueOnce({ data: { code: 200 } })
+    const request = (await import('@/utils/Request')).default
+
+    await request({
+      url: '/account/login',
+      params: { email: 'u1@example.com' },
+      showLoading: false
+    })
+
+    expect(postMock.mock.calls[0][2].headers).not.toHaveProperty('Authorization')
+  })
+
+  it('deduplicates equivalent nested parameters regardless of object key order', async () => {
+    let resolvePost
+    postMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePost = resolve
+        })
+    )
+    const request = (await import('@/utils/Request')).default
+
+    const first = request({
+      url: '/contact/search',
+      params: { page: 1, filter: { status: 1, keyword: 'alice' } },
+      showLoading: false
+    })
+    const second = request({
+      url: '/contact/search',
+      params: { filter: { keyword: 'alice', status: 1 }, page: 1 },
+      showLoading: false
+    })
+
+    expect(second).toBe(first)
+    expect(postMock).toHaveBeenCalledTimes(1)
+    resolvePost({ data: { code: 200 } })
+    await first
+  })
+
+  it('keeps array order significant for request deduplication', async () => {
+    postMock.mockResolvedValue({ data: { code: 200 } })
+    const request = (await import('@/utils/Request')).default
+
+    await Promise.all([
+      request({
+        url: '/group/saveGroup',
+        params: { memberIds: ['u1', 'u2'] },
+        showLoading: false
+      }),
+      request({
+        url: '/group/saveGroup',
+        params: { memberIds: ['u2', 'u1'] },
+        showLoading: false
+      })
+    ])
+
+    expect(postMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips deduplication for circular parameters', async () => {
+    postMock.mockResolvedValue({ data: { code: 200 } })
+    const request = (await import('@/utils/Request')).default
+    const params = { keyword: 'loop' }
+    params.self = params
+
+    await Promise.all([
+      request({ url: '/contact/search', params, showLoading: false }),
+      request({ url: '/contact/search', params, showLoading: false })
+    ])
+
+    expect(postMock).toHaveBeenCalledTimes(2)
+  })
 })

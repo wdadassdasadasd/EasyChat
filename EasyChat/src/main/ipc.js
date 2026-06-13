@@ -28,11 +28,34 @@ import {
   updateLocalMessageStatus
 } from './db/ChatMessageModel.js'
 import {
+  MAX_CHUNK_SIZE,
   generateUploadSourceThumbnail,
   readUploadSourceChunk,
   registerUploadSource,
   releaseUploadSource
 } from './uploadSourceRegistry.js'
+import {
+  validateClearChatMessage,
+  validateContactId,
+  validateDownload,
+  validateDownloadId,
+  validateFilePathPayload,
+  validateHttpUrl,
+  validateLoadChatMessage,
+  validateLoginOrRegister,
+  validateMarkSessionRead,
+  validateOpenChat,
+  validateSaveSendMessage,
+  validateSearchChatMessage,
+  validateStoreRead,
+  validateStoreWrite,
+  validateTempVideo,
+  validateTopChatSession,
+  validateUploadSourceChunk,
+  validateUploadSourceId,
+  validateUploadSourceRegistration,
+  validateWindowOperation
+} from './ipcValidation.js'
 
 const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
 const MAX_LOCAL_REPLACE_RECOVERY_ITEMS = 100
@@ -106,6 +129,12 @@ const recoverLocalReplaceQueue = async () => {
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister = (mainWindow, callback) => {
   ipcMain.on('loginOrRegister', (e, isLogin) => {
+    try {
+      validateLoginOrRegister(isLogin)
+    } catch (error) {
+      console.error('IPC loginOrRegister rejected', error)
+      return
+    }
     callback(isLogin)
   })
 }
@@ -113,6 +142,12 @@ const onLoginOnRegister = (mainWindow, callback) => {
 //初始化用户数据，并启动ws
 const onLoginSuccess = (mainWindow, callback) => {
   ipcMain.on('openChat', async (e, config) => {
+    try {
+      validateOpenChat(config)
+    } catch (error) {
+      console.error('IPC openChat rejected', error)
+      return
+    }
     store.initUserId(config.userId)
     store.setUserData('token', config.token)
     await addUserSetting(config.userId, config.email)
@@ -135,6 +170,12 @@ const onLoginSuccess = (mainWindow, callback) => {
 
 const winTitleOp = (callback) => {
   ipcMain.on('winTitleOp', (e, data) => {
+    try {
+      validateWindowOperation(data)
+    } catch (error) {
+      console.error('IPC winTitleOp rejected', error)
+      return
+    }
     callback(e, data)
   })
 }
@@ -180,24 +221,52 @@ const registerSafeIpcOn = (channel, callbackChannel, handler) => {
       await handler(e, data)
     } catch (error) {
       console.error(`IPC ${channel} failed`, error)
-      sendIpcError(e.sender, callbackChannel, error, data && typeof data === 'object' ? data : {})
+      const context =
+        error?.kind === 'validation_error'
+          ? {}
+          : data && typeof data === 'object'
+            ? data
+            : {}
+      sendIpcError(e.sender, callbackChannel, error, context)
+    }
+  })
+}
+
+const registerSafeIpcHandle = (channel, handler) => {
+  ipcMain.handle(channel, async (e, data) => {
+    try {
+      return await handler(e, data)
+    } catch (error) {
+      console.error(`IPC ${channel} failed`, error)
+      return buildIpcErrorPayload(channel, error)
     }
   })
 }
 
 //存数据到主进程store
 const onSetLocalStore = () => {
-  ipcMain.on('SetLocalStore', (e, { key, value }) => {
+  ipcMain.on('SetLocalStore', (e, payload) => {
+    try {
+      validateStoreWrite(payload)
+    } catch (error) {
+      console.error('IPC SetLocalStore rejected', error)
+      return
+    }
+    const { key, value } = payload
     store.setData(key, value)
   })
 }
 
 const onGetLocalStore = () => {
   ipcMain.on('GetLocalStore', (e, payload) => {
-    const key = typeof payload === 'string' ? payload : payload?.key
-    if (!key) {
+    try {
+      validateStoreRead(payload)
+    } catch (error) {
+      console.error('IPC GetLocalStore rejected', error)
+      e.sender.send('getLocalStoreCallback', undefined)
       return
     }
+    const key = typeof payload === 'string' ? payload : payload.key
     try {
       const value = store.getData(key)
       e.sender.send('getLocalStoreCallback', value)
@@ -227,6 +296,7 @@ const onLoadSessionData = () => {
 //分页查询聊天消息
 const onDelChatSessionSafe = () => {
   registerSafeIpcOn('delChatSession', 'delChatSessionCallback', async (e, contactId) => {
+    validateContactId(contactId)
     await delChatSession(contactId)
     e.sender.send('delChatSessionCallback', {
       contactId,
@@ -239,7 +309,9 @@ const onTopChatSessionSafe = () => {
   registerSafeIpcOn(
     'topChatSession',
     'topChatSessionCallback',
-    async (e, { contactId, topType }) => {
+    async (e, data) => {
+      validateTopChatSession(data)
+      const { contactId, topType } = data
       await topChatSession(contactId, topType)
       e.sender.send('topChatSessionCallback', {
         contactId,
@@ -252,6 +324,7 @@ const onTopChatSessionSafe = () => {
 
 const onLoadChatMessage = () => {
   registerSafeIpcOn('loadChatMessage', 'loadChatMessageCallback', async (e, data) => {
+    validateLoadChatMessage(data)
     // P0-3: 包裹 DB 查询以捕获错误，显式传播到 renderer
     let result
     try {
@@ -285,6 +358,7 @@ const onLoadChatMessage = () => {
 
 const onMarkSessionRead = () => {
   registerSafeIpcOn('markSessionRead', 'markSessionReadCallback', async (e, data = {}) => {
+    validateMarkSessionRead(data)
     const contactId = typeof data === 'object' ? data.contactId : data
     const operationId = typeof data === 'object' ? data.operationId : undefined
     // 已读会同步清零本地会话未读数，renderer 收到新会话列表后红点也会随之刷新。
@@ -314,16 +388,20 @@ const onResetToLogin = (_mainWindow, callback) => {
 }
 
 const onUploadSources = () => {
-  ipcMain.handle('registerUploadSource', async (_e, data = {}) => {
+  registerSafeIpcHandle('registerUploadSource', async (_e, data = {}) => {
+    validateUploadSourceRegistration(data)
     return await registerUploadSource(data)
   })
-  ipcMain.handle('readUploadSourceChunk', async (_e, data = {}) => {
+  registerSafeIpcHandle('readUploadSourceChunk', async (_e, data = {}) => {
+    validateUploadSourceChunk(data, MAX_CHUNK_SIZE)
     return await readUploadSourceChunk(data)
   })
-  ipcMain.handle('releaseUploadSource', async (_e, data = {}) => {
+  registerSafeIpcHandle('releaseUploadSource', async (_e, data = {}) => {
+    validateUploadSourceId(data)
     return releaseUploadSource(data)
   })
-  ipcMain.handle('generateUploadSourceThumbnail', async (_e, data = {}) => {
+  registerSafeIpcHandle('generateUploadSourceThumbnail', async (_e, data = {}) => {
+    validateUploadSourceId(data)
     return await generateUploadSourceThumbnail(data)
   })
 }
@@ -365,6 +443,7 @@ const saveSendMessageToLocal = async ({
 const onSaveSendMessage = () => {
   ipcMain.handle('saveSendMessage', async (_e, payload) => {
     try {
+      validateSaveSendMessage(payload)
       const result = await saveSendMessageToLocal(payload)
       if (result?.success && payload?.mode === 'replace') {
         removeLocalReplaceRecovery(payload)
@@ -372,10 +451,12 @@ const onSaveSendMessage = () => {
       return result
     } catch (error) {
       let recoveryQueued = false
-      try {
-        recoveryQueued = queueLocalReplaceRecovery(payload)
-      } catch (recoveryError) {
-        console.error('Failed to queue local message replacement recovery', recoveryError)
+      if (error?.kind !== 'validation_error') {
+        try {
+          recoveryQueued = queueLocalReplaceRecovery(payload)
+        } catch (recoveryError) {
+          console.error('Failed to queue local message replacement recovery', recoveryError)
+        }
       }
       return buildIpcErrorPayload('saveSendMessage', error, { recoveryQueued })
     }
@@ -386,7 +467,9 @@ const onClearChatMessage = () => {
   registerSafeIpcOn(
     'clearChatMessage',
     'clearChatMessageCallback',
-    async (e, { sessionId } = {}) => {
+    async (e, data = {}) => {
+      validateClearChatMessage(data)
+      const { sessionId } = data
       try {
         // Clear cursor, message rows, and session summary must commit together.
         const session = await clearMessageAndSessionSummaryBySessionId(sessionId)
@@ -407,6 +490,7 @@ const onClearChatMessage = () => {
 
 const onSearchChatMessage = () => {
   registerSafeIpcOn('searchChatMessage', 'searchChatMessageCallback', async (e, data = {}) => {
+    validateSearchChatMessage(data)
     // 搜索只查当前 session 的本地消息，并把 searchSeq 带回 renderer 丢弃过期结果。
     let dataList
     try {
@@ -463,23 +547,12 @@ const onLocalFileFolder = () => {
 }
 
 const onOpenTempVideoFile = () => {
-  ipcMain.handle('openTempVideoFile', async (e, data = {}) => {
+  registerSafeIpcHandle('openTempVideoFile', async (e, data = {}) => {
     // 没有本地原文件时，renderer 会把已下载视频 blob 交给主进程写入临时文件再打开。
     const { fileName = 'video.mp4', buffer } = data
     // M-4: 限制临时视频文件大小，防止内存耗尽
     const MAX_TEMP_VIDEO_SIZE = 256 * 1024 * 1024
-    if (buffer && Buffer.byteLength(buffer) > MAX_TEMP_VIDEO_SIZE) {
-      return {
-        success: false,
-        error: '视频文件过大，请直接下载后打开'
-      }
-    }
-    if (!buffer) {
-      return {
-        success: false,
-        error: '视频数据为空'
-      }
-    }
+    validateTempVideo(data, MAX_TEMP_VIDEO_SIZE)
 
     const safeFileName = String(fileName).replace(/[\\/:*?"<>|]/g, '_')
     const tempFolder = path.join(app.getPath('temp'), 'EasyChat', 'video-preview')
@@ -495,9 +568,10 @@ const onOpenTempVideoFile = () => {
     }
   })
 
-  ipcMain.handle('readLocalVideoFile', async (e, data = {}) => {
+  registerSafeIpcHandle('readLocalVideoFile', async (e, data = {}) => {
     // 自己刚发送的视频可从本地路径读取，用于服务端文件尚未可下载时的预览回退。
     const { filePath } = data
+    validateFilePathPayload(data)
     if (!filePath || !fs.existsSync(filePath)) {
       return {
         success: false,
@@ -518,9 +592,10 @@ const onOpenTempVideoFile = () => {
     }
   })
 
-  ipcMain.handle('openLocalVideoFile', async (e, data = {}) => {
+  registerSafeIpcHandle('openLocalVideoFile', async (e, data = {}) => {
     // 系统播放器入口优先打开本地原文件，避免重复下载大视频。
     const { filePath } = data
+    validateFilePathPayload(data)
     if (!filePath || !fs.existsSync(filePath)) {
       return {
         success: false,
@@ -560,18 +635,29 @@ const MAX_DOWNLOAD_REDIRECTS = 10
 
 const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redirectDepth = 0 }) => {
   return new Promise((resolve) => {
-    // H-6: 使用立即调用的 async IIFE 替代 async executor 反模式
-    // 若 IIFE 同步抛出，reject 仍被安全捕获
-    ;(async () => {
-      if (_redirectDepth >= MAX_DOWNLOAD_REDIRECTS) {
-        resolve({ success: false, error: 'Download failed: too many redirects' })
+    let settled = false
+    const finish = (result) => {
+      if (settled) {
         return
       }
+      settled = true
+      activeDownloads.delete(String(messageId))
+      resolve(result)
+    }
+
+    // H-6: 使用立即调用的 async IIFE 替代 async executor 反模式
+    // 初始化、URL 解析或网络创建失败时统一清理活动下载状态。
+    ;(async () => {
+      if (_redirectDepth >= MAX_DOWNLOAD_REDIRECTS) {
+        finish({ success: false, error: 'Download failed: too many redirects' })
+        return
+      }
+      const normalizedUrl = validateHttpUrl(url)
       const folderInfo = await getLocalFileFolder()
       const targetPath = resolveConflictFilePath(folderInfo.localFileFolder, fileName)
       const tempPath = `${targetPath}.download`
-      const transport = String(url).startsWith('https:') ? https : http
-      const request = transport.get(url, (response) => {
+      const transport = normalizedUrl.startsWith('https:') ? https : http
+      const request = transport.get(normalizedUrl, (response) => {
         if (
           response.statusCode &&
           response.statusCode >= 300 &&
@@ -579,23 +665,34 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
           response.headers.location
         ) {
           response.resume()
-          resolve(
+          try {
+            const redirectUrl = new URL(response.headers.location, normalizedUrl).toString()
+            validateHttpUrl(redirectUrl)
             downloadToFile({
-              e,
-              fileName,
-              fileSize,
-              maxSize,
-              messageId,
-              url: response.headers.location,
-              _redirectDepth: _redirectDepth + 1
+                e,
+                fileName,
+                fileSize,
+                maxSize,
+                messageId,
+                url: redirectUrl,
+                _redirectDepth: _redirectDepth + 1
+              })
+              .then(finish)
+              .catch((error) => {
+                finish({ success: false, error: getErrorMessage(error) })
+              })
+          } catch (error) {
+            finish({
+              success: false,
+              error: `Download redirect rejected: ${getErrorMessage(error)}`
             })
-          )
+          }
           return
         }
 
         if (response.statusCode !== 200 && response.statusCode !== 206) {
           response.resume()
-          resolve({ success: false, error: `Download failed: HTTP ${response.statusCode}` })
+          finish({ success: false, error: `Download failed: HTTP ${response.statusCode}` })
           return
         }
 
@@ -604,27 +701,21 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
         const limit = Number(maxSize || 0)
         if ((limit && contentLength > limit) || (limit && expectedSize > limit)) {
           response.resume()
-          resolve({ success: false, error: 'File is too large to download safely.' })
+          finish({ success: false, error: 'File is too large to download safely.' })
           return
         }
 
         const output = fs.createWriteStream(tempPath)
         let downloaded = 0
-        let settled = false
         let downloadTimeout = setTimeout(() => {
           request.destroy(new Error('Download timed out: no data received for 30 seconds'))
         }, 30000)
-        const finish = (result) => {
-          if (settled) {
-            return
-          }
-          settled = true
+        const finishDownload = (result) => {
           if (downloadTimeout) {
             clearTimeout(downloadTimeout)
             downloadTimeout = null
           }
-          activeDownloads.delete(String(messageId))
-          resolve(result)
+          finish(result)
         }
 
         response.on('data', (chunk) => {
@@ -656,9 +747,9 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
             try {
               fs.renameSync(tempPath, targetPath)
               e.sender.send('downloadChatFileProgress', { messageId, progress: 100 })
-              finish({ success: true, filePath: targetPath, progress: 100 })
+              finishDownload({ success: true, filePath: targetPath, progress: 100 })
             } catch (error) {
-              finish({ success: false, error: getErrorMessage(error) })
+              finishDownload({ success: false, error: getErrorMessage(error) })
             }
           })
         })
@@ -668,7 +759,7 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
           } catch (e) {
             // Best-effort cleanup after stream failure.
           }
-          finish({ success: false, error: getErrorMessage(error) })
+          finishDownload({ success: false, error: getErrorMessage(error) })
         })
         // M-2: 处理响应流错误，清理临时文件
         response.on('error', (error) => {
@@ -679,7 +770,7 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
           } catch (e) {
             // Best-effort cleanup after response failure.
           }
-          finish({ success: false, error: getErrorMessage(error) })
+          finishDownload({ success: false, error: getErrorMessage(error) })
         })
       })
 
@@ -692,22 +783,18 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
         } catch (e) {
           // Best-effort cleanup after request failure.
         }
-        activeDownloads.delete(String(messageId))
-        resolve({ success: false, error: getErrorMessage(error) })
+        finish({ success: false, error: getErrorMessage(error) })
       })
-    })()
+    })().catch((error) => {
+      finish({ success: false, error: getErrorMessage(error) })
+    })
   })
 }
 
 const onChatFileDownload = () => {
-  ipcMain.handle('downloadChatFile', async (e, data = {}) => {
+  registerSafeIpcHandle('downloadChatFile', async (e, data = {}) => {
+    validateDownload(data)
     const { fileName, fileSize, maxSize, messageId, url } = data
-    if (!url || !messageId) {
-      return {
-        success: false,
-        error: 'Download url or messageId is empty'
-      }
-    }
     if (activeDownloads.has(String(messageId))) {
       return {
         success: false,
@@ -717,7 +804,8 @@ const onChatFileDownload = () => {
     return await downloadToFile({ e, fileName, fileSize, maxSize, messageId, url })
   })
 
-  ipcMain.handle('cancelDownloadChatFile', async (_e, data = {}) => {
+  registerSafeIpcHandle('cancelDownloadChatFile', async (_e, data = {}) => {
+    validateDownloadId(data)
     const request = activeDownloads.get(String(data.messageId || ''))
     if (request) {
       request.destroy(new Error('Download canceled'))
@@ -745,7 +833,8 @@ const onChatFileDownload = () => {
     return { success: true }
   })
 
-  ipcMain.handle('openDownloadedFile', async (_e, data = {}) => {
+  registerSafeIpcHandle('openDownloadedFile', async (_e, data = {}) => {
+    validateFilePathPayload(data)
     if (!data.filePath || !fs.existsSync(data.filePath)) {
       return {
         success: false,
@@ -759,7 +848,8 @@ const onChatFileDownload = () => {
     }
   })
 
-  ipcMain.handle('showDownloadedFileInFolder', async (_e, data = {}) => {
+  registerSafeIpcHandle('showDownloadedFileInFolder', async (_e, data = {}) => {
+    validateFilePathPayload(data)
     if (!data.filePath || !fs.existsSync(data.filePath)) {
       return {
         success: false,

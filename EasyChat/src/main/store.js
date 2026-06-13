@@ -1,7 +1,17 @@
 import { createRequire } from 'module'
+import {
+  STORE_OBFUSCATION_KEY,
+  migratePlaintextStore
+} from './storeMigration.js'
+
 const require = createRequire(import.meta.url)
 const Store = require('electron-store')
-const store = new Store()
+// electron-store documents encryptionKey as obfuscation, not secure credential storage.
+// The stable application key keeps existing installations readable across upgrades.
+const store = new Store({
+  encryptionKey: STORE_OBFUSCATION_KEY
+})
+migratePlaintextStore(store)
 let userId = null
 const initUserId = (_userId) => {
   userId = _userId

@@ -24,6 +24,7 @@ import {
 } from './ipc.js'
 import { dbReady } from './db/ADB.js'
 import { initializeLogger } from './logger.js'
+import { restoreOrCreateMainWindow } from './windowLifecycle.js'
 
 initializeLogger()
 
@@ -241,9 +242,7 @@ app.whenReady().then(async () => {
   createWindow()
 
   app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    restoreOrCreateMainWindow({ BrowserWindow, createWindow })
   })
 })
 

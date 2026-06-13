@@ -13,7 +13,7 @@
 | 地址 | `http://localhost:5050` |
 | 前缀 | `/api` |
 | 数据格式 | `application/x-www-form-urlencoded` (文件上传: `multipart/form-data`) |
-| 认证方式 | HTTP Header `token` |
+| 认证方式 | HTTP Header `Authorization: Bearer <token>` |
 | WebSocket | `ws://localhost:5051/ws?token=<token>` |
 
 ## 通用响应格式
@@ -152,7 +152,7 @@
 
 **认证**: 需要登录
 
-**参数**: 无（从请求 Header `token` 中解析）
+**参数**: 无（从请求 Header `Authorization: Bearer <token>` 中解析）
 
 **响应**: `ResponseVO<UserInfoVO>` —— 字段同登录返回
 
@@ -1087,8 +1087,8 @@ ws://host:5051/ws?token=<login_token>
 ┌─────────────┐     POST /login      ┌─────────────┐
 │  前端       │ ────────────────────→ │  后端       │
 │  Request.js │                       │  Account    │
-│  Header:    │ ←──── token ───────── │  Controller │
-│  token:xxx  │                       └──────┬──────┘
+│  Header:    │ ←── Bearer token ───── │  Controller │
+│Authorization│                       └──────┬──────┘
 └─────────────┘                              │
                                     ┌────────▼──────┐
                                     │  Redis        │
@@ -1100,7 +1100,7 @@ ws://host:5051/ws?token=<login_token>
 ```
 
 1. 登录成功 → 生成 UUID token → 存入 Redis (TTL 2 天) → 返回给客户端
-2. 每次 HTTP 请求 → 从 Header `token` 读取 → 查 Redis 获取用户信息 → 放入请求上下文
+2. 每次 HTTP 请求 → 从 Header `Authorization: Bearer <token>` 读取 → 查 Redis 获取用户信息 → 放入请求上下文
 3. WebSocket 连接 → 从 URL `?token=xxx` 读取 → 查 Redis 验证 → 建立连接
 4. 退出/强制下线 → 清除 Redis 中 token → 断开 WebSocket
 

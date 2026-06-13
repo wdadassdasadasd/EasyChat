@@ -1,5 +1,6 @@
 import { toRaw } from 'vue'
 
+import { CHAT_CONSTANTS } from '@/utils/ChatConstants'
 import { validateFileSize } from '@/utils/FileLimits'
 import { cancelMediaUpload, uploadMediaFile } from './mediaUploadTransport'
 
@@ -24,6 +25,7 @@ export const useChatMessageSender = ({
 }) => {
   // 串行化发送任务，保证本地消息顺序和服务端回包顺序对齐。
   let sendTaskQueue = Promise.resolve()
+  let queuedSendTaskCount = 0
 
   const maxUploadConcurrency = 3
   let localMessageSeq = -Date.now()
@@ -189,7 +191,14 @@ export const useChatMessageSender = ({
     return saveResult
   }
 
-  const enqueueSendTask = (task) => {
+  const enqueueSendTask = (task, { onRejected } = {}) => {
+    if (queuedSendTaskCount >= CHAT_CONSTANTS.MAX_SEND_TASK_QUEUE) {
+      onRejected?.()
+      proxy.Message.warning('发送任务过多，请等待当前消息处理完成后再试。')
+      return false
+    }
+
+    queuedSendTaskCount += 1
     sendTaskQueue = sendTaskQueue
       .catch((err) => {
         console.error('send queue: previous task failed, continuing', err)
@@ -197,6 +206,9 @@ export const useChatMessageSender = ({
       .then(task)
       .catch((error) => {
         console.error('send message failed', error)
+      })
+      .finally(() => {
+        queuedSendTaskCount = Math.max(0, queuedSendTaskCount - 1)
       })
 
     return sendTaskQueue
@@ -398,7 +410,14 @@ export const useChatMessageSender = ({
     { contactId, contactType, messageContent },
     retryMessage = null
   ) => {
-    if (!messageContent) {
+    if (typeof messageContent !== 'string' || !messageContent.trim()) {
+      proxy.Message.warning('不能发送空消息。')
+      return
+    }
+    if (messageContent.length > CHAT_CONSTANTS.MAX_MESSAGE_LENGTH) {
+      proxy.Message.warning(
+        `消息内容不能超过 ${CHAT_CONSTANTS.MAX_MESSAGE_LENGTH} 个字符。`
+      )
       return
     }
 
@@ -728,19 +747,34 @@ export const useChatMessageSender = ({
 
   const onSendChatMessage = (payload) => {
     // 文本消息也进入发送队列，避免连续发送时展示顺序错乱。
-    enqueueSendTask(() => sendChatMessage(payload))
+    return enqueueSendTask(() => sendChatMessage(payload))
+  }
+
+  const releaseRejectedMediaSource = (payload = {}) => {
+    if (!payload.uploadSourceId) {
+      return
+    }
+    window.api
+      .invokeReleaseUploadSource({ uploadSourceId: payload.uploadSourceId })
+      .catch((error) => console.error('release rejected upload source failed', error))
   }
 
   const onSendImageMessage = (payload) => {
-    enqueueSendTask(() => sendImageMessage(payload))
+    return enqueueSendTask(() => sendImageMessage(payload), {
+      onRejected: () => releaseRejectedMediaSource(payload)
+    })
   }
 
   const onSendFileMessage = (payload) => {
-    enqueueSendTask(() => sendFileMessage(payload))
+    return enqueueSendTask(() => sendFileMessage(payload), {
+      onRejected: () => releaseRejectedMediaSource(payload)
+    })
   }
 
   const onSendVideoMessage = (payload) => {
-    enqueueSendTask(() => sendVideoMessage(payload))
+    return enqueueSendTask(() => sendVideoMessage(payload), {
+      onRejected: () => releaseRejectedMediaSource(payload)
+    })
   }
 
   const handleFileUploadDone = (message) => {
@@ -803,7 +837,7 @@ export const useChatMessageSender = ({
           })
         return
       }
-      enqueueSendTask(() =>
+      return enqueueSendTask(() =>
         sendMediaMessage(
           {
             contactId: message.contactId,
@@ -815,10 +849,9 @@ export const useChatMessageSender = ({
           message
         )
       )
-      return
     }
 
-    enqueueSendTask(() =>
+    return enqueueSendTask(() =>
       sendChatMessage(
         {
           contactId: message.contactId,

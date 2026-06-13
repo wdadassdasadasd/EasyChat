@@ -12,6 +12,9 @@ export const CHAT_CONSTANTS = {
   // 一次最多选择文件数
   MAX_FILE_SELECT_COUNT: 9,
 
+  // 发送链路最多允许的执行中/待执行任务数
+  MAX_SEND_TASK_QUEUE: 100,
+
   // 文件大小硬限制，单位 byte。后端默认值需保持一致。
   FILE_LIMITS: {
     image: 20 * 1024 * 1024,

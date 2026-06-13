@@ -167,6 +167,112 @@ describe('useChatMessageSender', () => {
     expect(invokeSaveSendMessage.mock.calls[0][0].message.status).toBe(2)
   })
 
+  it('allows a text message at the 500 character limit', async () => {
+    const messageContent = 'x'.repeat(500)
+    const { messageList, request, sender } = createHarness({
+      requestResults: [
+        {
+          data: {
+            messageId: 102,
+            sessionId: 's1',
+            contactId: 'u2',
+            contactType: 0,
+            messageType: 2,
+            messageContent,
+            sendUserId: 'u1',
+            sendTime: 1000
+          }
+        }
+      ]
+    })
+
+    sender.onSendChatMessage({ contactId: 'u2', contactType: 0, messageContent })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+    await flush()
+
+    expect(messageList.value[0].messageContent).toBe(messageContent)
+  })
+
+  it('rejects empty and oversized text before local persistence or HTTP', async () => {
+    const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness()
+
+    await sender.onSendChatMessage({
+      contactId: 'u2',
+      contactType: 0,
+      messageContent: '   '
+    })
+    await sender.onSendChatMessage({
+      contactId: 'u2',
+      contactType: 0,
+      messageContent: 'x'.repeat(501)
+    })
+
+    expect(invokeSaveSendMessage).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
+    expect(messageList.value).toHaveLength(0)
+    expect(proxy.Message.warning).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects an oversized retry without changing persisted state', async () => {
+    const { invokeSaveSendMessage, proxy, request, sender } = createHarness()
+
+    const result = sender.retryFailedMessage({
+      messageId: -1,
+      sessionId: 's1',
+      contactId: 'u2',
+      contactType: 0,
+      messageType: 2,
+      messageContent: 'x'.repeat(501),
+      status: 0
+    })
+    await result
+
+    expect(invokeSaveSendMessage).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
+    expect(proxy.Message.warning).toHaveBeenCalledWith(
+      '消息内容不能超过 500 个字符。'
+    )
+  })
+
+  it('caps the send queue and releases a rejected media source', async () => {
+    let resolveFirstRequest
+    const firstRequest = () =>
+      new Promise((resolve) => {
+        resolveFirstRequest = resolve
+      })
+    const { proxy, sender } = createHarness({
+      requestResults: [firstRequest]
+    })
+
+    let lastQueuedTask
+    for (let index = 0; index < 100; index += 1) {
+      lastQueuedTask = sender.onSendChatMessage({
+        contactId: 'u2',
+        contactType: 0,
+        messageContent: `queued-${index}`
+      })
+    }
+
+    const rejected = sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'rejected.txt', size: 12, path: 'D:/tmp/rejected.txt' },
+      uploadSourceId: 'source-rejected'
+    })
+
+    expect(rejected).toBe(false)
+    expect(proxy.Message.warning).toHaveBeenCalledWith(
+      '发送任务过多，请等待当前消息处理完成后再试。'
+    )
+    expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledWith({
+      uploadSourceId: 'source-rejected'
+    })
+
+    await vi.waitFor(() => expect(resolveFirstRequest).toBeTypeOf('function'))
+    resolveFirstRequest(null)
+    await lastQueuedTask
+  })
+
   it('keeps a failed text message in the list for retry', async () => {
     const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
       requestResults: [null]
