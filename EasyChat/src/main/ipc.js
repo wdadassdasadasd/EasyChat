@@ -3,6 +3,7 @@ import fs from 'fs'
 import http from 'http'
 import https from 'https'
 import path from 'path'
+import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
 import { initWs, closeWs } from './wsClient.js'
 import store from './store.js'
 import {
@@ -56,6 +57,7 @@ import {
   validateUploadSourceRegistration,
   validateWindowOperation
 } from './ipcValidation.js'
+import { getTempVideoFolder } from './tempVideoFiles.js'
 
 const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
 const MAX_LOCAL_REPLACE_RECOVERY_ITEMS = 100
@@ -263,30 +265,33 @@ const onGetLocalStore = () => {
       validateStoreRead(payload)
     } catch (error) {
       console.error('IPC GetLocalStore rejected', error)
-      e.sender.send('getLocalStoreCallback', undefined)
+      e.sender.send(IPC_CALLBACK_CHANNELS.getLocalStore, undefined)
       return
     }
     const key = typeof payload === 'string' ? payload : payload.key
     try {
       const value = store.getData(key)
-      e.sender.send('getLocalStoreCallback', value)
+      e.sender.send(IPC_CALLBACK_CHANNELS.getLocalStore, value)
     } catch (error) {
       console.error('Failed to get local store data', error)
-      e.sender.send('getLocalStoreCallback', undefined)
+      e.sender.send(IPC_CALLBACK_CHANNELS.getLocalStore, undefined)
     }
   })
 }
 
 //查询本地会话列表
 const onLoadSessionData = () => {
-  registerSafeIpcOn('loadSessionData', 'loadSessionDataCallback', async (e) => {
+  registerSafeIpcOn('loadSessionData', IPC_CALLBACK_CHANNELS.loadSessionData, async (e) => {
     // renderer 左侧会话列表只读本地 SQLite，WebSocket/发送链路负责提前把会话写入表。
     try {
       const result = await selectUserSessionList()
-      e.sender.send('loadSessionDataCallback', result)
+      e.sender.send(IPC_CALLBACK_CHANNELS.loadSessionData, result)
     } catch (error) {
       // P0-3: DB 读错误显式传播到 renderer，避免 renderer 将错误对象当作空列表
-      e.sender.send('loadSessionDataCallback', buildIpcErrorPayload('loadSessionDataCallback', error))
+      e.sender.send(
+        IPC_CALLBACK_CHANNELS.loadSessionData,
+        buildIpcErrorPayload(IPC_CALLBACK_CHANNELS.loadSessionData, error)
+      )
     }
   })
 }
@@ -295,10 +300,10 @@ const onLoadSessionData = () => {
 
 //分页查询聊天消息
 const onDelChatSessionSafe = () => {
-  registerSafeIpcOn('delChatSession', 'delChatSessionCallback', async (e, contactId) => {
+  registerSafeIpcOn('delChatSession', IPC_CALLBACK_CHANNELS.deleteChatSession, async (e, contactId) => {
     validateContactId(contactId)
     await delChatSession(contactId)
-    e.sender.send('delChatSessionCallback', {
+    e.sender.send(IPC_CALLBACK_CHANNELS.deleteChatSession, {
       contactId,
       success: true
     })
@@ -308,12 +313,12 @@ const onDelChatSessionSafe = () => {
 const onTopChatSessionSafe = () => {
   registerSafeIpcOn(
     'topChatSession',
-    'topChatSessionCallback',
+    IPC_CALLBACK_CHANNELS.topChatSession,
     async (e, data) => {
       validateTopChatSession(data)
       const { contactId, topType } = data
       await topChatSession(contactId, topType)
-      e.sender.send('topChatSessionCallback', {
+      e.sender.send(IPC_CALLBACK_CHANNELS.topChatSession, {
         contactId,
         topType,
         success: true
@@ -323,7 +328,7 @@ const onTopChatSessionSafe = () => {
 }
 
 const onLoadChatMessage = () => {
-  registerSafeIpcOn('loadChatMessage', 'loadChatMessageCallback', async (e, data) => {
+  registerSafeIpcOn('loadChatMessage', IPC_CALLBACK_CHANNELS.loadChatMessage, async (e, data) => {
     validateLoadChatMessage(data)
     // P0-3: 包裹 DB 查询以捕获错误，显式传播到 renderer
     let result
@@ -340,14 +345,14 @@ const onLoadChatMessage = () => {
           }
         : await selectMessageList(data)
     } catch (error) {
-      e.sender.send('loadChatMessageCallback', {
-        ...buildIpcErrorPayload('loadChatMessageCallback', error),
+      e.sender.send(IPC_CALLBACK_CHANNELS.loadChatMessage, {
+        ...buildIpcErrorPayload(IPC_CALLBACK_CHANNELS.loadChatMessage, error),
         sessionId: data?.sessionId,
         loadSeq: data?.loadSeq
       })
       return
     }
-    e.sender.send('loadChatMessageCallback', {
+    e.sender.send(IPC_CALLBACK_CHANNELS.loadChatMessage, {
       ...result,
       sessionId: data?.sessionId,
       loadMode: data?.loadMode || result?.loadMode,
@@ -357,13 +362,13 @@ const onLoadChatMessage = () => {
 }
 
 const onMarkSessionRead = () => {
-  registerSafeIpcOn('markSessionRead', 'markSessionReadCallback', async (e, data = {}) => {
+  registerSafeIpcOn('markSessionRead', IPC_CALLBACK_CHANNELS.markSessionRead, async (e, data = {}) => {
     validateMarkSessionRead(data)
     const contactId = typeof data === 'object' ? data.contactId : data
     const operationId = typeof data === 'object' ? data.operationId : undefined
     // 已读会同步清零本地会话未读数，renderer 收到新会话列表后红点也会随之刷新。
     await markSessionRead(contactId)
-    e.sender.send('markSessionReadCallback', {
+    e.sender.send(IPC_CALLBACK_CHANNELS.markSessionRead, {
       contactId,
       operationId,
       success: true
@@ -466,22 +471,22 @@ const onSaveSendMessage = () => {
 const onClearChatMessage = () => {
   registerSafeIpcOn(
     'clearChatMessage',
-    'clearChatMessageCallback',
+    IPC_CALLBACK_CHANNELS.clearChatMessage,
     async (e, data = {}) => {
       validateClearChatMessage(data)
       const { sessionId } = data
       try {
         // Clear cursor, message rows, and session summary must commit together.
         const session = await clearMessageAndSessionSummaryBySessionId(sessionId)
-        e.sender.send('clearChatMessageCallback', {
+        e.sender.send(IPC_CALLBACK_CHANNELS.clearChatMessage, {
           success: true,
           sessionId,
           session
         })
       } catch (error) {
         e.sender.send(
-          'clearChatMessageCallback',
-          buildIpcErrorPayload('clearChatMessageCallback', error, { sessionId })
+          IPC_CALLBACK_CHANNELS.clearChatMessage,
+          buildIpcErrorPayload(IPC_CALLBACK_CHANNELS.clearChatMessage, error, { sessionId })
         )
       }
     }
@@ -489,28 +494,32 @@ const onClearChatMessage = () => {
 }
 
 const onSearchChatMessage = () => {
-  registerSafeIpcOn('searchChatMessage', 'searchChatMessageCallback', async (e, data = {}) => {
-    validateSearchChatMessage(data)
-    // 搜索只查当前 session 的本地消息，并把 searchSeq 带回 renderer 丢弃过期结果。
-    let dataList
-    try {
-      dataList = await searchMessageBySessionId(data)
-    } catch (error) {
-      e.sender.send('searchChatMessageCallback', {
-        ...buildIpcErrorPayload('searchChatMessageCallback', error),
+  registerSafeIpcOn(
+    'searchChatMessage',
+    IPC_CALLBACK_CHANNELS.searchChatMessage,
+    async (e, data = {}) => {
+      validateSearchChatMessage(data)
+      // 搜索只查当前 session 的本地消息，并把 searchSeq 带回 renderer 丢弃过期结果。
+      let dataList
+      try {
+        dataList = await searchMessageBySessionId(data)
+      } catch (error) {
+        e.sender.send(IPC_CALLBACK_CHANNELS.searchChatMessage, {
+          ...buildIpcErrorPayload(IPC_CALLBACK_CHANNELS.searchChatMessage, error),
+          sessionId: data.sessionId,
+          keyword: data.keyword,
+          searchSeq: data.searchSeq
+        })
+        return
+      }
+      e.sender.send(IPC_CALLBACK_CHANNELS.searchChatMessage, {
         sessionId: data.sessionId,
         keyword: data.keyword,
-        searchSeq: data.searchSeq
+        searchSeq: data.searchSeq,
+        dataList
       })
-      return
     }
-    e.sender.send('searchChatMessageCallback', {
-      sessionId: data.sessionId,
-      keyword: data.keyword,
-      searchSeq: data.searchSeq,
-      dataList
-    })
-  })
+  )
 }
 
 const onLocalFileFolder = () => {
@@ -555,7 +564,7 @@ const onOpenTempVideoFile = () => {
     validateTempVideo(data, MAX_TEMP_VIDEO_SIZE)
 
     const safeFileName = String(fileName).replace(/[\\/:*?"<>|]/g, '_')
-    const tempFolder = path.join(app.getPath('temp'), 'EasyChat', 'video-preview')
+    const tempFolder = getTempVideoFolder(app.getPath('temp'))
     fs.mkdirSync(tempFolder, { recursive: true })
     const filePath = path.join(tempFolder, `${Date.now()}_${safeFileName}`)
     await fs.promises.writeFile(filePath, Buffer.from(buffer))

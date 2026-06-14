@@ -40,8 +40,9 @@
 </template>
 
 <script setup>
-import{ref,getCurrentInstance, onMounted,onUnmounted,computed} from 'vue';
+import{ref,getCurrentInstance, onMounted,onUnmounted,computed,markRaw} from 'vue';
 import { useRouter } from 'vue-router';
+import { ChatDotRound, MoreFilled, User } from '@element-plus/icons-vue';
 import {useUserInfoStore} from '@/stores/UserInfoStore';
 const userInfoStore = useUserInfoStore();
 const router=useRouter();
@@ -66,21 +67,21 @@ const getLoginInfo = async () => {
 //菜单列表
 const menuList=ref([{
     name:"chat",
-    icon:"ChatDotRound",
+    icon:markRaw(ChatDotRound),
     path:"/chat",
     countKey:'chatKey',
     position:"top"
   },
   {
     name:"contact",
-    icon:"User",
+    icon:markRaw(User),
     path:"/contact",
     countKey:'contactApplyKey',
     position:"top"
   },
   {
     name:"setting",
-    icon:"MoreFilled",
+    icon:markRaw(MoreFilled),
     path:"/setting",
     position:"bottom"
 }])

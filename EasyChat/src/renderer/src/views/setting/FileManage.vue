@@ -57,6 +57,7 @@
 
 <script setup>
 import { getCurrentInstance, ref } from 'vue';
+import { FolderOpened } from '@element-plus/icons-vue';
 
 const { proxy } = getCurrentInstance();
 const loading = ref(false);

@@ -21,6 +21,7 @@
 
 <script setup>
 import { computed, getCurrentInstance } from 'vue';
+import { Top } from '@element-plus/icons-vue';
 import AvatarBase from '@/components/AvatarBase.vue';
 
 const { proxy } = getCurrentInstance();

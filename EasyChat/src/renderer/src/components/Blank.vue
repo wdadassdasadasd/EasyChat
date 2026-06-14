@@ -10,6 +10,8 @@
 </template>
 
 <script setup>
+import { ChatDotRound } from '@element-plus/icons-vue';
+
 defineProps({
     text: {
         type: String,

@@ -7,6 +7,7 @@ import store from './store.js'
 const REGISTRY_KEY = 'uploadSourceRegistry'
 const MAX_REGISTRY_ITEMS = 100
 const MAX_CHUNK_SIZE = 4 * 1024 * 1024
+const FFMPEG_THUMBNAIL_TIMEOUT_MS = 10000
 
 const getRegistry = () => {
   const value = store.getUserData(REGISTRY_KEY)
@@ -105,13 +106,21 @@ const releaseUploadSource = ({ uploadSourceId } = {}) => {
   return { success: true, released: true }
 }
 
-const generateThumbnailFromPath = (filePath) => {
+const generateThumbnailFromPath = (
+  filePath,
+  { timeoutMs = FFMPEG_THUMBNAIL_TIMEOUT_MS } = {}
+) => {
   return new Promise((resolve) => {
     const chunks = []
     let settled = false
+    let timeout = null
     const finish = (result) => {
       if (settled) return
       settled = true
+      if (timeout) {
+        clearTimeout(timeout)
+        timeout = null
+      }
       resolve(result)
     }
     const ffmpeg = spawn('ffmpeg', [
@@ -128,16 +137,20 @@ const generateThumbnailFromPath = (filePath) => {
       '-'
     ])
 
-    ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk))
-    ffmpeg.stdout.on('end', () => {
-      const buffer = Buffer.concat(chunks)
-      if (buffer.length > 0) {
-        finish({
-          success: true,
-          arrayBuffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-        })
+    timeout = setTimeout(() => {
+      finish({
+        success: false,
+        kind: 'timeout',
+        error: `ffmpeg thumbnail extraction timed out after ${timeoutMs}ms`
+      })
+      try {
+        ffmpeg.kill()
+      } catch (error) {
+        console.error('终止 ffmpeg 进程失败:', error)
       }
-    })
+    }, timeoutMs)
+
+    ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk))
     ffmpeg.on('error', (error) => finish({ success: false, error: error.message }))
     ffmpeg.on('close', (code) => {
       const buffer = Buffer.concat(chunks)
@@ -159,6 +172,7 @@ const generateUploadSourceThumbnail = async ({ uploadSourceId } = {}) => {
 }
 
 export {
+  FFMPEG_THUMBNAIL_TIMEOUT_MS,
   MAX_CHUNK_SIZE,
   generateThumbnailFromPath,
   generateUploadSourceThumbnail,

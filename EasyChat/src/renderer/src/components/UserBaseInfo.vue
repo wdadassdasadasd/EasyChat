@@ -25,6 +25,7 @@
 <script setup>
 import AvatarBase from './AvatarBase.vue';
 import { getCurrentInstance } from 'vue';
+import { Female, Male } from '@element-plus/icons-vue';
 const { proxy } = getCurrentInstance();
 
 defineProps({

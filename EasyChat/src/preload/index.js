@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
 
 // P0-1/P0-2: 安全重构 — 只暴露业务白名单 API，不再暴露完整 ipcRenderer。
 // 所有 IPC 调用通过命名方法转发，renderer 无法访问任意 channel。
@@ -43,12 +44,12 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
 const ALLOWED_LISTEN_CHANNELS = new Set([
   'receiveMessage',
   'receiveMessageBatch',
-  'loadChatMessageCallback',
-  'loadSessionDataCallback',
-  'markSessionReadCallback',
-  'topChatSessionCallback',
-  'clearChatMessageCallback',
-  'searchChatMessageCallback',
+  IPC_CALLBACK_CHANNELS.loadChatMessage,
+  IPC_CALLBACK_CHANNELS.loadSessionData,
+  IPC_CALLBACK_CHANNELS.markSessionRead,
+  IPC_CALLBACK_CHANNELS.topChatSession,
+  IPC_CALLBACK_CHANNELS.clearChatMessage,
+  IPC_CALLBACK_CHANNELS.searchChatMessage,
   'wsStatusChange',
   'winStateChange',
   'downloadChatFileProgress'
@@ -194,22 +195,22 @@ const api = {
     return electronAPI.ipcOn('receiveMessageBatch', listener)
   },
   onLoadChatMessageCallback(listener) {
-    return electronAPI.ipcOn('loadChatMessageCallback', listener)
+    return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.loadChatMessage, listener)
   },
   onLoadSessionDataCallback(listener) {
-    return electronAPI.ipcOn('loadSessionDataCallback', listener)
+    return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.loadSessionData, listener)
   },
   onMarkSessionReadCallback(listener) {
-    return electronAPI.ipcOn('markSessionReadCallback', listener)
+    return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.markSessionRead, listener)
   },
   onTopChatSessionCallback(listener) {
-    return electronAPI.ipcOn('topChatSessionCallback', listener)
+    return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.topChatSession, listener)
   },
   onClearChatMessageCallback(listener) {
-    return electronAPI.ipcOn('clearChatMessageCallback', listener)
+    return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.clearChatMessage, listener)
   },
   onSearchChatMessageCallback(listener) {
-    return electronAPI.ipcOn('searchChatMessageCallback', listener)
+    return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.searchChatMessage, listener)
   },
   onWsStatusChange(listener) {
     return electronAPI.ipcOn('wsStatusChange', listener)

@@ -60,6 +60,7 @@
 
 <script setup>
 import { ref, getCurrentInstance, watch } from 'vue';
+import { ChatDotRound, Female, Male, MoreFilled } from '@element-plus/icons-vue';
 import ContactPanel from '../../components/ContactPanel.vue';
 import AvatarBase from '../../components/AvatarBase.vue';
 import { useContactStateStore } from '../../stores/ContactStateStore';

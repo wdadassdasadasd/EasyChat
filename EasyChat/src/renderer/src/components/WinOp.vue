@@ -27,6 +27,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
+import { Close, FullScreen, Minus, ScaleToOriginal, Top } from '@element-plus/icons-vue';
 const props=defineProps({
     mode:{
         type:String,

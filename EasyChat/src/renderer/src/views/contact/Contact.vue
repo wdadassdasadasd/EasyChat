@@ -59,7 +59,8 @@
 
 <script setup>
 
-import { ref, getCurrentInstance,watch } from 'vue';
+import { ref, getCurrentInstance,watch,markRaw } from 'vue';
+import { Plus, Promotion, Search } from '@element-plus/icons-vue';
 import { useRouter, useRoute } from 'vue-router';
 import {useContactStateStore} from '@/stores/ContactStateStore';
 
@@ -80,13 +81,13 @@ const partList = ref([
         children: [
             {
                 name: '搜好友',
-                icon: 'Plus',
+                icon: markRaw(Plus),
                 iconBgColor: '#fa9d3b',
                 path: '/contact/search',
             },
             {
                 name: '新的朋友',
-                icon: 'Promotion',
+                icon: markRaw(Promotion),
                 iconBgColor: '#08bf61',
                 path: '/contact/contactNotice',
                 showTitle: true,
@@ -99,7 +100,7 @@ const partList = ref([
         children: [
             {
                 name: '新建群聊',
-                icon: 'Plus',
+                icon: markRaw(Plus),
                 iconBgColor: '#1485ee',
                 path: '/contact/createGroup',
             },

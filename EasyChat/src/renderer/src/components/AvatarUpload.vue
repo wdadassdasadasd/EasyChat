@@ -27,6 +27,7 @@
 <script setup>
 
 import { ref, computed, watch,onBeforeUnmount} from 'vue';
+import { Plus } from '@element-plus/icons-vue';
 const props = defineProps({
     // 头像可以是字符串路径，也可以是文件对象
     modelValue: {

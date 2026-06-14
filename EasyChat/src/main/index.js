@@ -24,6 +24,7 @@ import {
 } from './ipc.js'
 import { dbReady } from './db/ADB.js'
 import { initializeLogger } from './logger.js'
+import { cleanupExpiredTempVideos } from './tempVideoFiles.js'
 import { restoreOrCreateMainWindow } from './windowLifecycle.js'
 
 initializeLogger()
@@ -239,6 +240,7 @@ app.whenReady().then(async () => {
     return
   }
 
+  await cleanupExpiredTempVideos({ tempRoot: app.getPath('temp') })
   createWindow()
 
   app.on('activate', function () {
@@ -266,6 +268,8 @@ app.on('before-quit', (event) => {
   import('./wsClient.js')
     .then(({ closeWs }) => closeWs())
     .catch((error) => console.error('WebSocket shutdown failed', error))
+    .then(() => cleanupExpiredTempVideos({ tempRoot: app.getPath('temp') }))
+    .catch((error) => console.error('Temporary video cleanup failed', error))
     .finally(() => app.quit())
 })
 

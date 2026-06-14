@@ -150,6 +150,7 @@
 <script setup>
 import { computed, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import { ChatDotRound, MoreFilled } from '@element-plus/icons-vue';
 import ChatMessageList from '@/components/chat/ChatMessageList.vue';
 import ChatSession from '@/components/chat/ChatSession.vue';
 import FilePreviewDialog from '@/components/chat/FilePreviewDialog.vue';

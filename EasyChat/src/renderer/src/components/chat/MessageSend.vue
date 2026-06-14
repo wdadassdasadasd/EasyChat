@@ -133,6 +133,7 @@
 
 <script setup>
 import { ref, toRef } from 'vue';
+import { FolderOpened } from '@element-plus/icons-vue';
 import emojiList from '@/utils/Emoji';
 import { useMessageComposer } from '@/views/chat/composables/useMessageComposer';
 import { CHAT_CONSTANTS } from '@/utils/ChatConstants';

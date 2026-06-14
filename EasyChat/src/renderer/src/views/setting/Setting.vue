@@ -28,7 +28,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { markRaw, ref } from 'vue';
+import { FolderOpened, Setting, User } from '@element-plus/icons-vue';
 import { useRoute ,useRouter} from 'vue-router';
 
 const rightTitle=ref();
@@ -37,19 +38,19 @@ const router=useRouter();
 const settingMenuList=ref([
     {
         name:'账号设置',
-        icon:'User',
+        icon:markRaw(User),
         path:'/setting/userinfo',
         bgColor:'white'
     },
     {
         name:'文件管理',
-        icon:'FolderOpened',
+        icon:markRaw(FolderOpened),
         path:'/setting/fileManage',
         bgColor:'white'
     },
     {
         name:'关于我们',
-        icon:'Setting',
+        icon:markRaw(Setting),
         path:'/setting/about',
         bgColor:'white'
 

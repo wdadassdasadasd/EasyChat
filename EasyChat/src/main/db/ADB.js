@@ -3,6 +3,7 @@ import fs from 'fs'
 import sqlite3 from 'sqlite3'
 import os from 'os'
 import { AsyncLocalStorage } from 'async_hooks'
+import { MAX_SQL_IN_PARAMS } from '../constants'
 
 const globalColumnMap = {
   chat_message: {
@@ -323,16 +324,22 @@ const runPragma = () => {
   })
 }
 
-const buildInsertSql = (sqlPrefix, tableName, data) => {
+const getInsertColumnsAndParams = (tableName, data) => {
   const columnsMap = globalColumnMap[tableName]
-  const dbColumns = []
-  const params = []
-  for (let item in data) {
-    if (data[item] !== undefined && columnsMap[item] !== undefined) {
-      dbColumns.push(columnsMap[item])
-      params.push(data[item])
-    }
+  if (!columnsMap) {
+    throw new Error(`Unknown database table: ${tableName}`)
   }
+  const entries = Object.entries(columnsMap).filter(([bizColumn]) => data[bizColumn] !== undefined)
+  const dbColumns = entries.map(([, dbColumn]) => dbColumn)
+  const params = entries.map(([bizColumn]) => data[bizColumn])
+  if (dbColumns.length === 0) {
+    throw new Error(`No insertable columns for table: ${tableName}`)
+  }
+  return { dbColumns, params }
+}
+
+const buildInsertSql = (sqlPrefix, tableName, data) => {
+  const { dbColumns, params } = getInsertColumnsAndParams(tableName, data)
   const preper = dbColumns.map(() => '?').join(',')
   const sql = `${sqlPrefix} ${tableName} (${dbColumns.join(',')}) values (${preper})`
   return { sql, params }
@@ -354,6 +361,37 @@ const insertOrReplace = (tableName, data) => {
 
 const insertOrReplaceStrict = (tableName, data) => {
   return insertStrict('insert or replace into', tableName, data)
+}
+
+const insertOrReplaceManyStrict = async (tableName, rows = []) => {
+  await ensureDbReady()
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return 0
+  }
+
+  const groups = new Map()
+  for (const row of rows) {
+    const { dbColumns, params } = getInsertColumnsAndParams(tableName, row)
+    const key = dbColumns.join(',')
+    const group = groups.get(key) || { dbColumns, rows: [] }
+    group.rows.push(params)
+    groups.set(key, group)
+  }
+
+  let changedRows = 0
+  for (const { dbColumns, rows: groupedRows } of groups.values()) {
+    const rowsPerStatement = Math.max(1, Math.floor(MAX_SQL_IN_PARAMS / dbColumns.length))
+    const rowPlaceholders = `(${dbColumns.map(() => '?').join(',')})`
+    for (let offset = 0; offset < groupedRows.length; offset += rowsPerStatement) {
+      const batch = groupedRows.slice(offset, offset + rowsPerStatement)
+      const sql = `insert or replace into ${tableName} (${dbColumns.join(',')}) values ${batch
+        .map(() => rowPlaceholders)
+        .join(',')}`
+      changedRows += await runStrict(sql, batch.flat())
+    }
+  }
+
+  return changedRows
 }
 
 const insertOrIgnore = (tableName, data) => {
@@ -427,9 +465,9 @@ export {
   dbReady,
   ensureDbReady,
   checkpointWal,
-  createTable,
   insertOrReplace,
   insertOrReplaceStrict,
+  insertOrReplaceManyStrict,
   insertOrIgnore,
   queryAll,
   queryOne,

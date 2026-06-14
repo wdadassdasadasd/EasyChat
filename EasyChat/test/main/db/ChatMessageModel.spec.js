@@ -15,6 +15,10 @@ vi.mock('../../../src/main/db/ADB', () => ({
     insertedRows.push({ tableName, data })
     return 1
   }),
+  insertOrReplaceManyStrict: vi.fn(async (tableName, rows) => {
+    rows.forEach((data) => insertedRows.push({ tableName, data }))
+    return rows.length
+  }),
   queryAll: vi.fn(async (sql) => {
     if (sql.includes('chat_message_fts f')) {
       return [

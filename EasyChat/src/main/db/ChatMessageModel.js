@@ -1,12 +1,12 @@
 import store from '../store'
 import {
   insertOrReplace,
+  insertOrReplaceManyStrict,
   insertOrReplaceStrict,
   queryAll,
   queryOne,
   runInTransaction,
-  runStrict,
-  run
+  runStrict
 } from './ADB'
 import { MAX_SQL_IN_PARAMS } from '../constants'
 const MESSAGE_PAGE_SIZE = 20
@@ -449,15 +449,18 @@ const saveMessageBatch = async (chatMessageList, { sessionRows = [] } = {}) => {
       })
     }
 
-    for (let item of newMessageList) {
-      item.userId = store.getUserId()
-      await insertOrReplaceStrict('chat_message', item)
+    const messagesToSave = newMessageList.map((item) => ({
+      ...item,
+      userId: store.getUserId()
+    }))
+    await insertOrReplaceManyStrict('chat_message', messagesToSave)
+    for (const item of messagesToSave) {
       await upsertFtsMessage(item)
     }
 
     return {
-      savedCount: newMessageList.length,
-      savedMessages: newMessageList
+      savedCount: messagesToSave.length,
+      savedMessages: messagesToSave
     }
   })
 }

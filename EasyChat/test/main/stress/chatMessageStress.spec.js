@@ -124,6 +124,11 @@ vi.mock('../../../src/main/db/ADB', async () => {
       if (tableName === 'chat_session_user') insertedSessions.push(data)
       return 1
     }),
+    insertOrReplaceManyStrict: vi.fn(async (tableName, rows) => {
+      if (tableName === 'chat_message') insertedMessages.push(...rows)
+      if (tableName === 'chat_session_user') insertedSessions.push(...rows)
+      return rows.length
+    }),
     insertOrIgnore: vi.fn(async () => 1),
     queryAll: vi.fn(async (sql, params = []) => {
       if (sql.includes('chat_session_clear')) {

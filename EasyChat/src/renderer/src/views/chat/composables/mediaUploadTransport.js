@@ -1,4 +1,5 @@
 import { CHAT_CONSTANTS } from '@/utils/ChatConstants'
+import { isRequestFailure } from '@/utils/RequestFailure'
 
 const MIN_TOTAL_UPLOAD_TIMEOUT = 30 * 60 * 1000
 const MAX_TOTAL_UPLOAD_TIMEOUT = 6 * 60 * 60 * 1000
@@ -7,8 +8,6 @@ const chunkUploadTimeout = Math.max(
   120000,
   (CHAT_CONSTANTS.UPLOAD_CHUNK_SIZE / (100 * 1024)) * 1000
 )
-
-const isRequestFailure = (result) => result && result.success === false
 
 const normalizeUploadedChunks = (value) => {
   if (!Array.isArray(value)) return new Set()
