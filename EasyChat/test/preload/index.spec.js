@@ -68,6 +68,22 @@ describe('preload API bridge', () => {
     )
   })
 
+  it('subscribes to the existing delete-session callback channel', () => {
+    const listener = vi.fn()
+    const unsubscribe = api.onDelChatSessionCallback(listener)
+    const [channel, wrappedListener] = electronMocks.ipcRenderer.on.mock.calls.at(-1)
+
+    expect(channel).toBe('delChatSessionCallback')
+    wrappedListener({}, { contactId: 'c1', success: false })
+    expect(listener).toHaveBeenCalledWith({ contactId: 'c1', success: false })
+
+    unsubscribe()
+    expect(electronMocks.ipcRenderer.removeListener).toHaveBeenCalledWith(
+      'delChatSessionCallback',
+      wrappedListener
+    )
+  })
+
   it('registers only real File objects through the named upload source channel', async () => {
     electronMocks.ipcRenderer.invoke.mockResolvedValueOnce({
       success: true,

@@ -514,7 +514,6 @@ export const useChatMessages = ({
     removeMessageListeners()
 
     receiveMessageHandler = (message) => {
-      console.log('收到消息', message)
       if (typeof message === 'string') {
         try {
           message = JSON.parse(message)

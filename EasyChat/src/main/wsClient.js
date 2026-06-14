@@ -73,16 +73,6 @@ const recordWsError = (error, patch = {}) => {
   })
 }
 
-const describeWsPayloadForLog = (data) => {
-  if (typeof data === 'string') {
-    return { type: 'text', bytes: data.length }
-  }
-  if (data?.byteLength != null) {
-    return { type: 'binary', bytes: data.byteLength }
-  }
-  return { type: typeof data }
-}
-
 const resetWsDiagnostics = () => {
   Object.assign(wsDiagnostics, {
     status: 'closed',
@@ -679,7 +669,8 @@ const handleSingleWsMessage = async (message, expectedGeneration) => {
       if (!isCurrentRuntimeGeneration(expectedGeneration)) return
 
       const chatMessageList = message.extendData?.chatMessageList || []
-      await saveMessageBatch(chatMessageList)
+      // INIT 会话列表携带服务端权威未读数，最近消息仅用于本地回填，不能再次累加未读。
+      await saveMessageBatch(chatMessageList, { incrementUnread: false })
       if (!isCurrentRuntimeGeneration(expectedGeneration)) return
       await updateNoReadCount(store.getUserId(), message.extendData?.contact?.applyCount || 0)
       if (!isCurrentRuntimeGeneration(expectedGeneration)) return
@@ -769,8 +760,6 @@ const createWs = () => {
   }
 
   ws.onmessage = function (e) {
-    console.log('received WebSocket message', describeWsPayloadForLog(e.data))
-
     let message = null
     try {
       message = typeof e.data === 'string' ? JSON.parse(e.data) : e.data

@@ -13,7 +13,7 @@ vi.mock('../../../src/main/db/ADB', () => ({
     insertedRows.push({ tableName, data })
     return 1
   }),
-  queryAll: vi.fn(async (sql, params) => {
+  queryAll: vi.fn(async (sql) => {
     if (sql.includes('chat_session_user') && sql.includes('status=1')) {
       return [
         {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getMediaKind, getFileLimit, validateFileSize, isVideoFile } from '@/utils/FileLimits'
+import { getMediaKind, validateFileSize, isVideoFile } from '@/utils/FileLimits'
 
 describe('getMediaKind', () => {
   it('returns image for fileType=0', () => {

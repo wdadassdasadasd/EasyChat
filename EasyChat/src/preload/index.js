@@ -46,6 +46,7 @@ const ALLOWED_LISTEN_CHANNELS = new Set([
   'receiveMessageBatch',
   IPC_CALLBACK_CHANNELS.loadChatMessage,
   IPC_CALLBACK_CHANNELS.loadSessionData,
+  IPC_CALLBACK_CHANNELS.deleteChatSession,
   IPC_CALLBACK_CHANNELS.markSessionRead,
   IPC_CALLBACK_CHANNELS.topChatSession,
   IPC_CALLBACK_CHANNELS.clearChatMessage,
@@ -199,6 +200,9 @@ const api = {
   },
   onLoadSessionDataCallback(listener) {
     return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.loadSessionData, listener)
+  },
+  onDelChatSessionCallback(listener) {
+    return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.deleteChatSession, listener)
   },
   onMarkSessionReadCallback(listener) {
     return electronAPI.ipcOn(IPC_CALLBACK_CHANNELS.markSessionRead, listener)

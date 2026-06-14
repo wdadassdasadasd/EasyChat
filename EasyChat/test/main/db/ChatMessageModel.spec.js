@@ -38,7 +38,12 @@ vi.mock('../../../src/main/db/ADB', () => ({
     }
     return []
   }),
-  queryOne: vi.fn(async (sql) => {
+  queryOne: vi.fn(async (sql, params = []) => {
+    if (sql.includes('file_path')) {
+      return params[1] === 'D:/allowed/video.mp4'
+        ? { filePath: 'D:/allowed/video.mp4' }
+        : null
+    }
     if (sql.includes('chat_session_user')) {
       return {
         userId: 'u1',
@@ -110,6 +115,41 @@ describe('ChatMessageModel saveMessageBatch', () => {
       topType: 1,
       status: 1
     })
+  })
+
+  it('does not increment unread while backfilling INIT recent messages', async () => {
+    const { saveMessageBatch } = await import('../../../src/main/db/ChatMessageModel')
+
+    await saveMessageBatch(
+      [
+        {
+          messageId: 102,
+          sessionId: 's1',
+          contactId: 'u2',
+          contactType: 0,
+          sendUserId: 'u2',
+          messageType: 2,
+          messageContent: 'init history',
+          sendTime: 201
+        }
+      ],
+      { incrementUnread: false }
+    )
+
+    expect(
+      strictRuns.some((run) => run.sql.includes('set no_read_count=coalesce(no_read_count,0)+?'))
+    ).toBe(false)
+  })
+})
+
+describe('ChatMessageModel local file authorization', () => {
+  it('matches file paths only within the current user message records', async () => {
+    const { isCurrentUserMessageFilePath } = await import(
+      '../../../src/main/db/ChatMessageModel'
+    )
+
+    await expect(isCurrentUserMessageFilePath('D:/allowed/video.mp4')).resolves.toBe(true)
+    await expect(isCurrentUserMessageFilePath('D:/other/video.mp4')).resolves.toBe(false)
   })
 })
 

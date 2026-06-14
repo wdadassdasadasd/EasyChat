@@ -48,7 +48,6 @@ const globalColumnMap = {
 const NODE_ENV = process.env.NODE_ENV
 
 const userDir = os.homedir()
-console.log(userDir)
 const flieFolder = userDir + (NODE_ENV === 'development' ? '/.weChattest/' : '/.weChat/')
 
 if (!fs.existsSync(flieFolder)) {

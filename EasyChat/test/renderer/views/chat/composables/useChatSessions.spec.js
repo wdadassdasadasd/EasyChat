@@ -1,8 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const { showContextMenu } = vi.hoisted(() => ({
+  showContextMenu: vi.fn()
+}))
+
 vi.mock('@imengyu/vue3-context-menu', () => ({
   default: {
-    showContextMenu: vi.fn()
+    showContextMenu
   }
 }))
 
@@ -12,6 +16,7 @@ const createHarness = () => {
   const handlers = {}
   const sent = []
   const unsubscribeLoadSessionData = vi.fn(() => delete handlers.loadSessionDataCallback)
+  const unsubscribeDeleteChatSession = vi.fn(() => delete handlers.delChatSessionCallback)
   const unsubscribeMarkSessionRead = vi.fn(() => delete handlers.markSessionReadCallback)
   const unsubscribeTopChatSession = vi.fn(() => delete handlers.topChatSessionCallback)
   global.window = {
@@ -19,6 +24,10 @@ const createHarness = () => {
       onLoadSessionDataCallback: vi.fn((handler) => {
         handlers.loadSessionDataCallback = handler
         return unsubscribeLoadSessionData
+      }),
+      onDelChatSessionCallback: vi.fn((handler) => {
+        handlers.delChatSessionCallback = handler
+        return unsubscribeDeleteChatSession
       }),
       onMarkSessionReadCallback: vi.fn((handler) => {
         handlers.markSessionReadCallback = handler
@@ -29,10 +38,14 @@ const createHarness = () => {
         return unsubscribeTopChatSession
       }),
       unsubscribeLoadSessionData,
+      unsubscribeDeleteChatSession,
       unsubscribeMarkSessionRead,
       unsubscribeTopChatSession,
       sendMarkSessionRead: vi.fn((data) => {
         sent.push({ method: 'sendMarkSessionRead', data })
+      }),
+      sendDelChatSession: vi.fn((contactId) => {
+        sent.push({ method: 'sendDelChatSession', data: { contactId } })
       }),
       sendTopChatSession: vi.fn((data) => {
         sent.push({ method: 'sendTopChatSession', data })
@@ -96,6 +109,7 @@ describe('useChatSessions', () => {
 
   beforeEach(() => {
     vi.useFakeTimers()
+    showContextMenu.mockClear()
   })
 
   afterEach(() => {
@@ -189,6 +203,29 @@ describe('useChatSessions', () => {
     expect(proxy.Message.error).toHaveBeenCalled()
   })
 
+  it('restores an optimistically deleted session when persistence fails', () => {
+    const { handlers, proxy, sessions } = createHarness()
+    sessions.registerSessionListener()
+
+    sessions.onContextmenu(sessions.chatSessionList.value[0], {
+      preventDefault: vi.fn(),
+      x: 10,
+      y: 20
+    })
+    const deleteAction = showContextMenu.mock.calls.at(-1)[0].items[1]
+    deleteAction.onClick()
+    proxy.Confirm.mock.calls.at(-1)[0].okfun()
+
+    expect(sessions.chatSessionList.value.some((item) => item.contactId === 'c1')).toBe(false)
+    expect(sessions.currentChatSession.value).toEqual({})
+
+    handlers.delChatSessionCallback({ contactId: 'c1', success: false })
+
+    expect(sessions.chatSessionList.value.some((item) => item.contactId === 'c1')).toBe(true)
+    expect(sessions.currentChatSession.value.contactId).toBe('c1')
+    expect(proxy.Message.error).toHaveBeenCalledWith('删除会话失败，已恢复。')
+  })
+
   it('removes registered listeners and clears pending timers', () => {
     const { api, handlers, proxy, sessions } = createHarness()
     sessions.registerSessionListener()
@@ -200,6 +237,7 @@ describe('useChatSessions', () => {
 
     expect(Object.keys(handlers)).toEqual([])
     expect(api.unsubscribeTopChatSession).toHaveBeenCalled()
+    expect(api.unsubscribeDeleteChatSession).toHaveBeenCalled()
     expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').topType).toBe(1)
     expect(proxy.Message.error).not.toHaveBeenCalled()
   })

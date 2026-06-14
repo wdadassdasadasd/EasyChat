@@ -20,6 +20,7 @@ import {
 } from './db/ChatSessionUserModel.js'
 import {
   clearMessageAndSessionSummaryBySessionId,
+  isCurrentUserMessageFilePath,
   replacePendingMessage,
   recoverStalePendingMessages,
   savePendingMessage,
@@ -61,6 +62,7 @@ import { getTempVideoFolder } from './tempVideoFiles.js'
 
 const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
 const MAX_LOCAL_REPLACE_RECOVERY_ITEMS = 100
+const MAX_LOCAL_VIDEO_READ_SIZE = 128 * 1024 * 1024
 
 const getLocalReplaceRecoveryQueue = () => {
   const queue = store.getUserData(LOCAL_REPLACE_RECOVERY_KEY)
@@ -300,14 +302,22 @@ const onLoadSessionData = () => {
 
 //分页查询聊天消息
 const onDelChatSessionSafe = () => {
-  registerSafeIpcOn('delChatSession', IPC_CALLBACK_CHANNELS.deleteChatSession, async (e, contactId) => {
-    validateContactId(contactId)
-    await delChatSession(contactId)
-    e.sender.send(IPC_CALLBACK_CHANNELS.deleteChatSession, {
-      contactId,
-      success: true
-    })
-  })
+  registerSafeIpcOn(
+    'delChatSession',
+    IPC_CALLBACK_CHANNELS.deleteChatSession,
+    async (e, contactId) => {
+      validateContactId(contactId)
+      try {
+        await delChatSession(contactId)
+        e.sender.send(IPC_CALLBACK_CHANNELS.deleteChatSession, {
+          contactId,
+          success: true
+        })
+      } catch (error) {
+        sendIpcError(e.sender, IPC_CALLBACK_CHANNELS.deleteChatSession, error, { contactId })
+      }
+    }
+  )
 }
 
 const onTopChatSessionSafe = () => {
@@ -587,6 +597,21 @@ const onOpenTempVideoFile = () => {
         error: '本地视频文件不存在'
       }
     }
+    if (!(await isCurrentUserMessageFilePath(filePath))) {
+      return {
+        success: false,
+        kind: 'validation_error',
+        error: '本地视频文件不属于当前用户消息'
+      }
+    }
+    const stat = await fs.promises.stat(filePath)
+    if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_LOCAL_VIDEO_READ_SIZE) {
+      return {
+        success: false,
+        kind: 'validation_error',
+        error: '本地视频文件大小不受支持'
+      }
+    }
 
     // 大视频文件异步读取，避免阻塞主进程事件循环。
     const buffer = await fs.promises.readFile(filePath)
@@ -609,6 +634,13 @@ const onOpenTempVideoFile = () => {
       return {
         success: false,
         error: '本地视频文件不存在'
+      }
+    }
+    if (!(await isCurrentUserMessageFilePath(filePath))) {
+      return {
+        success: false,
+        kind: 'validation_error',
+        error: '本地视频文件不属于当前用户消息'
       }
     }
 
@@ -641,6 +673,15 @@ const resolveConflictFilePath = (folder, fileName) => {
 }
 
 const MAX_DOWNLOAD_REDIRECTS = 10
+
+const isPathWithinFolder = async (filePath, folderPath) => {
+  const [realFilePath, realFolderPath] = await Promise.all([
+    fs.promises.realpath(filePath),
+    fs.promises.realpath(folderPath)
+  ])
+  const relativePath = path.relative(realFolderPath, realFilePath)
+  return Boolean(relativePath) && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
+}
 
 const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redirectDepth = 0 }) => {
   return new Promise((resolve) => {
@@ -850,6 +891,14 @@ const onChatFileDownload = () => {
         error: 'File does not exist'
       }
     }
+    const folderInfo = await getLocalFileFolder()
+    if (!(await isPathWithinFolder(data.filePath, folderInfo.localFileFolder))) {
+      return {
+        success: false,
+        kind: 'validation_error',
+        error: 'File is outside the configured download folder'
+      }
+    }
     const error = await shell.openPath(data.filePath)
     return {
       success: !error,
@@ -863,6 +912,14 @@ const onChatFileDownload = () => {
       return {
         success: false,
         error: 'File does not exist'
+      }
+    }
+    const folderInfo = await getLocalFileFolder()
+    if (!(await isPathWithinFolder(data.filePath, folderInfo.localFileFolder))) {
+      return {
+        success: false,
+        kind: 'validation_error',
+        error: 'File is outside the configured download folder'
       }
     }
     shell.showItemInFolder(data.filePath)

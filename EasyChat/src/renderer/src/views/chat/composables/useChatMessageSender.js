@@ -310,7 +310,6 @@ export const useChatMessageSender = ({
           appendSentMessageIfMissing(recoveredMessage)
         }
         onRecovered?.(recoveredMessage)
-        console.log('local sync retry succeeded on attempt', attempt)
       } catch (retryError) {
         console.error('local sync retry failed (attempt', attempt, ')', retryError)
         scheduleLocalSyncRetry(

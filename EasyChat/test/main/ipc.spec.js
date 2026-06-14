@@ -75,6 +75,7 @@ vi.mock('../../src/main/db/ChatMessageModel', () => ({
     noReadCount: 0
   })),
   clearMessageBySessionId: vi.fn(async () => 1),
+  isCurrentUserMessageFilePath: vi.fn(async () => true),
   recoverStalePendingMessages: vi.fn(async () => ({ success: true, recoveredCount: 2 })),
   replacePendingMessage: vi.fn(async ({ message, localMessageId }) => ({
     success: true,
@@ -109,8 +110,15 @@ vi.mock('../../src/main/db/UserSettingModel', () => ({
 
 vi.mock('fs', () => ({
   default: {
-    existsSync: vi.fn((p) => p === '/tmp/exists.mp4'),
-    promises: { writeFile: vi.fn(async () => {}) },
+    existsSync: vi.fn((p) =>
+      ['/tmp/exists.mp4', '/tmp/chat/file.mp4', '/tmp/outside.mp4'].includes(String(p))
+    ),
+    promises: {
+      readFile: vi.fn(async () => Buffer.from([1, 2, 3])),
+      realpath: vi.fn(async (filePath) => filePath),
+      stat: vi.fn(async () => ({ isFile: () => true, size: 3 })),
+      writeFile: vi.fn(async () => {})
+    },
     createWriteStream: vi.fn(() => ({ on: vi.fn(), close: vi.fn((cb) => cb && cb()) })),
     renameSync: vi.fn(),
     unlinkSync: vi.fn(),
@@ -123,7 +131,12 @@ vi.mock('path', () => ({
     extname: vi.fn((n) => '.' + String(n).split('.').pop()),
     basename: vi.fn((n) => n),
     isAbsolute: vi.fn((p) => /^([A-Za-z]:[\\/]|\/)/.test(String(p))),
-    join: vi.fn((...args) => args.join('/'))
+    join: vi.fn((...args) => args.join('/')),
+    relative: vi.fn((from, to) => {
+      const prefix = `${String(from).replace(/\/$/, '')}/`
+      return String(to).startsWith(prefix) ? String(to).slice(prefix.length) : '../outside'
+    }),
+    resolve: vi.fn((value) => value)
   }
 }))
 
@@ -311,21 +324,18 @@ describe('IPC: openChat', () => {
 })
 
 describe('IPC: loadSessionData', () => {
-  // FIXME: registerSafeIpcOn happy-path tests have mock state pollution
-  // between tests. The error-path variant works correctly. The contract
-  // is covered by saveSendMessage + error-path tests.
-  it.skip('returns session list via callback', async () => {
+  it('returns session list via callback', async () => {
     ipcExports.onLoadSessionData()
     const handler = mockIpcOn['loadSessionData']
     expect(handler).toBeDefined()
 
     await handler(ipcEvent())
-    // The handler sends an object with success + dataList
     const calls = mockSender.send.mock.calls
     const sessionCall = calls.find((c) => c[0] === 'loadSessionDataCallback')
     expect(sessionCall).toBeDefined()
-    expect(sessionCall[1]).toHaveProperty('success', true)
-    expect(sessionCall[1]).toHaveProperty('dataList')
+    expect(sessionCall[1]).toEqual([
+      expect.objectContaining({ contactId: 'c1', sessionId: 's1' })
+    ])
   })
 
   it('sends error callback when DB fails', async () => {
@@ -355,6 +365,23 @@ describe('IPC: delChatSession', () => {
       contactId: 'c1',
       success: true
     })
+  })
+
+  it('includes contactId when persistence fails', async () => {
+    const { delChatSession } = await import('../../src/main/db/ChatSessionUserModel')
+    delChatSession.mockRejectedValueOnce(new Error('DB unavailable'))
+    ipcExports.onDelChatSession()
+
+    await mockIpcOn.delChatSession(ipcEvent(), 'c1')
+
+    expect(mockSender.send).toHaveBeenCalledWith(
+      'delChatSessionCallback',
+      expect.objectContaining({
+        contactId: 'c1',
+        success: false,
+        kind: 'db_error'
+      })
+    )
   })
 })
 
@@ -392,7 +419,7 @@ describe('IPC: markSessionRead', () => {
 // Chat message channels
 // ═══════════════════════════════════════════════
 describe('IPC: loadChatMessage', () => {
-  it.skip('returns paginated messages', async () => {
+  it('returns paginated messages', async () => {
     ipcExports.onLoadChatMessage()
     const handler = mockIpcOn['loadChatMessage']
     expect(handler).toBeDefined()
@@ -400,19 +427,28 @@ describe('IPC: loadChatMessage', () => {
     await handler(ipcEvent(), { sessionId: 's1', loadSeq: 1 })
     const call = mockSender.send.mock.calls.find((c) => c[0] === 'loadChatMessageCallback')
     expect(call).toBeDefined()
-    expect(call[1]).toHaveProperty('success', true)
-    expect(call[1]).toHaveProperty('dataList')
+    expect(call[1]).toMatchObject({
+      dataList: [expect.objectContaining({ messageId: 1 })],
+      hasMore: false,
+      sessionId: 's1',
+      loadSeq: 1
+    })
   })
 
-  it.skip('returns context messages for targetMessageId', async () => {
+  it('returns context messages for targetMessageId', async () => {
     ipcExports.onLoadChatMessage()
     const handler = mockIpcOn['loadChatMessage']
 
     await handler(ipcEvent(), { sessionId: 's1', targetMessageId: 5, loadSeq: 1 })
     const call = mockSender.send.mock.calls.find((c) => c[0] === 'loadChatMessageCallback')
     expect(call).toBeDefined()
-    expect(call[1]).toHaveProperty('success', true)
-    expect(call[1]).toHaveProperty('targetMessageId', 5)
+    expect(call[1]).toMatchObject({
+      dataList: [expect.objectContaining({ messageId: 5 })],
+      targetMessageId: 5,
+      loadMode: 'context',
+      sessionId: 's1',
+      loadSeq: 1
+    })
   })
 
   it('sends error callback when message query fails', async () => {
@@ -450,7 +486,7 @@ describe('IPC: clearChatMessage', () => {
 })
 
 describe('IPC: searchChatMessage', () => {
-  it.skip('returns search results', async () => {
+  it('returns search results', async () => {
     ipcExports.onSearchChatMessage()
     const handler = mockIpcOn['searchChatMessage']
     expect(handler).toBeDefined()
@@ -458,8 +494,12 @@ describe('IPC: searchChatMessage', () => {
     await handler(ipcEvent(), { sessionId: 's1', keyword: 'hello', searchSeq: 1 })
     const call = mockSender.send.mock.calls.find((c) => c[0] === 'searchChatMessageCallback')
     expect(call).toBeDefined()
-    expect(call[1]).toHaveProperty('success', true)
-    expect(call[1]).toHaveProperty('dataList')
+    expect(call[1]).toMatchObject({
+      sessionId: 's1',
+      keyword: 'hello',
+      searchSeq: 1,
+      dataList: [expect.objectContaining({ messageId: 1 })]
+    })
   })
 
   it('sends unified error callback when search fails', async () => {
@@ -604,6 +644,57 @@ describe('IPC: upload sources', () => {
   })
 })
 
+describe('IPC: local video access', () => {
+  it('rejects files that do not belong to the current user message history', async () => {
+    const { isCurrentUserMessageFilePath } = await import(
+      '../../src/main/db/ChatMessageModel'
+    )
+    isCurrentUserMessageFilePath.mockResolvedValueOnce(false)
+    ipcExports.onOpenTempVideoFile()
+
+    const result = await mockIpcHandle.readLocalVideoFile(
+      ipcEvent(),
+      { filePath: '/tmp/exists.mp4' }
+    )
+
+    expect(result).toMatchObject({ success: false, kind: 'validation_error' })
+  })
+
+  it('does not open local videos outside the current user message history', async () => {
+    const { shell } = await import('electron')
+    const { isCurrentUserMessageFilePath } = await import(
+      '../../src/main/db/ChatMessageModel'
+    )
+    isCurrentUserMessageFilePath.mockResolvedValueOnce(false)
+    ipcExports.onOpenTempVideoFile()
+
+    const result = await mockIpcHandle.openLocalVideoFile(
+      ipcEvent(),
+      { filePath: '/tmp/exists.mp4' }
+    )
+
+    expect(result).toMatchObject({ success: false, kind: 'validation_error' })
+    expect(shell.openPath).not.toHaveBeenCalled()
+  })
+
+  it('rejects oversized local video reads before loading the file', async () => {
+    const fs = (await import('fs')).default
+    fs.promises.stat.mockResolvedValueOnce({
+      isFile: () => true,
+      size: 128 * 1024 * 1024 + 1
+    })
+    ipcExports.onOpenTempVideoFile()
+
+    const result = await mockIpcHandle.readLocalVideoFile(
+      ipcEvent(),
+      { filePath: '/tmp/exists.mp4' }
+    )
+
+    expect(result).toMatchObject({ success: false, kind: 'validation_error' })
+    expect(fs.promises.readFile).not.toHaveBeenCalled()
+  })
+})
+
 // ═══════════════════════════════════════════════
 // File download channels
 // ═══════════════════════════════════════════════
@@ -700,6 +791,32 @@ describe('IPC: openDownloadedFile', () => {
     const result = await handler({}, {})
     expect(result.success).toBe(false)
   })
+
+  it('rejects existing files outside the configured download folder', async () => {
+    const { shell } = await import('electron')
+    ipcExports.onChatFileDownload()
+
+    const result = await mockIpcHandle.openDownloadedFile(
+      {},
+      { filePath: '/tmp/outside.mp4' }
+    )
+
+    expect(result).toMatchObject({ success: false, kind: 'validation_error' })
+    expect(shell.openPath).not.toHaveBeenCalled()
+  })
+
+  it('opens existing files inside the configured download folder', async () => {
+    const { shell } = await import('electron')
+    ipcExports.onChatFileDownload()
+
+    const result = await mockIpcHandle.openDownloadedFile(
+      {},
+      { filePath: '/tmp/chat/file.mp4' }
+    )
+
+    expect(result.success).toBe(true)
+    expect(shell.openPath).toHaveBeenCalledWith('/tmp/chat/file.mp4')
+  })
 })
 
 describe('IPC: showDownloadedFileInFolder', () => {
@@ -709,6 +826,19 @@ describe('IPC: showDownloadedFileInFolder', () => {
 
     const result = await handler({}, {})
     expect(result.success).toBe(false)
+  })
+
+  it('rejects files outside the configured download folder', async () => {
+    const { shell } = await import('electron')
+    ipcExports.onChatFileDownload()
+
+    const result = await mockIpcHandle.showDownloadedFileInFolder(
+      {},
+      { filePath: '/tmp/outside.mp4' }
+    )
+
+    expect(result).toMatchObject({ success: false, kind: 'validation_error' })
+    expect(shell.showItemInFolder).not.toHaveBeenCalled()
   })
 })
 

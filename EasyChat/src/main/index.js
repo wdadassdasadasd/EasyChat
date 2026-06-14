@@ -25,7 +25,7 @@ import {
 import { dbReady } from './db/ADB.js'
 import { initializeLogger } from './logger.js'
 import { cleanupExpiredTempVideos } from './tempVideoFiles.js'
-import { restoreOrCreateMainWindow } from './windowLifecycle.js'
+import { openExternalHttpUrl, restoreOrCreateMainWindow } from './windowLifecycle.js'
 
 initializeLogger()
 
@@ -77,7 +77,7 @@ function createWindow() {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    void openExternalHttpUrl({ shell, url: details.url })
     return { action: 'deny' }
   })
 

@@ -176,12 +176,17 @@ vi.mock('../../../src/main/db/ADB', async () => {
 })
 
 vi.mock('ws', () => ({
-  WebSocket: class {
-    static OPEN = 1
-    readyState = 1
-    send() {}
-    close() {}
-  }
+  WebSocket: (() => {
+    class MockWebSocket {
+      constructor() {
+        this.readyState = 1
+      }
+      send() {}
+      close() {}
+    }
+    MockWebSocket.OPEN = 1
+    return MockWebSocket
+  })()
 }))
 
 vi.mock('../../../src/main/db/UserSettingModel', () => ({

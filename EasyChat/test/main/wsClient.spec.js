@@ -5,34 +5,36 @@ const { wsInstances } = vi.hoisted(() => ({
 }))
 
 vi.mock('ws', () => ({
-  WebSocket: class {
-    static OPEN = 1
-    static CLOSED = 3
+  WebSocket: (() => {
+    class MockWebSocket {
+      constructor(url) {
+        this.url = url
+        this.readyState = 1
+        this.handlers = {}
+        this.ping = vi.fn()
+        this.close = vi.fn(() => {
+          this.readyState = 3
+          this.onclose?.()
+        })
+        this.on = vi.fn((event, handler) => {
+          this.handlers[event] = handler
+        })
+        this.removeListener = vi.fn((event, handler) => {
+          if (this.handlers[event] === handler) {
+            delete this.handlers[event]
+          }
+        })
+        wsInstances.push(this)
+      }
 
-    constructor(url) {
-      this.url = url
-      this.readyState = 1
-      this.handlers = {}
-      this.ping = vi.fn()
-      this.close = vi.fn(() => {
-        this.readyState = 3
-        this.onclose?.()
-      })
-      this.on = vi.fn((event, handler) => {
-        this.handlers[event] = handler
-      })
-      this.removeListener = vi.fn((event, handler) => {
-        if (this.handlers[event] === handler) {
-          delete this.handlers[event]
-        }
-      })
-      wsInstances.push(this)
+      emit(event, ...args) {
+        this.handlers[event]?.(...args)
+      }
     }
-
-    emit(event, ...args) {
-      this.handlers[event]?.(...args)
-    }
-  }
+    MockWebSocket.OPEN = 1
+    MockWebSocket.CLOSED = 3
+    return MockWebSocket
+  })()
 }))
 
 vi.mock('../../src/main/store', () => ({
@@ -158,6 +160,44 @@ describe('wsClient message normalization', () => {
     expect(isValidWsMessage(undefined)).toBe(false)
     expect(isValidWsMessage('string')).toBe(false)
     expect(isValidWsMessage(42)).toBe(false)
+  })
+
+  it('backfills INIT messages without incrementing authoritative unread counts', async () => {
+    const { saveMessageBatch } = await import('../../src/main/db/ChatMessageModel')
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onmessage({
+      data: JSON.stringify({
+        messageType: 0,
+        extendData: {
+          chatSessionList: [{ contactId: 'u2', noReadCount: 3 }],
+          chatMessageList: [
+            {
+              messageId: 10,
+              sessionId: 's1',
+              contactId: 'u2',
+              contactType: 0,
+              messageType: 2,
+              sendUserId: 'u2'
+            }
+          ]
+        }
+      })
+    })
+
+    await vi.waitFor(() => {
+      expect(saveMessageBatch).toHaveBeenCalledWith(
+        expect.any(Array),
+        { incrementUnread: false }
+      )
+    })
+    await closeWs()
   })
 
   it('rejects messages with invalid messageType', async () => {

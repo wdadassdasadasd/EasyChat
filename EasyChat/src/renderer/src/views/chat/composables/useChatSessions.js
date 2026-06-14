@@ -13,14 +13,17 @@ export const useChatSessions = ({ proxy, route }) => {
   // Chat.vue 注入真正的选中会话处理函数；这里保持会话模块和消息模块解耦。
   let selectSession = () => {}
   let loadSessionDataHandler = null
+  let deleteChatSessionHandler = null
   let markSessionReadHandler = null
   let topChatSessionHandler = null
   let unsubscribeLoadSessionData = null
+  let unsubscribeDeleteChatSession = null
   let unsubscribeMarkSessionRead = null
   let unsubscribeTopChatSession = null
   // 标记已读的待确认操作映射：contactId → { previousNoReadCount, timeoutTimer }
   const pendingReadMap = new Map()
   const pendingTopMap = new Map()
+  const pendingDeleteMap = new Map()
 
   const hasCurrentChat = computed(() => Object.keys(currentChatSession.value).length > 0)
 
@@ -205,6 +208,23 @@ export const useChatSessions = ({ proxy, route }) => {
     }
     unsubscribeLoadSessionData = window.api.onLoadSessionDataCallback(loadSessionDataHandler)
 
+    deleteChatSessionHandler = (data = {}) => {
+      const contactId = String(data?.contactId || '')
+      if (!contactId) return
+
+      const entry = pendingDeleteMap.get(contactId)
+      if (!entry) return
+
+      clearTimeout(entry.timeoutTimer)
+      pendingDeleteMap.delete(contactId)
+      if (!data?.success) {
+        entry.rollback()
+      }
+    }
+    unsubscribeDeleteChatSession = window.api.onDelChatSessionCallback(
+      deleteChatSessionHandler
+    )
+
     // 单一定时监听器：用 pendingReadMap 匹配 contactId，避免 O(n²) 链式重注册。
     markSessionReadHandler = (data = {}) => {
       const contactId = String(data?.contactId || '')
@@ -251,6 +271,11 @@ export const useChatSessions = ({ proxy, route }) => {
       unsubscribeMarkSessionRead = null
       markSessionReadHandler = null
     }
+    if (deleteChatSessionHandler) {
+      unsubscribeDeleteChatSession?.()
+      unsubscribeDeleteChatSession = null
+      deleteChatSessionHandler = null
+    }
     if (topChatSessionHandler) {
       unsubscribeTopChatSession?.()
       unsubscribeTopChatSession = null
@@ -265,6 +290,10 @@ export const useChatSessions = ({ proxy, route }) => {
       clearTimeout(entry.timeoutTimer)
     })
     pendingTopMap.clear()
+    pendingDeleteMap.forEach((entry) => {
+      clearTimeout(entry.timeoutTimer)
+    })
+    pendingDeleteMap.clear()
   }
 
   const applySessionTopType = (contactId, topType) => {
@@ -464,10 +493,51 @@ export const useChatSessions = ({ proxy, route }) => {
 
   const delChatSession = (contactId) => {
     // 删除会话只是隐藏会话入口，消息记录仍由清空记录链路单独处理。
+    const contactKey = String(contactId)
+    const sessionIndex = chatSessionList.value.findIndex(
+      (item) => String(item.contactId) === contactKey
+    )
+    const sessionSnapshot =
+      sessionIndex >= 0 ? { ...chatSessionList.value[sessionIndex] } : null
+    const currentSnapshot =
+      String(currentChatSession.value.contactId || '') === contactKey
+        ? { ...currentChatSession.value }
+        : null
+
     delChatSessionList(contactId)
     if (currentChatSession.value.contactId == contactId) {
       currentChatSession.value = {}
     }
+
+    const rollback = () => {
+      if (
+        sessionSnapshot &&
+        !chatSessionList.value.some((item) => String(item.contactId) === contactKey)
+      ) {
+        chatSessionList.value.splice(
+          Math.min(sessionIndex, chatSessionList.value.length),
+          0,
+          sessionSnapshot
+        )
+        sortChatSessionList(chatSessionList.value)
+      }
+      if (currentSnapshot) {
+        currentChatSession.value = currentSnapshot
+      }
+      proxy.Message.error('删除会话失败，已恢复。')
+    }
+    const entry = {
+      rollback,
+      timeoutTimer: null
+    }
+    entry.timeoutTimer = setTimeout(() => {
+      if (pendingDeleteMap.get(contactKey) !== entry) {
+        return
+      }
+      pendingDeleteMap.delete(contactKey)
+      rollback()
+    }, 5000)
+    pendingDeleteMap.set(contactKey, entry)
     window.api.sendDelChatSession(contactId)
   }
 

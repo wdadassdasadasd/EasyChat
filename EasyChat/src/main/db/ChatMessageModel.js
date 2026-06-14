@@ -394,7 +394,10 @@ const replacePendingMessage = async ({ localMessageId, message, chatSession } = 
   })
 }
 
-const saveMessageBatch = async (chatMessageList, { sessionRows = [] } = {}) => {
+const saveMessageBatch = async (
+  chatMessageList,
+  { sessionRows = [], incrementUnread = true } = {}
+) => {
   if (!Array.isArray(chatMessageList) || chatMessageList.length === 0) {
     return {
       savedCount: 0,
@@ -433,20 +436,22 @@ const saveMessageBatch = async (chatMessageList, { sessionRows = [] } = {}) => {
       })
     }
 
-    const chatSessionCountMap = {}
-    newMessageList.forEach((item) => {
-      if (item.sendUserId == store.getUserId()) {
-        return
-      }
-      const contactId = item.contactType == 1 ? item.contactId : item.sendUserId
-      chatSessionCountMap[contactId] = Number(chatSessionCountMap[contactId] || 0) + 1
-    })
-
-    for (let item in chatSessionCountMap) {
-      await incrementNoReadCountStrict({
-        contactId: item,
-        noReadCount: chatSessionCountMap[item]
+    if (incrementUnread) {
+      const chatSessionCountMap = {}
+      newMessageList.forEach((item) => {
+        if (item.sendUserId == store.getUserId()) {
+          return
+        }
+        const contactId = item.contactType == 1 ? item.contactId : item.sendUserId
+        chatSessionCountMap[contactId] = Number(chatSessionCountMap[contactId] || 0) + 1
       })
+
+      for (let item in chatSessionCountMap) {
+        await incrementNoReadCountStrict({
+          contactId: item,
+          noReadCount: chatSessionCountMap[item]
+        })
+      }
     }
 
     const messagesToSave = newMessageList.map((item) => ({
@@ -463,6 +468,17 @@ const saveMessageBatch = async (chatMessageList, { sessionRows = [] } = {}) => {
       savedMessages: messagesToSave
     }
   })
+}
+
+const isCurrentUserMessageFilePath = async (filePath) => {
+  if (!filePath) {
+    return false
+  }
+  const row = await queryOne(
+    'select file_path from chat_message where user_id=? and file_path=? limit 1',
+    [store.getUserId(), filePath]
+  )
+  return Boolean(row?.filePath)
 }
 
 const updateMessageStatus = (messageId, status = 1) => {
@@ -709,6 +725,7 @@ export {
   savePendingMessage,
   replacePendingMessage,
   saveMessageBatch,
+  isCurrentUserMessageFilePath,
   updateMessageStatus,
   updateLocalMessageStatus,
   selectMessageList,

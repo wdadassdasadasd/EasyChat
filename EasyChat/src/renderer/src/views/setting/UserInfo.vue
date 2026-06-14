@@ -136,7 +136,7 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, ref } from 'vue';
+import { getCurrentInstance, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import md5 from 'js-md5';
 import AreaSelect from '../../components/AreaSelect.vue';
