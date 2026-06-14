@@ -1,7 +1,6 @@
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
-    /**/
 }
 
 ::-webkit-scrollbar-track {
@@ -38,10 +37,7 @@ body,
 
 :root {
     --text: #494949;
-    --text2: #5c5c5c;
     --blue: #0471FF;
-    --bodyPadding: 10px;
-    --green: #97D47A;
 }
 
 .a-link {
@@ -50,48 +46,14 @@ body,
     color: #0471FF;
 }
 
-//重写tab
-.my-tab {
-    .el-tabs__nav-wrap {
-        &::after {
-            background: none;
-        }
-    }
-
-    .el-tabs__header {
-        margin: 0px;
-    }
-}
-
-//重写 收起展开
-.my-collapse {
-    .el-collapse-item__content {
-        padding-bottom: 0px;
-    }
-
-    .el-collapse-item__wrap,
-    .el-collapse,
-    .el-collapse-item__header {
-        border-bottom: none;
-    }
-}
-
 .el-message-box {
     -webkit-app-region: no-drag;
 }
 
-.top-panel {
-    .el-form-item {
-        margin-bottom: 0px;
-    }
-
-    .second-row {
-        margin-top: 5px;
-    }
-}
 .drag {
     -webkit-app-region: drag;
 }
+
 .no-drag {
     -webkit-app-region: no-drag;
 }

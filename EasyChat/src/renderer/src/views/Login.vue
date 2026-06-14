@@ -11,35 +11,35 @@
               <el-form-item prop="email">
                 <el-input size="large" clearable placeholder="请输入邮箱" v-model.trim="formData.email" maxlength="30" @focus="cleanVerify">
                   <template #prefix>
-                     <span class="iconfont icon-email"></span>
+                     <el-icon><Message /></el-icon>
                   </template>
                 </el-input>
               </el-form-item>
               <el-form-item prop="nickName" v-if="!isLogin">
                 <el-input size="large" clearable placeholder="请输入昵称" v-model.trim="formData.nickName" maxlength="15" @focus="cleanVerify">
                   <template #prefix>
-                     <span class="iconfont icon-user-nick"></span>
+                     <el-icon><User /></el-icon>
                   </template>
                 </el-input>
               </el-form-item>
               <el-form-item prop="password">
                 <el-input size="large" show-password clearable placeholder="请输入密码" v-model.trim="formData.password" @focus="cleanVerify">
                   <template #prefix>
-                     <span class="iconfont icon-password"></span>
+                     <el-icon><Lock /></el-icon>
                   </template>
                 </el-input>
               </el-form-item>
               <el-form-item prop="rePassword" v-if="!isLogin">
                 <el-input size="large" clearable placeholder="请再次输入密码" v-model.trim="formData.rePassword" @focus="cleanVerify">
                   <template #prefix>
-                     <span class="iconfont icon-password"></span>
+                     <el-icon><Lock /></el-icon>
                   </template>
                 </el-input>
               </el-form-item>
               <el-form-item prop="checkCode">
                  <el-input size="large" clearable placeholder="请输入验证码" v-model.trim="formData.checkCode" @focus="cleanVerify">
                   <template #prefix>
-                     <span class="iconfont icon-checkcode"></span>
+                     <el-icon><Key /></el-icon>
                   </template>
                   <template #suffix>
                     <img :src="checkCodeUrl" class="check-code" @click="changeCheckCode"/>
@@ -61,6 +61,7 @@
 
 <script setup>
 import { ref, nextTick, getCurrentInstance, onMounted, onBeforeUnmount } from 'vue';
+import { Key, Lock, Message, User } from '@element-plus/icons-vue';
 import md5 from 'js-md5';
 import {useUserInfoStore} from '@/stores/UserInfoStore.js';
 import { useRouter } from 'vue-router';
@@ -279,12 +280,6 @@ onBeforeUnmount(() => {
     display: flex;
     .input {
       flex: 1;
-    }
-    .icon-down {
-      margin-left: 3px;
-      width: 16px;
-      cursor: pointer;
-      border: none;
     }
   }
   .error-msg {

@@ -4,7 +4,6 @@ import ElementPlus from 'element-plus'
 
 import 'element-plus/dist/index.css'
 import '@imengyu/vue3-context-menu/lib/vue3-context-menu.css'
-import './assets/icon/iconfont.css'
 import './assets/base.scss'
 import './assets/cust-elementplus.scss'
 import * as Pinia from 'pinia'
