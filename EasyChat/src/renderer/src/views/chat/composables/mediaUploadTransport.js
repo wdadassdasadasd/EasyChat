@@ -223,14 +223,16 @@ export const uploadMediaFile = async ({
     clearTimeout(totalTimeout)
     signal?.removeEventListener('abort', abortFromCaller)
     if (timedOut) {
-      proxy.Request({
-        url: proxy.Api.uploadFileCancel,
-        params: { messageId: message.messageId, uploadId },
-        showLoading: false,
-        showError: false,
-        returnError: true,
-        timeout: chunkUploadTimeout
-      }).catch(() => {})
+      proxy
+        .Request({
+          url: proxy.Api.uploadFileCancel,
+          params: { messageId: message.messageId, uploadId },
+          showLoading: false,
+          showError: false,
+          returnError: true,
+          timeout: chunkUploadTimeout
+        })
+        .catch(() => {})
     }
   }
 }

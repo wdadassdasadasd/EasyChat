@@ -55,12 +55,29 @@ export const useVirtualMessageList = (messageList, { estimateHeight = 76, oversc
     }
   }
 
+  /**
+   * 基于消息类型返回更精确的初始估算高度，减小媒体消息首次渲染时的布局跳变。
+   * 已测量的消息直接返回缓存值。
+   */
+  const estimateHeightByType = (msg, fallback) => {
+    if (!msg) return fallback
+    // 媒体消息（messageType=5）：图片/视频/文件的渲染高度远大于纯文本
+    if (Number(msg.messageType) === 5) {
+      if (Number(msg.fileType) === 0) return 210 // 图片（含内边距）
+      if (Number(msg.fileType) === 1) return 170 // 视频（封面+内边距）
+      if (Number(msg.fileType) === 2) return 96 // 文件卡片
+    }
+    return fallback
+  }
+
   const getHeight = (index) => {
     const msg = messageList.value[index]
     if (!msg) {
       return estimateHeight
     }
-    return heightMap.value.get(getMessageKey(msg, index)) || estimateHeight
+    return (
+      heightMap.value.get(getMessageKey(msg, index)) || estimateHeightByType(msg, estimateHeight)
+    )
   }
 
   // 累积高度数组：acc[i] = 前 i 条消息的虚拟高度（acc[0] = 0）。
@@ -144,12 +161,20 @@ export const useVirtualMessageList = (messageList, { estimateHeight = 76, oversc
     return Math.max(0, total - endOffset)
   })
 
+  // 用 rAF 合并高频 scroll 事件，避免每 ~16ms 触发一次 computed 重算链：
+  // scrollTop → startIndex/endIndex → visibleMessages → visibleRenderList → 高度测量。
+  let scrollRafPending = false
   const handleScroll = (event) => {
     const target = event?.target
-    if (target) {
+    if (!target || scrollRafPending) {
+      return
+    }
+    scrollRafPending = true
+    requestAnimationFrame(() => {
+      scrollRafPending = false
       scrollTop.value = target.scrollTop
       viewportHeight.value = target.clientHeight
-    }
+    })
   }
 
   const getEffectiveScrollHeight = (containerEl) => {
@@ -198,6 +223,7 @@ export const useVirtualMessageList = (messageList, { estimateHeight = 76, oversc
     getBottomGap,
     getScrollState,
     handleScroll,
+    heightMap,
     resetHeightMap,
     scrollToBottom,
     setMessageHeight,

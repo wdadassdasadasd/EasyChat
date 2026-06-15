@@ -148,7 +148,7 @@
 </template>
 
 <script setup>
-import { computed, getCurrentInstance, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, getCurrentInstance, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ChatDotRound, MoreFilled } from '@element-plus/icons-vue';
 import ChatMessageList from '@/components/chat/ChatMessageList.vue';
@@ -378,11 +378,14 @@ watch(
     totalUnreadCount,
     (count) => {
         // Main.vue 监听该全局事件，用于侧边栏聊天红点；真实未读数仍以会话列表状态为准。
-        window.dispatchEvent(new CustomEvent('chatUnreadCountChange', {
-            detail: {
-                count
-            }
-        }));
+        // 用 nextTick 推迟 dispatchEvent，避免高频消息推送时 O(n) reduce + 同步 DOM 事件阻塞渲染帧。
+        nextTick(() => {
+            window.dispatchEvent(new CustomEvent('chatUnreadCountChange', {
+                detail: {
+                    count
+                }
+            }));
+        });
     },
     {
         immediate: true

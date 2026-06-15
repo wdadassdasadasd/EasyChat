@@ -89,9 +89,7 @@ describe('ADB readiness and batch writes', () => {
 
     await expect(adb.dbReady).rejects.toThrow('init failed')
     await expect(adb.queryAll('select 1')).rejects.toThrow('init failed')
-    await expect(adb.insertOrReplaceManyStrict('chat_message', [])).rejects.toThrow(
-      'init failed'
-    )
+    await expect(adb.insertOrReplaceManyStrict('chat_message', [])).rejects.toThrow('init failed')
     expect(dbState.prepareCalls).toHaveLength(0)
   })
 

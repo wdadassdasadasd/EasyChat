@@ -28,7 +28,11 @@ const sanitize = (value, seen = new WeakSet()) => {
   }
   seen.add(value)
   if (value instanceof Error) {
-    return { name: value.name, message: sanitize(value.message), stack: sanitize(value.stack || '') }
+    return {
+      name: value.name,
+      message: sanitize(value.message),
+      stack: sanitize(value.stack || '')
+    }
   }
   if (Array.isArray(value)) {
     return value.map((item) => sanitize(item, seen))

@@ -202,8 +202,42 @@ export const useChatSessions = ({ proxy, route }) => {
       }
       // 主进程返回的是本地 SQLite 会话列表；renderer 补齐名称后再排序展示。
       const hydratedList = await hydrateSessionList(dataList || [])
-      sortChatSessionList(hydratedList)
-      chatSessionList.value = hydratedList
+
+      // 合并策略：内存会话为基础，DB 补缺且只升级 noReadCount。
+      // 内存中由 patchChatSessions 更新的 lastMessage/lastReceiveTime 比 DB 查询结果更新，
+      // 因为 DB 查询可能在消息入库事务提交前就已执行。全量替换会导致过期数据覆盖内存最新值。
+      const mergedMap = new Map()
+      chatSessionList.value.forEach((s) => {
+        if (s?.contactId) {
+          mergedMap.set(String(s.contactId), s)
+        }
+      })
+      hydratedList.forEach((s) => {
+        if (s?.contactId) {
+          const key = String(s.contactId)
+          const existing = mergedMap.get(key)
+          if (existing) {
+            // 只升级 noReadCount 取较大值，保留内存中的其他字段（lastMessage 等已被 patchChatSessions 更新）
+            existing.noReadCount = Math.max(
+              Number(existing.noReadCount || 0),
+              Number(s.noReadCount || 0)
+            )
+            // DB 可能拥有更新的 contactName（群改名等场景），做最小补全
+            if (s.contactName && s.contactName !== existing.contactName) {
+              existing.contactName = s.contactName
+            }
+            if (s.memberCount != null) {
+              existing.memberCount = s.memberCount
+            }
+            // existing 保持在 map 中，不替换
+          } else {
+            mergedMap.set(key, s)
+          }
+        }
+      })
+      const mergedList = Array.from(mergedMap.values())
+      sortChatSessionList(mergedList)
+      chatSessionList.value = mergedList
       openChatFromRoute()
     }
     unsubscribeLoadSessionData = window.api.onLoadSessionDataCallback(loadSessionDataHandler)
@@ -221,9 +255,7 @@ export const useChatSessions = ({ proxy, route }) => {
         entry.rollback()
       }
     }
-    unsubscribeDeleteChatSession = window.api.onDelChatSessionCallback(
-      deleteChatSessionHandler
-    )
+    unsubscribeDeleteChatSession = window.api.onDelChatSessionCallback(deleteChatSessionHandler)
 
     // 单一定时监听器：用 pendingReadMap 匹配 contactId，避免 O(n²) 链式重注册。
     markSessionReadHandler = (data = {}) => {
@@ -364,6 +396,8 @@ export const useChatSessions = ({ proxy, route }) => {
     const sessionList = Array.isArray(sessions) ? sessions : []
     const patchedGeneration = `patch-${++_patchReadGeneration}`
 
+    let orderChanged = false
+
     sessionList.forEach((rawSession = {}) => {
       if (!rawSession.contactId) {
         return
@@ -389,6 +423,15 @@ export const useChatSessions = ({ proxy, route }) => {
         }
       } else if (sessionInfo.noReadCount == null && previous.noReadCount != null) {
         nextSession.noReadCount = previous.noReadCount
+      } else if (
+        sessionInfo.noReadCount === 0 &&
+        Number(noReadCountDelta) === 0 &&
+        !readContactIdSet.has(contactId) &&
+        Number(previous.noReadCount || 0) > 0
+      ) {
+        // 防御：显式 noReadCount=0 未伴随 readContactIds 或 delta 时，
+        // 不覆盖内存中已有的正数未读数（防止发送确认等非读清零路径误清零）。
+        nextSession.noReadCount = previous.noReadCount
       }
       if (pendingRead && sessionInfo.noReadCount != null && Number(noReadCountDelta) === 0) {
         pendingRead.hasAuthoritativePatch = true
@@ -399,6 +442,14 @@ export const useChatSessions = ({ proxy, route }) => {
         nextSession._readGeneration = patchedGeneration
       }
 
+      // 仅 topType / lastReceiveTime 变更才需要重排，减少高频消息推送时的 O(n log n) 排序开销
+      if (
+        nextSession.topType !== previous.topType ||
+        nextSession.lastReceiveTime !== previous.lastReceiveTime
+      ) {
+        orderChanged = true
+      }
+
       if (index >= 0) {
         chatSessionList.value[index] = nextSession
       } else {
@@ -407,7 +458,9 @@ export const useChatSessions = ({ proxy, route }) => {
       syncCurrentSession(nextSession)
     })
 
-    sortChatSessionList(chatSessionList.value)
+    if (orderChanged) {
+      sortChatSessionList(chatSessionList.value)
+    }
   }
 
   let _readGeneration = 0
@@ -449,9 +502,7 @@ export const useChatSessions = ({ proxy, route }) => {
       if (targetSession) {
         targetSession.noReadCount = restoredNoReadCount
       }
-      if (
-        String(currentChatSession.value.contactId || '') === contactKey
-      ) {
+      if (String(currentChatSession.value.contactId || '') === contactKey) {
         currentChatSession.value = Object.assign({}, currentChatSession.value, {
           noReadCount: restoredNoReadCount
         })
@@ -497,8 +548,7 @@ export const useChatSessions = ({ proxy, route }) => {
     const sessionIndex = chatSessionList.value.findIndex(
       (item) => String(item.contactId) === contactKey
     )
-    const sessionSnapshot =
-      sessionIndex >= 0 ? { ...chatSessionList.value[sessionIndex] } : null
+    const sessionSnapshot = sessionIndex >= 0 ? { ...chatSessionList.value[sessionIndex] } : null
     const currentSnapshot =
       String(currentChatSession.value.contactId || '') === contactKey
         ? { ...currentChatSession.value }

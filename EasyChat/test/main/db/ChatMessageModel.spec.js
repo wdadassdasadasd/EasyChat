@@ -40,9 +40,7 @@ vi.mock('../../../src/main/db/ADB', () => ({
   }),
   queryOne: vi.fn(async (sql, params = []) => {
     if (sql.includes('file_path')) {
-      return params[1] === 'D:/allowed/video.mp4'
-        ? { filePath: 'D:/allowed/video.mp4' }
-        : null
+      return params[1] === 'D:/allowed/video.mp4' ? { filePath: 'D:/allowed/video.mp4' } : null
     }
     if (sql.includes('chat_session_user')) {
       return {
@@ -144,9 +142,7 @@ describe('ChatMessageModel saveMessageBatch', () => {
 
 describe('ChatMessageModel local file authorization', () => {
   it('matches file paths only within the current user message records', async () => {
-    const { isCurrentUserMessageFilePath } = await import(
-      '../../../src/main/db/ChatMessageModel'
-    )
+    const { isCurrentUserMessageFilePath } = await import('../../../src/main/db/ChatMessageModel')
 
     await expect(isCurrentUserMessageFilePath('D:/allowed/video.mp4')).resolves.toBe(true)
     await expect(isCurrentUserMessageFilePath('D:/other/video.mp4')).resolves.toBe(false)
@@ -342,9 +338,8 @@ describe('ChatMessageModel clearMessageAndSessionSummaryBySessionId', () => {
 
   it('clears cursor, messages, and session summary in one transaction', async () => {
     const { runInTransaction } = await import('../../../src/main/db/ADB')
-    const { clearMessageAndSessionSummaryBySessionId } = await import(
-      '../../../src/main/db/ChatMessageModel'
-    )
+    const { clearMessageAndSessionSummaryBySessionId } =
+      await import('../../../src/main/db/ChatMessageModel')
 
     const session = await clearMessageAndSessionSummaryBySessionId('s1')
 
@@ -361,9 +356,8 @@ describe('ChatMessageModel clearMessageAndSessionSummaryBySessionId', () => {
   })
 
   it('returns null for empty sessionId', async () => {
-    const { clearMessageAndSessionSummaryBySessionId } = await import(
-      '../../../src/main/db/ChatMessageModel'
-    )
+    const { clearMessageAndSessionSummaryBySessionId } =
+      await import('../../../src/main/db/ChatMessageModel')
 
     await expect(clearMessageAndSessionSummaryBySessionId('')).resolves.toBeNull()
   })
@@ -371,18 +365,16 @@ describe('ChatMessageModel clearMessageAndSessionSummaryBySessionId', () => {
 
 describe('ChatMessageModel selectMessageContextByMessageId', () => {
   it('returns empty array when sessionId is missing', async () => {
-    const { selectMessageContextByMessageId } = await import(
-      '../../../src/main/db/ChatMessageModel'
-    )
+    const { selectMessageContextByMessageId } =
+      await import('../../../src/main/db/ChatMessageModel')
 
     const result = await selectMessageContextByMessageId({ messageId: 1 })
     expect(result).toEqual([])
   })
 
   it('returns empty array when messageId is missing', async () => {
-    const { selectMessageContextByMessageId } = await import(
-      '../../../src/main/db/ChatMessageModel'
-    )
+    const { selectMessageContextByMessageId } =
+      await import('../../../src/main/db/ChatMessageModel')
 
     const result = await selectMessageContextByMessageId({ sessionId: 's1' })
     expect(result).toEqual([])
@@ -454,9 +446,7 @@ describe('ChatMessageModel recoverStalePendingMessages', () => {
   })
 
   it('marks stale status=2 messages as failed', async () => {
-    const { recoverStalePendingMessages } = await import(
-      '../../../src/main/db/ChatMessageModel'
-    )
+    const { recoverStalePendingMessages } = await import('../../../src/main/db/ChatMessageModel')
 
     const result = await recoverStalePendingMessages({ timeoutMs: 60000 })
 

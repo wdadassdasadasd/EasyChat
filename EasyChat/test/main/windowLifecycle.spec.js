@@ -40,9 +40,9 @@ describe('openExternalHttpUrl', () => {
   it('opens only http and https URLs', async () => {
     const shell = { openExternal: vi.fn(async () => {}) }
 
-    await expect(
-      openExternalHttpUrl({ shell, url: 'https://example.com/help' })
-    ).resolves.toBe(true)
+    await expect(openExternalHttpUrl({ shell, url: 'https://example.com/help' })).resolves.toBe(
+      true
+    )
     await expect(
       openExternalHttpUrl({ shell, url: 'file:///C:/Windows/System32/calc.exe' })
     ).resolves.toBe(false)
@@ -55,8 +55,8 @@ describe('openExternalHttpUrl', () => {
   it('contains external-open failures', async () => {
     const shell = { openExternal: vi.fn(async () => Promise.reject(new Error('denied'))) }
 
-    await expect(
-      openExternalHttpUrl({ shell, url: 'https://example.com/help' })
-    ).resolves.toBe(false)
+    await expect(openExternalHttpUrl({ shell, url: 'https://example.com/help' })).resolves.toBe(
+      false
+    )
   })
 })

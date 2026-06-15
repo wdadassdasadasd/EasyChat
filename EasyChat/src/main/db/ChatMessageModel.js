@@ -105,10 +105,11 @@ const deleteFtsByMessageId = (messageId) => {
     return Promise.resolve(false)
   }
   return runFtsSafe(
-    () => runStrict('delete from chat_message_fts where user_id=? and message_id=?', [
-      store.getUserId(),
-      messageId
-    ]),
+    () =>
+      runStrict('delete from chat_message_fts where user_id=? and message_id=?', [
+        store.getUserId(),
+        messageId
+      ]),
     'delete fts message'
   )
 }
@@ -144,10 +145,11 @@ const deleteFtsBySessionId = (sessionId) => {
     return Promise.resolve(false)
   }
   return runFtsSafe(
-    () => runStrict('delete from chat_message_fts where user_id=? and session_id=?', [
-      store.getUserId(),
-      sessionId
-    ]),
+    () =>
+      runStrict('delete from chat_message_fts where user_id=? and session_id=?', [
+        store.getUserId(),
+        sessionId
+      ]),
     'delete fts session'
   )
 }
@@ -190,13 +192,25 @@ const filterVisibleMessages = async (messageList = []) => {
       return true
     }
     const clearMessageId = Number(clearInfo.clearMessageId || 0)
+    const clearTime = Number(clearInfo.clearTime || 0)
     const messageId = Number(message.messageId || 0)
-    if (clearMessageId > 0 && messageId > 0) {
+    const sendTime = Number(message.sendTime || 0)
+
+    // 消息满足任一可用条件即视为可见（OR 逻辑）：
+    // 防止仅依赖 messageId 在服务端 ID 回绕时错误隐藏新消息。
+    const hasIdFilter = clearMessageId > 0 && messageId > 0
+    const hasTimeFilter = clearTime > 0 && sendTime > 0
+
+    if (hasIdFilter && hasTimeFilter) {
+      return messageId > clearMessageId || sendTime > clearTime
+    }
+    if (hasIdFilter) {
       return messageId > clearMessageId
     }
-    const clearTime = Number(clearInfo.clearTime || 0)
-    const sendTime = Number(message.sendTime || 0)
-    return !(clearTime > 0 && sendTime > 0 && sendTime <= clearTime)
+    if (hasTimeFilter) {
+      return sendTime > clearTime
+    }
+    return true
   })
 }
 
@@ -247,17 +261,22 @@ const filterNewMessages = async (messageList = []) => {
   })
 }
 
+/**
+ * 向查询追加清空游标过滤条件。
+ * 使用 OR 逻辑：消息满足 messageId > clearMessageId 或 send_time > clearTime 任一条件即为可见，
+ * 防止仅依赖 messageId 在服务端 ID 回绕/异常时错误隐藏新消息。
+ */
 const appendClearFilter = (sqlParts, params, clearInfo) => {
   const clearMessageId = Number(clearInfo?.clearMessageId || 0)
   const clearTime = Number(clearInfo?.clearTime || 0)
 
-  if (clearMessageId > 0) {
+  if (clearMessageId > 0 && clearTime > 0) {
+    sqlParts.push('and (message_id>? or send_time is null or send_time>?)')
+    params.push(clearMessageId, clearTime)
+  } else if (clearMessageId > 0) {
     sqlParts.push('and message_id>?')
     params.push(clearMessageId)
-    return
-  }
-
-  if (clearTime > 0) {
+  } else if (clearTime > 0) {
     sqlParts.push('and (send_time is null or send_time>?)')
     params.push(clearTime)
   }
@@ -289,7 +308,7 @@ const upsertChatSessionPreservingState = async (session) => {
   const nextSession = {
     ...previous,
     ...session,
-    noReadCount: session.noReadCount ?? previous?.noReadCount,
+    noReadCount: session.noReadCount ?? previous?.noReadCount ?? 0,
     topType: session.topType ?? previous?.topType,
     status: session.status ?? previous?.status ?? 1,
     userId: store.getUserId()
@@ -320,7 +339,6 @@ const toSendSessionInfo = ({ message = {}, chatSession = {} } = {}) => {
     lastMessage: message.messageContent,
     lastReceiveTime: message.sendTime || Date.now(),
     memberCount: chatSession?.memberCount,
-    noReadCount: 0,
     topType: chatSession?.topType
   }
 }
@@ -502,8 +520,12 @@ const updateLocalMessageStatus = async ({ messageId, status, chatSession } = {})
 
     let session = null
     if (chatSession?.contactId) {
+      // 剥离 noReadCount，防止 renderer 快照中的未读数覆盖 DB 权威值。
+      // 未读数只能通过 markSessionRead / incrementNoReadCountStrict 修改。
+      const safeFields = { ...chatSession }
+      delete safeFields.noReadCount
       session = {
-        ...chatSession,
+        ...safeFields,
         status: chatSession.status ?? 1
       }
       session = await upsertChatSessionPreservingState(session)

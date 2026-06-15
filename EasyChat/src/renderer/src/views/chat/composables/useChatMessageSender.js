@@ -377,9 +377,7 @@ export const useChatMessageSender = ({
       return
     }
     if (messageContent.length > CHAT_CONSTANTS.MAX_MESSAGE_LENGTH) {
-      proxy.Message.warning(
-        `消息内容不能超过 ${CHAT_CONSTANTS.MAX_MESSAGE_LENGTH} 个字符。`
-      )
+      proxy.Message.warning(`消息内容不能超过 ${CHAT_CONSTANTS.MAX_MESSAGE_LENGTH} 个字符。`)
       return
     }
 
@@ -577,8 +575,7 @@ export const useChatMessageSender = ({
       uploadSourceId = sourceResult.uploadSourceId
     }
     const filePath = ''
-    const sourceFile =
-      typeof file.slice === 'function' ? file : { ...file, uploadSourceId }
+    const sourceFile = typeof file.slice === 'function' ? file : { ...file, uploadSourceId }
     const localMessage =
       retryMessage ||
       createPendingMessage({
@@ -790,9 +787,7 @@ export const useChatMessageSender = ({
           uploadCanceled: false
         })
           .then(() => {
-            enqueueUploadTask(() =>
-              uploadMessageFile(message, retryFile, message.retryCover)
-            )
+            enqueueUploadTask(() => uploadMessageFile(message, retryFile, message.retryCover))
           })
           .catch((error) => {
             console.error('retry media upload failed', error)

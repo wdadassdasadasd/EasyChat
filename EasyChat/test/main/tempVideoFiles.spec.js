@@ -12,10 +12,7 @@ vi.mock('fs', () => ({
   }
 }))
 
-import {
-  TEMP_VIDEO_RETENTION_MS,
-  cleanupExpiredTempVideos
-} from '../../src/main/tempVideoFiles'
+import { TEMP_VIDEO_RETENTION_MS, cleanupExpiredTempVideos } from '../../src/main/tempVideoFiles'
 
 const fileEntry = (name) => ({ name, isFile: () => true })
 
@@ -52,9 +49,7 @@ describe('temporary video cleanup', () => {
   it('continues when one expired file cannot be deleted', async () => {
     fsMocks.readdir.mockResolvedValue([fileEntry('locked.mp4'), fileEntry('removable.mp4')])
     fsMocks.stat.mockResolvedValue({ mtimeMs: 0 })
-    fsMocks.unlink
-      .mockRejectedValueOnce(new Error('locked'))
-      .mockResolvedValueOnce()
+    fsMocks.unlink.mockRejectedValueOnce(new Error('locked')).mockResolvedValueOnce()
 
     await expect(
       cleanupExpiredTempVideos({ tempRoot: 'D:/temp', now: 2 * TEMP_VIDEO_RETENTION_MS })

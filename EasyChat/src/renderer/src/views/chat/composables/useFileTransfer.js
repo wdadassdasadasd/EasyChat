@@ -78,7 +78,23 @@ export const useFileTransfer = ({ proxy }) => {
       showError: false
     })
     const streamUrl = result?.data?.streamUrl
-    return streamUrl ? getApiUrl(streamUrl) : ''
+    if (!streamUrl) {
+      console.error('[createDownloadUrl] Empty streamUrl from createDownloadToken', {
+        messageId: message.messageId,
+        download,
+        resultCode: result?.code
+      })
+      return ''
+    }
+    const fullUrl = getApiUrl(streamUrl)
+    if (!fullUrl) {
+      console.error('[createDownloadUrl] getApiUrl returned empty for streamUrl', {
+        streamUrl,
+        messageId: message.messageId
+      })
+      return ''
+    }
+    return fullUrl
   }
 
   const parseBlobError = async (blob) => {

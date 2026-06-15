@@ -1,9 +1,6 @@
 const isRequestFailure = (result) => Boolean(result && result.success === false)
 
-const getSendFailureMessage = (
-  result,
-  fallback = '消息发送失败，请检查网络后重试。'
-) => {
+const getSendFailureMessage = (result, fallback = '消息发送失败，请检查网络后重试。') => {
   if (!isRequestFailure(result)) {
     return fallback
   }

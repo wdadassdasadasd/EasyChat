@@ -106,10 +106,7 @@ const releaseUploadSource = ({ uploadSourceId } = {}) => {
   return { success: true, released: true }
 }
 
-const generateThumbnailFromPath = (
-  filePath,
-  { timeoutMs = FFMPEG_THUMBNAIL_TIMEOUT_MS } = {}
-) => {
+const generateThumbnailFromPath = (filePath, { timeoutMs = FFMPEG_THUMBNAIL_TIMEOUT_MS } = {}) => {
   return new Promise((resolve) => {
     const chunks = []
     let settled = false

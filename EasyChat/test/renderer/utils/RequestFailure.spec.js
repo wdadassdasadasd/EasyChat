@@ -15,9 +15,9 @@ describe('request failure helpers', () => {
 
   it('maps send failures to actionable messages', () => {
     expect(getSendFailureMessage({ success: false, kind: 'timeout' })).toContain('发送超时')
-    expect(
-      getSendFailureMessage({ success: false, kind: 'api_code', msg: '服务端拒绝' })
-    ).toBe('服务端拒绝')
+    expect(getSendFailureMessage({ success: false, kind: 'api_code', msg: '服务端拒绝' })).toBe(
+      '服务端拒绝'
+    )
   })
 
   it('maps upload cancellation and timeout separately', () => {

@@ -51,7 +51,7 @@ import ChatMessage from './ChatMessage.vue'
 import { useVirtualMessageList } from '@/views/chat/composables/useVirtualMessageList'
 import { CHAT_CONSTANTS } from '@/utils/ChatConstants'
 
-const { LOAD_MORE_THRESHOLD, TIME_SEPARATOR_GAP, VIRTUAL_ESTIMATE_HEIGHT, VIRTUAL_OVERSCAN } =
+const { LOAD_MORE_THRESHOLD, TIME_SEPARATOR_GAP, VIRTUAL_ESTIMATE_HEIGHT, VIRTUAL_OVERSCAN, BOTTOM_GAP_TOLERANCE } =
   CHAT_CONSTANTS
 
 const emit = defineEmits([
@@ -143,6 +143,7 @@ const {
   getBottomGap: getVirtualBottomGap,
   getScrollState: getVirtualScrollState,
   handleScroll: onVirtualScroll,
+  heightMap,
   resetHeightMap,
   scrollToBottom: virtualScrollToBottom,
   setMessageHeight,
@@ -211,11 +212,28 @@ const handleScroll = (event) => {
 // 测量已渲染消息的实际高度，并回填到虚拟列表高度缓存。
 // 时间分割线没有独立的 data-msg-key，其高度并入后面第一条消息的测量值，
 // 这样虚拟列表的累积高度计算才能与实际 DOM 布局匹配。
+// M-29: 高度变化时自动补偿 scrollTop，防止媒体消息实测高度与估算值差异导致滚动跳变。
 const measureVisibleHeights = async () => {
   await nextTick()
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
   const panel = messagePanelRef.value
   if (!panel) return
+
+  // 记录视口顶部第一条可见消息作为锚点，以便在高度变化后稳定滚动位置。
+  let anchorMsgKey = null
+  let anchorViewportTop = 0
+  const panelRect = panel.getBoundingClientRect()
+  const allRows = panel.querySelectorAll('[data-msg-key]')
+  for (const row of allRows) {
+    const rect = row.getBoundingClientRect()
+    if (rect.bottom > panelRect.top + 10) {
+      anchorMsgKey = row.dataset.msgKey || null
+      anchorViewportTop = rect.top - panelRect.top
+      break
+    }
+  }
+
+  let anyHeightChanged = false
   const rows = panel.querySelectorAll('[data-msg-key]')
   rows.forEach((row) => {
     const msgKey = row.dataset.msgKey
@@ -227,9 +245,34 @@ const measureVisibleHeights = async () => {
       if (prevSibling && prevSibling.classList.contains('message-time-divider')) {
         extraHeight = prevSibling.offsetHeight
       }
-      setMessageHeight(item.message, item.msgIndex, row.offsetHeight + extraHeight)
+      const measuredHeight = row.offsetHeight + extraHeight
+      const map = heightMap.value
+      const prev = map.get(msgKey)
+      if (prev !== measuredHeight) {
+        setMessageHeight(item.message, item.msgIndex, measuredHeight)
+        anyHeightChanged = true
+      }
     }
   })
+
+  // 高度修正导致布局变化时，利用锚点消息稳定视口位置，避免阅读中内容跳变。
+  if (anyHeightChanged && anchorMsgKey) {
+    await nextTick()
+    const anchorEl = document.querySelector(`[data-msg-key="${anchorMsgKey}"]`)
+    if (anchorEl) {
+      const newRect = anchorEl.getBoundingClientRect()
+      const newPanelRect = panel.getBoundingClientRect()
+      const newOffset = newRect.top - newPanelRect.top
+      const delta = newOffset - anchorViewportTop
+      if (Math.abs(delta) > 2) {
+        // 仅在用户未触底时补偿，避免干扰贴底模式的新消息接收。
+        const bottomGap = getVirtualBottomGap(panel)
+        if (bottomGap > BOTTOM_GAP_TOLERANCE) {
+          panel.scrollTop = panel.scrollTop + delta
+        }
+      }
+    }
+  }
 }
 
 // 每次可见消息变化后重新测量高度。

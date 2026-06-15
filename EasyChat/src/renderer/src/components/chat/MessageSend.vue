@@ -94,7 +94,7 @@
 
             <el-input
                 v-model="msgContent"
-                rows="5"
+                :rows="5"
                 type="textarea"
                 resize="none"
                 :maxlength="maxMessageLength"

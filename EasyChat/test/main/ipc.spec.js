@@ -333,9 +333,7 @@ describe('IPC: loadSessionData', () => {
     const calls = mockSender.send.mock.calls
     const sessionCall = calls.find((c) => c[0] === 'loadSessionDataCallback')
     expect(sessionCall).toBeDefined()
-    expect(sessionCall[1]).toEqual([
-      expect.objectContaining({ contactId: 'c1', sessionId: 's1' })
-    ])
+    expect(sessionCall[1]).toEqual([expect.objectContaining({ contactId: 'c1', sessionId: 's1' })])
   })
 
   it('sends error callback when DB fails', async () => {
@@ -634,10 +632,10 @@ describe('IPC: upload sources', () => {
     const { readUploadSourceChunk } = await import('../../src/main/uploadSourceRegistry')
     ipcExports.onUploadSources()
 
-    const result = await mockIpcHandle.readUploadSourceChunk(
-      ipcEvent(),
-      { uploadSourceId: 'source-1', end: 1024 }
-    )
+    const result = await mockIpcHandle.readUploadSourceChunk(ipcEvent(), {
+      uploadSourceId: 'source-1',
+      end: 1024
+    })
 
     expect(result).toMatchObject({ success: false, kind: 'validation_error' })
     expect(readUploadSourceChunk).not.toHaveBeenCalled()
@@ -646,32 +644,26 @@ describe('IPC: upload sources', () => {
 
 describe('IPC: local video access', () => {
   it('rejects files that do not belong to the current user message history', async () => {
-    const { isCurrentUserMessageFilePath } = await import(
-      '../../src/main/db/ChatMessageModel'
-    )
+    const { isCurrentUserMessageFilePath } = await import('../../src/main/db/ChatMessageModel')
     isCurrentUserMessageFilePath.mockResolvedValueOnce(false)
     ipcExports.onOpenTempVideoFile()
 
-    const result = await mockIpcHandle.readLocalVideoFile(
-      ipcEvent(),
-      { filePath: '/tmp/exists.mp4' }
-    )
+    const result = await mockIpcHandle.readLocalVideoFile(ipcEvent(), {
+      filePath: '/tmp/exists.mp4'
+    })
 
     expect(result).toMatchObject({ success: false, kind: 'validation_error' })
   })
 
   it('does not open local videos outside the current user message history', async () => {
     const { shell } = await import('electron')
-    const { isCurrentUserMessageFilePath } = await import(
-      '../../src/main/db/ChatMessageModel'
-    )
+    const { isCurrentUserMessageFilePath } = await import('../../src/main/db/ChatMessageModel')
     isCurrentUserMessageFilePath.mockResolvedValueOnce(false)
     ipcExports.onOpenTempVideoFile()
 
-    const result = await mockIpcHandle.openLocalVideoFile(
-      ipcEvent(),
-      { filePath: '/tmp/exists.mp4' }
-    )
+    const result = await mockIpcHandle.openLocalVideoFile(ipcEvent(), {
+      filePath: '/tmp/exists.mp4'
+    })
 
     expect(result).toMatchObject({ success: false, kind: 'validation_error' })
     expect(shell.openPath).not.toHaveBeenCalled()
@@ -685,10 +677,9 @@ describe('IPC: local video access', () => {
     })
     ipcExports.onOpenTempVideoFile()
 
-    const result = await mockIpcHandle.readLocalVideoFile(
-      ipcEvent(),
-      { filePath: '/tmp/exists.mp4' }
-    )
+    const result = await mockIpcHandle.readLocalVideoFile(ipcEvent(), {
+      filePath: '/tmp/exists.mp4'
+    })
 
     expect(result).toMatchObject({ success: false, kind: 'validation_error' })
     expect(fs.promises.readFile).not.toHaveBeenCalled()
@@ -796,10 +787,7 @@ describe('IPC: openDownloadedFile', () => {
     const { shell } = await import('electron')
     ipcExports.onChatFileDownload()
 
-    const result = await mockIpcHandle.openDownloadedFile(
-      {},
-      { filePath: '/tmp/outside.mp4' }
-    )
+    const result = await mockIpcHandle.openDownloadedFile({}, { filePath: '/tmp/outside.mp4' })
 
     expect(result).toMatchObject({ success: false, kind: 'validation_error' })
     expect(shell.openPath).not.toHaveBeenCalled()
@@ -809,10 +797,7 @@ describe('IPC: openDownloadedFile', () => {
     const { shell } = await import('electron')
     ipcExports.onChatFileDownload()
 
-    const result = await mockIpcHandle.openDownloadedFile(
-      {},
-      { filePath: '/tmp/chat/file.mp4' }
-    )
+    const result = await mockIpcHandle.openDownloadedFile({}, { filePath: '/tmp/chat/file.mp4' })
 
     expect(result.success).toBe(true)
     expect(shell.openPath).toHaveBeenCalledWith('/tmp/chat/file.mp4')

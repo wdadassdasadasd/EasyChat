@@ -32,15 +32,15 @@ const formData=ref({});
 const rules={};
 
 const checkUpdate=()=>{
-    proxy.Message.info('当前已是最新版本');
+    proxy.Message.warning('当前已是最新版本');
 }
 
 const changeFolder=()=>{
-    proxy.Message.info('请在文件管理中修改文件保存位置');
+    proxy.Message.warning('请在文件管理中修改文件保存位置');
 }
 
 const openLocalFolder=()=>{
-    proxy.Message.info('请在文件管理中打开文件夹');
+    proxy.Message.warning('请在文件管理中打开文件夹');
 }
 
 </script>

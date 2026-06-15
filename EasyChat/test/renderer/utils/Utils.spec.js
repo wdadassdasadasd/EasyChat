@@ -158,7 +158,9 @@ describe('message type detection', () => {
 
 describe('getFileMessageName', () => {
   it('returns fileName if present', () => {
-    expect(Utils.getFileMessageName({ fileName: 'doc.pdf', messageContent: 'fallback' })).toBe('doc.pdf')
+    expect(Utils.getFileMessageName({ fileName: 'doc.pdf', messageContent: 'fallback' })).toBe(
+      'doc.pdf'
+    )
   })
 
   it('falls back to messageContent', () => {
@@ -184,7 +186,9 @@ describe('isFileReceiveDisabled', () => {
   })
 
   it('disabled when uploading', () => {
-    expect(Utils.isFileReceiveDisabled({ messageType: 5, fileType: 2, status: 1, uploading: true })).toBe(true)
+    expect(
+      Utils.isFileReceiveDisabled({ messageType: 5, fileType: 2, status: 1, uploading: true })
+    ).toBe(true)
   })
 
   it('enabled for successful file message', () => {
@@ -208,7 +212,9 @@ describe('isVideoPreviewDisabled', () => {
 
 describe('getFileMessageStatusText', () => {
   it('shows uploading with progress', () => {
-    expect(Utils.getFileMessageStatusText({ uploading: true, uploadProgress: 50 })).toBe('上传中 50%')
+    expect(Utils.getFileMessageStatusText({ uploading: true, uploadProgress: 50 })).toBe(
+      '上传中 50%'
+    )
   })
 
   it('shows uploading without progress', () => {
@@ -224,7 +230,13 @@ describe('getFileMessageStatusText', () => {
   })
 
   it('shows downloading with progress', () => {
-    expect(Utils.getFileMessageStatusText({ status: 1, downloadStatus: 'downloading', downloadProgress: 75 })).toBe('下载中 75%')
+    expect(
+      Utils.getFileMessageStatusText({
+        status: 1,
+        downloadStatus: 'downloading',
+        downloadProgress: 75
+      })
+    ).toBe('下载中 75%')
   })
 
   it('shows downloaded', () => {

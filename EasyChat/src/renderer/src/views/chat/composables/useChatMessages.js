@@ -260,19 +260,43 @@ export const useChatMessages = ({
   const capturePrependScrollState = () => {
     // 优先走 ChatMessageList 暴露的虚拟列表 getScrollState，获取虚拟总高度。
     const messageList = messageListRef?.value
+    let scrollState = null
     if (messageList && typeof messageList.getScrollState === 'function') {
-      const state = messageList.getScrollState()
-      if (state) {
-        return state
+      scrollState = messageList.getScrollState()
+    }
+    if (!scrollState) {
+      const messagePanel = getMessagePanel()
+      if (!messagePanel) {
+        return null
+      }
+      scrollState = {
+        scrollHeight: messagePanel.scrollHeight,
+        scrollTop: messagePanel.scrollTop
       }
     }
+
+    // 记录视口顶部第一条可见消息作为锚点，prepend 后用它精确定位比高度差更可靠。
     const messagePanel = getMessagePanel()
-    if (!messagePanel) {
-      return null
+    let anchorMessageId = null
+    let anchorViewportTop = 0
+    if (messagePanel) {
+      const panelRect = messagePanel.getBoundingClientRect()
+      const rows = messagePanel.querySelectorAll('[data-msg-key]')
+      for (const row of rows) {
+        const rect = row.getBoundingClientRect()
+        // 找到第一个至少部分在视口内的消息行
+        if (rect.bottom > panelRect.top + 10) {
+          anchorMessageId = row.dataset.msgKey || null
+          anchorViewportTop = rect.top - panelRect.top
+          break
+        }
+      }
     }
+
     return {
-      scrollHeight: messagePanel.scrollHeight,
-      scrollTop: messagePanel.scrollTop
+      ...scrollState,
+      anchorMessageId,
+      anchorViewportTop
     }
   }
 
@@ -283,22 +307,54 @@ export const useChatMessages = ({
       return
     }
 
-    // 历史消息 prepend 后 scrollHeight 会变大，用高度差把视口还原到用户原来的阅读位置。
-    // 统一切换前后都走虚拟列表 getScrollState，避免虚拟高度和 DOM 高度混用导致偏移。
+    // 统一等待 Vue DOM 更新和浏览器布局完成。
     await nextTick()
-    await new Promise((resolve) => {
-      window.requestAnimationFrame(() => {
-        const currentState = capturePrependScrollState()
-        if (currentState) {
-          const heightDiff = currentState.scrollHeight - scrollState.scrollHeight
-          const messagePanel = getMessagePanel()
-          if (messagePanel) {
-            messagePanel.scrollTop = scrollState.scrollTop + heightDiff
-          }
+    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+
+    const messagePanel = getMessagePanel()
+    if (!messagePanel) return
+
+    // Phase 1 — 锚点定位：找到 prepend 前视口顶部的消息，将其恢复到相同位置。
+    let restored = false
+    if (scrollState.anchorMessageId) {
+      const anchorEl = document.getElementById(`message${scrollState.anchorMessageId}`)
+      if (anchorEl) {
+        const panelRect = messagePanel.getBoundingClientRect()
+        const anchorRect = anchorEl.getBoundingClientRect()
+        const currentOffset = anchorRect.top - panelRect.top
+        const delta = currentOffset - scrollState.anchorViewportTop
+        messagePanel.scrollTop = messagePanel.scrollTop + delta
+        restored = true
+      }
+    }
+
+    // Fallback — 高度差补偿：锚点不可用时退化为高度差计算。
+    if (!restored) {
+      const currentState = capturePrependScrollState()
+      if (currentState) {
+        const heightDiff = currentState.scrollHeight - scrollState.scrollHeight
+        messagePanel.scrollTop = scrollState.scrollTop + Math.max(0, heightDiff)
+      }
+    }
+
+    // Phase 2 — 测量修正：等待虚拟列表高度测量完成后二次校正。
+    // measureVisibleHeights 通过 watch(visibleRenderList, flush: 'post') 触发，
+    // 内部使用 nextTick + rAF，需要额外等待 2 帧确保测量结果已反映到布局。
+    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+
+    if (scrollState.anchorMessageId) {
+      const anchorEl = document.getElementById(`message${scrollState.anchorMessageId}`)
+      if (anchorEl) {
+        const panelRect = messagePanel.getBoundingClientRect()
+        const anchorRect = anchorEl.getBoundingClientRect()
+        const currentOffset = anchorRect.top - panelRect.top
+        const delta = currentOffset - scrollState.anchorViewportTop
+        if (Math.abs(delta) > 3) {
+          messagePanel.scrollTop = messagePanel.scrollTop + delta
         }
-        resolve()
-      })
-    })
+      }
+    }
   }
 
   const loadChatMessage = ({ keepScrollPosition = false, refreshTail = false } = {}) => {
@@ -535,30 +591,6 @@ export const useChatMessages = ({
         handleFileUploadDone(message)
         return
       }
-      const receiveContactId = getReceiveContactId(message)
-      const isCurrentSession =
-        message.sessionId == currentChatSession.value.sessionId ||
-        receiveContactId == currentChatSession.value.contactId
-      if (isCurrentSession) {
-        markSessionRead?.(receiveContactId)
-        const exists = message.messageId != null && messageIdSet.has(String(message.messageId))
-        if (!exists) {
-          const shouldStickToBottom = isNearMessageBottom()
-          appendMessageIfMissing(message)
-          scrollMessageToBottom({ force: shouldStickToBottom })
-        }
-      }
-      const isSelfMsg = String(message.sendUserId) === String(currentUserId?.value)
-      patchChatSessions([
-        {
-          contactId: receiveContactId,
-          contactType: message.contactType,
-          sessionId: message.sessionId,
-          lastMessage: message.messageContent || '',
-          lastReceiveTime: message.sendTime || Date.now(),
-          noReadCountDelta: isCurrentSession || isSelfMsg ? 0 : 1
-        }
-      ])
     }
     unsubscribeReceiveMessage = window.api.onReceiveMessage(receiveMessageHandler)
 

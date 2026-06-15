@@ -18,7 +18,7 @@ const upsertSessionPreservingState = async (sessionInfo) => {
   const nextSession = {
     ...previous,
     ...sessionInfo,
-    noReadCount: sessionInfo.noReadCount ?? previous?.noReadCount,
+    noReadCount: sessionInfo.noReadCount ?? previous?.noReadCount ?? 0,
     topType: sessionInfo.topType ?? previous?.topType,
     status: sessionInfo.status ?? previous?.status ?? 1,
     userId: store.getUserId()

@@ -132,10 +132,7 @@ describe('wsClient message normalization', () => {
     const msg3 = { messageId: 3, sessionId: 's2', messageType: 2 }
 
     // Pass items as separate array elements, not nested in a single object
-    const result = normalizeWsMessages([
-      { dataList: [msg1] },
-      { chatMessageList: [msg2, msg3] }
-    ])
+    const result = normalizeWsMessages([{ dataList: [msg1] }, { chatMessageList: [msg2, msg3] }])
 
     expect(result).toHaveLength(3)
     const ids = result.map((m) => m.messageId).sort((a, b) => a - b)
@@ -192,10 +189,7 @@ describe('wsClient message normalization', () => {
     })
 
     await vi.waitFor(() => {
-      expect(saveMessageBatch).toHaveBeenCalledWith(
-        expect.any(Array),
-        { incrementUnread: false }
-      )
+      expect(saveMessageBatch).toHaveBeenCalledWith(expect.any(Array), { incrementUnread: false })
     })
     await closeWs()
   })
@@ -319,14 +313,14 @@ describe('wsClient message normalization', () => {
     expect(sender.send).toHaveBeenCalledWith(
       'receiveMessageBatch',
       expect.objectContaining({
-          kind: 'db_write_failed',
-          resyncRequired: true,
-          stats: expect.objectContaining({
-            diagnostics: expect.objectContaining({
-              dbErrorCount: 3
-            })
+        kind: 'db_write_failed',
+        resyncRequired: true,
+        stats: expect.objectContaining({
+          diagnostics: expect.objectContaining({
+            dbErrorCount: 3
           })
         })
+      })
     )
 
     await closeWs()
@@ -335,9 +329,8 @@ describe('wsClient message normalization', () => {
 
   it('emits recovery signal when a WebSocket message task times out', async () => {
     vi.useFakeTimers()
-    const { saveOrUpdateChatSessionBatch4Init } = await import(
-      '../../src/main/db/ChatSessionUserModel'
-    )
+    const { saveOrUpdateChatSessionBatch4Init } =
+      await import('../../src/main/db/ChatSessionUserModel')
     saveOrUpdateChatSessionBatch4Init.mockImplementation(() => new Promise(() => {}))
     const { initWs, closeWs } = await import('../../src/main/wsClient')
     const sender = {
@@ -375,9 +368,8 @@ describe('wsClient message normalization', () => {
 
   it('does not publish a stale INIT result after the runtime generation changes', async () => {
     vi.useFakeTimers()
-    const { saveOrUpdateChatSessionBatch4Init } = await import(
-      '../../src/main/db/ChatSessionUserModel'
-    )
+    const { saveOrUpdateChatSessionBatch4Init } =
+      await import('../../src/main/db/ChatSessionUserModel')
     let resolveInitSave
     saveOrUpdateChatSessionBatch4Init.mockImplementationOnce(
       () =>

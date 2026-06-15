@@ -74,9 +74,30 @@ const instance = axios.create({
 
 export const getApiUrl = (url = '') => {
   if (/^https?:\/\//i.test(url)) {
-    return url
+    try {
+      return new URL(url).toString()
+    } catch {
+      // 全量 URL 解析失败时尝试编码非 ASCII 字符后重试
+      try {
+        return new URL(encodeURI(url)).toString()
+      } catch {
+        return ''
+      }
+    }
   }
-  return `${baseDomain}/api${url}`
+  // 确保始终返回绝对 URL：优先使用环境变量域名，其次从页面 origin 推导
+  const base = baseDomain || (typeof window !== 'undefined' ? window.location.origin : '')
+  const full = `${base}/api${url}`
+  try {
+    return new URL(full).toString()
+  } catch {
+    // 路径或查询参数包含未编码字符时，使用 encodeURI 修复
+    try {
+      return new URL(encodeURI(full)).toString()
+    } catch {
+      return ''
+    }
+  }
 }
 
 const resetLoginState = async () => {
@@ -152,9 +173,6 @@ instance.interceptors.request.use(
 //请求后拦截器
 instance.interceptors.response.use(
   async (response) => {
-    if (import.meta.env.DEV) {
-      console.log('[Request调试] 响应URL:', response.config.url, '状态码:', response.status)
-    }
     const { showLoading, errorCallback, showError = true, responseType } = response.config
     if (showLoading) {
       hideLoadingIfDone()
@@ -252,9 +270,6 @@ const request = (config) => {
       localStorage.removeItem('userInfo')
     }
   }
-  if (import.meta.env.DEV) {
-    console.log('[Request调试] 请求URL:', url)
-  }
   // 登录/注册/验证码接口不需要鉴权，避免携带脏 token 触发后端异常
   if (url && url.startsWith('/account/')) {
     token = ''
@@ -264,6 +279,8 @@ const request = (config) => {
   }
   if (token) {
     headers.Authorization = `Bearer ${token}`
+    // Keep compatibility with the current EasyChat backend, which reads the raw token header.
+    headers.token = token
   }
   if (!shouldUseFormData) {
     headers['Content-Type'] = contentType

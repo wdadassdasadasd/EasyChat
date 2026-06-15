@@ -229,9 +229,7 @@ describe('useChatMessageSender', () => {
 
     expect(invokeSaveSendMessage).not.toHaveBeenCalled()
     expect(request).not.toHaveBeenCalled()
-    expect(proxy.Message.warning).toHaveBeenCalledWith(
-      '消息内容不能超过 500 个字符。'
-    )
+    expect(proxy.Message.warning).toHaveBeenCalledWith('消息内容不能超过 500 个字符。')
   })
 
   it('caps the send queue and releases a rejected media source', async () => {

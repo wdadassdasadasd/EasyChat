@@ -87,7 +87,12 @@ const requireUrl = (value, name, protocols) => {
   try {
     parsed = new URL(rawUrl)
   } catch {
-    fail(`${name} must be a valid URL`)
+    // 处理未编码的非 ASCII 字符（如中文文件名），encodeURI 不会破坏已编码的部分
+    try {
+      parsed = new URL(encodeURI(rawUrl))
+    } catch {
+      fail(`${name} must be a valid URL`)
+    }
   }
   if (!protocols.includes(parsed.protocol)) {
     fail(`${name} protocol must be one of: ${protocols.join(', ')}`)

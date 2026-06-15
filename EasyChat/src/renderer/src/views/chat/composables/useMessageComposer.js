@@ -324,15 +324,11 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
 
   const releasePendingUploadSource = (item) => {
     if (!item?.uploadSourceId) return
-    window.api
-      .invokeReleaseUploadSource({ uploadSourceId: item.uploadSourceId })
-      .catch(() => {})
+    window.api.invokeReleaseUploadSource({ uploadSourceId: item.uploadSourceId }).catch(() => {})
   }
 
   const removePendingFile = (id) => {
-    pendingFileList.value
-      .filter((item) => item.id === id)
-      .forEach(releasePendingUploadSource)
+    pendingFileList.value.filter((item) => item.id === id).forEach(releasePendingUploadSource)
     pendingFileList.value = pendingFileList.value.filter((item) => item.id !== id)
   }
 

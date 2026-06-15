@@ -201,7 +201,7 @@ const submit=async()=>{
     const screenHeight=window.screen.height;
 
     window.api.sendOpenChat({
-      email:result.data.email,
+      email:formData.value.email,
       token:result.data.token,
       userId:result.data.userId,
       nickName:result.data.nickName,

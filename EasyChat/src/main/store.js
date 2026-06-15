@@ -1,8 +1,5 @@
 import { createRequire } from 'module'
-import {
-  STORE_OBFUSCATION_KEY,
-  migratePlaintextStore
-} from './storeMigration.js'
+import { STORE_OBFUSCATION_KEY, migratePlaintextStore } from './storeMigration.js'
 
 const require = createRequire(import.meta.url)
 const Store = require('electron-store')

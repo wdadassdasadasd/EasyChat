@@ -246,6 +246,6 @@ if (process.contextIsolated) {
 } else {
   console.error(
     'contextIsolation is disabled — refusing to expose IPC APIs for security. ' +
-    'Enable contextIsolation in your BrowserWindow webPreferences.'
+      'Enable contextIsolation in your BrowserWindow webPreferences.'
   )
 }

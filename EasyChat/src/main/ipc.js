@@ -74,10 +74,7 @@ const saveLocalReplaceRecoveryQueue = (queue) => {
     store.deleteUserData(LOCAL_REPLACE_RECOVERY_KEY)
     return
   }
-  store.setUserData(
-    LOCAL_REPLACE_RECOVERY_KEY,
-    queue.slice(-MAX_LOCAL_REPLACE_RECOVERY_ITEMS)
-  )
+  store.setUserData(LOCAL_REPLACE_RECOVERY_KEY, queue.slice(-MAX_LOCAL_REPLACE_RECOVERY_ITEMS))
 }
 
 const getLocalReplaceRecoveryId = (payload = {}) => {
@@ -148,27 +145,26 @@ const onLoginSuccess = (mainWindow, callback) => {
   ipcMain.on('openChat', async (e, config) => {
     try {
       validateOpenChat(config)
-    } catch (error) {
-      console.error('IPC openChat rejected', error)
-      return
-    }
-    store.initUserId(config.userId)
-    store.setUserData('token', config.token)
-    await addUserSetting(config.userId, config.email)
-    try {
-      const replaceRecovery = await recoverLocalReplaceQueue()
-      if (replaceRecovery.recoveredCount) {
-        console.log(`Recovered local message replacements: ${replaceRecovery.recoveredCount}`)
+      store.initUserId(config.userId)
+      store.setUserData('token', config.token)
+      await addUserSetting(config.userId, config.email)
+      try {
+        const replaceRecovery = await recoverLocalReplaceQueue()
+        if (replaceRecovery.recoveredCount) {
+          console.log(`Recovered local message replacements: ${replaceRecovery.recoveredCount}`)
+        }
+        const result = await recoverStalePendingMessages()
+        if (result?.recoveredCount) {
+          console.log(`Recovered stale pending messages: ${result.recoveredCount}`)
+        }
+      } catch (error) {
+        console.error('Failed to recover stale pending messages', error)
       }
-      const result = await recoverStalePendingMessages()
-      if (result?.recoveredCount) {
-        console.log(`Recovered stale pending messages: ${result.recoveredCount}`)
-      }
+      await initWs(config, e.sender)
+      callback(config)
     } catch (error) {
-      console.error('Failed to recover stale pending messages', error)
+      console.error('IPC openChat failed', error)
     }
-    await initWs(config, e.sender)
-    callback(config)
   })
 }
 
@@ -226,11 +222,7 @@ const registerSafeIpcOn = (channel, callbackChannel, handler) => {
     } catch (error) {
       console.error(`IPC ${channel} failed`, error)
       const context =
-        error?.kind === 'validation_error'
-          ? {}
-          : data && typeof data === 'object'
-            ? data
-            : {}
+        error?.kind === 'validation_error' ? {} : data && typeof data === 'object' ? data : {}
       sendIpcError(e.sender, callbackChannel, error, context)
     }
   })
@@ -321,20 +313,16 @@ const onDelChatSessionSafe = () => {
 }
 
 const onTopChatSessionSafe = () => {
-  registerSafeIpcOn(
-    'topChatSession',
-    IPC_CALLBACK_CHANNELS.topChatSession,
-    async (e, data) => {
-      validateTopChatSession(data)
-      const { contactId, topType } = data
-      await topChatSession(contactId, topType)
-      e.sender.send(IPC_CALLBACK_CHANNELS.topChatSession, {
-        contactId,
-        topType,
-        success: true
-      })
-    }
-  )
+  registerSafeIpcOn('topChatSession', IPC_CALLBACK_CHANNELS.topChatSession, async (e, data) => {
+    validateTopChatSession(data)
+    const { contactId, topType } = data
+    await topChatSession(contactId, topType)
+    e.sender.send(IPC_CALLBACK_CHANNELS.topChatSession, {
+      contactId,
+      topType,
+      success: true
+    })
+  })
 }
 
 const onLoadChatMessage = () => {
@@ -372,18 +360,22 @@ const onLoadChatMessage = () => {
 }
 
 const onMarkSessionRead = () => {
-  registerSafeIpcOn('markSessionRead', IPC_CALLBACK_CHANNELS.markSessionRead, async (e, data = {}) => {
-    validateMarkSessionRead(data)
-    const contactId = typeof data === 'object' ? data.contactId : data
-    const operationId = typeof data === 'object' ? data.operationId : undefined
-    // 已读会同步清零本地会话未读数，renderer 收到新会话列表后红点也会随之刷新。
-    await markSessionRead(contactId)
-    e.sender.send(IPC_CALLBACK_CHANNELS.markSessionRead, {
-      contactId,
-      operationId,
-      success: true
-    })
-  })
+  registerSafeIpcOn(
+    'markSessionRead',
+    IPC_CALLBACK_CHANNELS.markSessionRead,
+    async (e, data = {}) => {
+      validateMarkSessionRead(data)
+      const contactId = typeof data === 'object' ? data.contactId : data
+      const operationId = typeof data === 'object' ? data.operationId : undefined
+      // 已读会同步清零本地会话未读数，renderer 收到新会话列表后红点也会随之刷新。
+      await markSessionRead(contactId)
+      e.sender.send(IPC_CALLBACK_CHANNELS.markSessionRead, {
+        contactId,
+        operationId,
+        success: true
+      })
+    }
+  )
 }
 
 const onResetToLogin = (_mainWindow, callback) => {
@@ -398,7 +390,11 @@ const onResetToLogin = (_mainWindow, callback) => {
   })
 
   ipcMain.on('reLogin', async () => {
-    await reset()
+    try {
+      await reset()
+    } catch (error) {
+      console.error('reLogin reset failed', error)
+    }
   })
 }
 
@@ -719,14 +715,14 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
             const redirectUrl = new URL(response.headers.location, normalizedUrl).toString()
             validateHttpUrl(redirectUrl)
             downloadToFile({
-                e,
-                fileName,
-                fileSize,
-                maxSize,
-                messageId,
-                url: redirectUrl,
-                _redirectDepth: _redirectDepth + 1
-              })
+              e,
+              fileName,
+              fileSize,
+              maxSize,
+              messageId,
+              url: redirectUrl,
+              _redirectDepth: _redirectDepth + 1
+            })
               .then(finish)
               .catch((error) => {
                 finish({ success: false, error: getErrorMessage(error) })

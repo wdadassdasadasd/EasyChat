@@ -164,10 +164,14 @@ describe('useChatSessions', () => {
     const secondOperation = sent.at(-1).data
 
     handlers.markSessionReadCallback({ ...firstOperation, success: false })
-    expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').noReadCount).toBe(0)
+    expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').noReadCount).toBe(
+      0
+    )
 
     handlers.markSessionReadCallback({ ...secondOperation, success: false })
-    expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').noReadCount).toBe(2)
+    expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').noReadCount).toBe(
+      2
+    )
   })
 
   it('keeps optimistic top state when topChatSession succeeds', () => {
@@ -240,5 +244,131 @@ describe('useChatSessions', () => {
     expect(api.unsubscribeDeleteChatSession).toHaveBeenCalled()
     expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').topType).toBe(1)
     expect(proxy.Message.error).not.toHaveBeenCalled()
+  })
+
+  describe('patchChatSessions unread count', () => {
+    it('increments noReadCount for existing session via noReadCountDelta', () => {
+      const { sessions } = createHarness()
+      // c1 starts with noReadCount=3
+      sessions.patchChatSessions([{ contactId: 'c1', noReadCountDelta: 2 }])
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c1').noReadCount).toBe(5)
+    })
+
+    it('creates new session with noReadCount equal to delta', () => {
+      const { sessions } = createHarness()
+      sessions.patchChatSessions([{ contactId: 'c3', noReadCountDelta: 3, lastReceiveTime: 300 }])
+      const created = sessions.chatSessionList.value.find((s) => s.contactId === 'c3')
+      expect(created).toBeTruthy()
+      expect(created.noReadCount).toBe(3)
+    })
+
+    it('zeros noReadCount when contactId is in readContactIds', () => {
+      const { sessions } = createHarness()
+      // c1 has noReadCount=3, should be zeroed regardless of delta
+      sessions.patchChatSessions([{ contactId: 'c1', noReadCountDelta: 2 }], {
+        readContactIds: ['c1']
+      })
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c1').noReadCount).toBe(0)
+    })
+
+    it('preserves positive noReadCount when explicit noReadCount=0 arrives without readContext', () => {
+      const { sessions } = createHarness()
+      // c1 has noReadCount=3, explicit noReadCount=0 should not overwrite it
+      // because there is no readContactIds and noReadCountDelta is 0 (default)
+      sessions.patchChatSessions([{ contactId: 'c1', noReadCount: 0 }])
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c1').noReadCount).toBe(3)
+    })
+
+    it('allows noReadCount=0 to pass through when memory also has 0', () => {
+      const { sessions } = createHarness()
+      // c2 has noReadCount=0, explicit noReadCount=0 should stay 0
+      sessions.patchChatSessions([{ contactId: 'c2', noReadCount: 0 }])
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c2').noReadCount).toBe(0)
+    })
+  })
+
+  describe('loadSessionDataHandler merge', () => {
+    it('uses DB noReadCount when it is higher than memory', async () => {
+      const { handlers, sessions } = createHarness()
+      sessions.registerSessionListener()
+      // Memory: c1 has noReadCount=3, DB returns 10 -- should use 10
+      await handlers.loadSessionDataCallback([
+        {
+          contactId: 'c1',
+          contactType: 0,
+          contactName: 'TestUser',
+          sessionId: 's1',
+          noReadCount: 10,
+          lastReceiveTime: 200,
+          status: 1
+        }
+      ])
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c1').noReadCount).toBe(10)
+    })
+
+    it('keeps memory noReadCount when it is higher than DB', async () => {
+      const { handlers, sessions } = createHarness()
+      sessions.registerSessionListener()
+      // Bump memory to 7 via patchChatSessions
+      sessions.patchChatSessions([{ contactId: 'c1', noReadCountDelta: 4 }])
+      // DB returns stale value 3
+      await handlers.loadSessionDataCallback([
+        {
+          contactId: 'c1',
+          contactType: 0,
+          contactName: 'TestUser',
+          sessionId: 's1',
+          noReadCount: 3,
+          lastReceiveTime: 200,
+          status: 1
+        }
+      ])
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c1').noReadCount).toBe(7)
+    })
+
+    it('adds new DB sessions not present in memory', async () => {
+      const { handlers, sessions } = createHarness()
+      sessions.registerSessionListener()
+      await handlers.loadSessionDataCallback([
+        {
+          contactId: 'c3',
+          contactType: 0,
+          contactName: 'NewUser',
+          sessionId: 's3',
+          noReadCount: 7,
+          lastReceiveTime: 300,
+          status: 1
+        }
+      ])
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c3').noReadCount).toBe(7)
+    })
+
+    it('preserves memory-only sessions absent from DB', async () => {
+      const { handlers, sessions } = createHarness()
+      sessions.registerSessionListener()
+      // Add a session only in memory
+      sessions.chatSessionList.value.unshift({
+        contactId: 'c3',
+        contactType: 0,
+        contactName: 'MemOnly',
+        noReadCount: 2,
+        status: 1,
+        lastReceiveTime: 100
+      })
+      // DB only returns c1
+      await handlers.loadSessionDataCallback([
+        {
+          contactId: 'c1',
+          contactType: 0,
+          contactName: 'TestUser',
+          sessionId: 's1',
+          noReadCount: 3,
+          lastReceiveTime: 200,
+          status: 1
+        }
+      ])
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c3')).toBeTruthy()
+      expect(sessions.chatSessionList.value.find((s) => s.contactId === 'c3').noReadCount).toBe(2)
+    })
   })
 })

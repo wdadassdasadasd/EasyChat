@@ -160,7 +160,7 @@ describe('Request returnError', () => {
     })
   })
 
-  it('sends only the standard bearer authorization header', async () => {
+  it('sends bearer and backend-compatible token headers', async () => {
     localStorage.setItem('userInfo', JSON.stringify({ token: 'token-1' }))
     postMock.mockResolvedValueOnce({ data: { code: 200 } })
     const request = (await import('@/utils/Request')).default
@@ -173,7 +173,7 @@ describe('Request returnError', () => {
 
     const requestConfig = postMock.mock.calls[0][2]
     expect(requestConfig.headers.Authorization).toBe('Bearer token-1')
-    expect(requestConfig.headers).not.toHaveProperty('token')
+    expect(requestConfig.headers.token).toBe('token-1')
   })
 
   it('does not send authorization to account endpoints', async () => {
@@ -187,7 +187,9 @@ describe('Request returnError', () => {
       showLoading: false
     })
 
-    expect(postMock.mock.calls[0][2].headers).not.toHaveProperty('Authorization')
+    const requestHeaders = postMock.mock.calls[0][2].headers
+    expect(requestHeaders).not.toHaveProperty('Authorization')
+    expect(requestHeaders).not.toHaveProperty('token')
   })
 
   it('deduplicates equivalent nested parameters regardless of object key order', async () => {

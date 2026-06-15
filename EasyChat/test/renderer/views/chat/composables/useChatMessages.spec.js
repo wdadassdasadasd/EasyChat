@@ -133,9 +133,9 @@ describe('useChatMessages receive flow', () => {
     }
 
     handlers.receiveMessageBatch({
-        messages: [currentMessage, otherMessage, currentMessage],
-        sessions: [{ contactId: 'u2', sessionId: 's1' }]
-      })
+      messages: [currentMessage, otherMessage, currentMessage],
+      sessions: [{ contactId: 'u2', sessionId: 's1' }]
+    })
 
     expect(chat.messageList.value).toEqual([currentMessage])
     expect(markSessionRead).toHaveBeenCalledWith('u2')
@@ -149,11 +149,11 @@ describe('useChatMessages receive flow', () => {
     currentChatSession.value = { contactId: 'u2', sessionId: 's1', contactType: 0 }
 
     await handlers.loadChatMessageCallback({
-        dataList: [{ messageId: 9, sessionId: 's2' }],
-        hasMore: false,
-        sessionId: 's2',
-        loadSeq: 1
-      })
+      dataList: [{ messageId: 9, sessionId: 's2' }],
+      hasMore: false,
+      sessionId: 's2',
+      loadSeq: 1
+    })
 
     expect(chat.messageList.value).toEqual([])
   })
@@ -162,9 +162,9 @@ describe('useChatMessages receive flow', () => {
     const { chat, handlers, proxy } = createHarness()
 
     handlers.receiveMessageBatch({
-        success: false,
-        error: 'db failed'
-      })
+      success: false,
+      error: 'db failed'
+    })
 
     expect(chat.messageList.value).toEqual([])
     expect(proxy.Message.error).toHaveBeenCalledWith('db failed')
@@ -174,12 +174,12 @@ describe('useChatMessages receive flow', () => {
     const { chat, handlers, loadChatSession, patchChatSessions, proxy, window } = createHarness()
 
     handlers.receiveMessageBatch({
-        success: false,
-        kind: 'queue_overflow',
-        resyncRequired: true,
-        error: '消息同步异常，正在尝试恢复。',
-        sessions: [{ contactId: 'u2', sessionId: 's1', lastMessage: 'latest' }]
-      })
+      success: false,
+      kind: 'queue_overflow',
+      resyncRequired: true,
+      error: '消息同步异常，正在尝试恢复。',
+      sessions: [{ contactId: 'u2', sessionId: 's1', lastMessage: 'latest' }]
+    })
 
     expect(chat.messageList.value).toEqual([])
     expect(proxy.Message.error).toHaveBeenCalledWith('消息同步异常，正在尝试恢复。')
@@ -207,20 +207,20 @@ describe('useChatMessages receive flow', () => {
     await vi.waitFor(() => expect(proxy.Request).toHaveBeenCalledTimes(1))
 
     handlers.receiveMessageBatch({
-        messages: [
-          {
-            messageId: 777,
-            sessionId: 's1',
-            contactId: 'u2',
-            contactType: 0,
-            messageType: 2,
-            messageContent: 'echo',
-            sendUserId: 'u1',
-            sendTime: 7000
-          }
-        ],
-        sessions: [{ contactId: 'u2', sessionId: 's1' }]
-      })
+      messages: [
+        {
+          messageId: 777,
+          sessionId: 's1',
+          contactId: 'u2',
+          contactType: 0,
+          messageType: 2,
+          messageContent: 'echo',
+          sendUserId: 'u1',
+          sendTime: 7000
+        }
+      ],
+      sessions: [{ contactId: 'u2', sessionId: 's1' }]
+    })
 
     expect(chat.messageList.value.map((message) => message.messageId)).toHaveLength(2)
 

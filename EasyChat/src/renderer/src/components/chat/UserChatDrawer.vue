@@ -7,10 +7,6 @@
                     <AvatarBase :userId="displayUserId" :width="46" :borderRadius="4" />
                     <div class="user-name">{{ displayUserName }}</div>
                 </div>
-                <button class="user-add" type="button" @click="showComingSoon">
-                    <span></span>
-                    <div>添加</div>
-                </button>
             </div>
 
             <div class="drawer-menu">
@@ -43,6 +39,7 @@
 </template>
 
 <script setup>
+import { ArrowRight } from '@element-plus/icons-vue'
 import { computed, getCurrentInstance, onBeforeUnmount, ref, toRef, watch } from 'vue';
 import AvatarBase from '@/components/AvatarBase.vue';
 import ChatMessageSearchDialog from '@/components/chat/ChatMessageSearchDialog.vue';
@@ -92,9 +89,7 @@ const isTopChat = computed(() => {
     return Number(props.currentChatSession.topType) === 1;
 });
 
-const showComingSoon = () => {
-    proxy.Message.warning('功能暂未开放');
-};
+
 
 const openSearchDialog = () => {
     if (!props.currentChatSession.sessionId) {
@@ -157,8 +152,7 @@ watch(
     border-bottom: 1px solid #ededed;
 }
 
-.user-item,
-.user-add {
+.user-item {
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -176,36 +170,6 @@ watch(
     white-space: nowrap;
 }
 
-.user-add {
-    border: none;
-    background: transparent;
-    cursor: pointer;
-
-    span {
-        position: relative;
-        width: 46px;
-        height: 46px;
-        border: 1px dashed #b8b8b8;
-        border-radius: 4px;
-        box-sizing: border-box;
-    }
-
-    span::before,
-    span::after {
-        content: '';
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        width: 18px;
-        height: 1px;
-        background: #9b9b9b;
-        transform: translate(-50%, -50%);
-    }
-
-    span::after {
-        transform: translate(-50%, -50%) rotate(90deg);
-    }
-}
 
 .drawer-menu {
     padding: 12px 0;

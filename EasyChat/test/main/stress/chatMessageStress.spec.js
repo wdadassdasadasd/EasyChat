@@ -136,7 +136,9 @@ vi.mock('../../../src/main/db/ADB', async () => {
         return sessionIds
           .map((sid) => {
             const info = mockClearInfoMap.get(String(sid))
-            return info ? { sessionId: sid, clearMessageId: info.clearMessageId, clearTime: info.clearTime } : null
+            return info
+              ? { sessionId: sid, clearMessageId: info.clearMessageId, clearTime: info.clearTime }
+              : null
           })
           .filter(Boolean)
       }
@@ -253,9 +255,7 @@ beforeEach(() => {
 
 describe('Stress: Database Write Queue', () => {
   it('should serialize concurrent writes and preserve order', async () => {
-    const { runInTransaction, insertOrReplaceStrict } = await import(
-      '../../../src/main/db/ADB'
-    )
+    const { runInTransaction, insertOrReplaceStrict } = await import('../../../src/main/db/ADB')
 
     const order = []
     const tasks = Array.from({ length: 100 }, (_, i) =>
@@ -304,9 +304,8 @@ describe('Stress: Database Write Queue', () => {
   })
 
   it('should maintain data integrity with interleaved reads and writes', async () => {
-    const { runInTransaction, insertOrReplaceStrict, queryOne } = await import(
-      '../../../src/main/db/ADB'
-    )
+    const { runInTransaction, insertOrReplaceStrict, queryOne } =
+      await import('../../../src/main/db/ADB')
 
     // 先写入一条会话数据
     mockSessionData['contact-a'] = {
@@ -605,9 +604,8 @@ describe('Stress: WebSocket Queue Mechanics', () => {
 
 describe('Stress: Chat Session Model Under Load', () => {
   it('should batch upsert many sessions without data loss', async () => {
-    const { saveOrUpdateChatSessionBatch4Init } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { saveOrUpdateChatSessionBatch4Init } =
+      await import('../../../src/main/db/ChatSessionUserModel')
 
     const sessions = Array.from({ length: 200 }, (_, i) => ({
       contactId: `contact-init-${i}`,
@@ -634,9 +632,8 @@ describe('Stress: Chat Session Model Under Load', () => {
   })
 
   it('should preserve existing unread count on re-initialization', async () => {
-    const { saveOrUpdateChatSessionBatch4Init } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { saveOrUpdateChatSessionBatch4Init } =
+      await import('../../../src/main/db/ChatSessionUserModel')
 
     mockSessionData['contact-preserve'] = {
       userId: fakeUserId,
@@ -665,9 +662,7 @@ describe('Stress: Chat Session Model Under Load', () => {
 
     await saveOrUpdateChatSessionBatch4Init(sessions)
 
-    const sessionWrite = insertedSessions.find(
-      (s) => s.contactId === 'contact-preserve'
-    )
+    const sessionWrite = insertedSessions.find((s) => s.contactId === 'contact-preserve')
     expect(sessionWrite).toBeDefined()
     expect(sessionWrite.noReadCount).toBe(42)
     expect(sessionWrite.topType).toBe(1)
@@ -796,9 +791,7 @@ describe('Stress: End-to-End Message Flow Simulation', () => {
 
     expect(statusResult.success).toBe(true)
 
-    const totalMessages = insertedMessages.filter(
-      (m) => m.sessionId === 'session-e2e'
-    )
+    const totalMessages = insertedMessages.filter((m) => m.sessionId === 'session-e2e')
     expect(totalMessages.length).toBeGreaterThanOrEqual(20)
   })
 
@@ -910,9 +903,7 @@ describe('Stress: End-to-End Message Flow Simulation', () => {
 
     expect(duration).toBeLessThan(30000)
 
-    const rapidMessages = insertedMessages.filter(
-      (m) => m.sessionId === 'session-rapid'
-    )
+    const rapidMessages = insertedMessages.filter((m) => m.sessionId === 'session-rapid')
     expect(rapidMessages.length).toBeGreaterThanOrEqual(150)
   })
 

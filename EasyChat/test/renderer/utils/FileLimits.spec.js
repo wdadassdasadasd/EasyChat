@@ -20,7 +20,20 @@ describe('getMediaKind', () => {
   })
 
   it('returns video for known video extensions', () => {
-    const exts = ['mp4', 'mov', 'webm', 'mkv', 'avi', 'flv', 'wmv', 'ogg', 'ogv', '3gp', 'm4v', 'rmvb']
+    const exts = [
+      'mp4',
+      'mov',
+      'webm',
+      'mkv',
+      'avi',
+      'flv',
+      'wmv',
+      'ogg',
+      'ogv',
+      '3gp',
+      'm4v',
+      'rmvb'
+    ]
     for (const ext of exts) {
       expect(getMediaKind({ name: `video.${ext}` }, undefined)).toBe('video')
     }

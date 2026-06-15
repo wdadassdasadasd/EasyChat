@@ -436,7 +436,7 @@ const flushReceiveQueue = async () => {
               return !failedSet.has(message)
             })
           } else {
-            void reconnect()
+            reconnect().catch((err) => console.error('reconnect failed', err))
           }
         }
         break
@@ -474,7 +474,7 @@ const enqueueReceiveMessages = async (messages, expectedGeneration) => {
     const persisted = await persistRecoveryMessages(droppedMessages, 'queue_overflow', error)
     if (!persisted) {
       recordWsError(error)
-      void reconnect()
+      reconnect().catch((err) => console.error('reconnect failed', err))
       return false
     }
     if (!isCurrentRuntimeGeneration(expectedGeneration)) {
@@ -525,13 +525,13 @@ const startHeartbeat = () => {
           })
           clearHeartbeatTimer()
           closeCurrentSocket()
-          void reconnect()
+          reconnect().catch((err) => console.error('reconnect failed', err))
         }, HEARTBEAT_PONG_TIMEOUT)
       } catch (error) {
         console.error('failed to send heartbeat ping', error)
         recordWsError(error)
         clearHeartbeatTimer()
-        void reconnect()
+        reconnect().catch((err) => console.error('reconnect failed', err))
       }
     }
   }
@@ -668,9 +668,14 @@ const handleSingleWsMessage = async (message, expectedGeneration) => {
       await saveOrUpdateChatSessionBatch4Init(chatSessionList)
       if (!isCurrentRuntimeGeneration(expectedGeneration)) return
 
+      // 检测服务端 INIT 是否提供了 noReadCount：若所有会话都缺少该字段，
+      // 说明服务端不提供权威未读数，此时 INIT 消息需要正常累加未读。
+      const serverHasNoReadCount = chatSessionList.every((s) => s.noReadCount == null)
       const chatMessageList = message.extendData?.chatMessageList || []
       // INIT 会话列表携带服务端权威未读数，最近消息仅用于本地回填，不能再次累加未读。
-      await saveMessageBatch(chatMessageList, { incrementUnread: false })
+      await saveMessageBatch(chatMessageList, {
+        incrementUnread: !serverHasNoReadCount ? false : true
+      })
       if (!isCurrentRuntimeGeneration(expectedGeneration)) return
       await updateNoReadCount(store.getUserId(), message.extendData?.contact?.applyCount || 0)
       if (!isCurrentRuntimeGeneration(expectedGeneration)) return
@@ -701,10 +706,7 @@ const handleWsMessage = async (payload, expectedGeneration) => {
   const messages = normalizeWsMessages(payload)
   let pendingRegularMessages = []
   const flushPendingRegularMessages = async () => {
-    if (
-      !pendingRegularMessages.length ||
-      !isCurrentRuntimeGeneration(expectedGeneration)
-    ) {
+    if (!pendingRegularMessages.length || !isCurrentRuntimeGeneration(expectedGeneration)) {
       return
     }
     await enqueueReceiveMessages(pendingRegularMessages, expectedGeneration)
@@ -746,7 +748,7 @@ const createWs = () => {
     console.error('failed to create WebSocket', error)
     recordWsError(error)
     lockReconnect = false
-    void reconnect()
+    reconnect().catch((err) => console.error('reconnect failed', err))
     return
   }
 
@@ -779,7 +781,7 @@ const createWs = () => {
   ws.onclose = function () {
     console.log('WebSocket closed, reconnecting')
     clearHeartbeatTimer()
-    void reconnect()
+    reconnect().catch((err) => console.error('reconnect failed', err))
   }
 
   ws.onerror = function (error) {
@@ -830,11 +832,4 @@ const reconnect = async () => {
   }
 }
 
-export {
-  buildWsUrl,
-  initWs,
-  closeWs,
-  normalizeWsMessages,
-  isValidWsMessage,
-  getWsDiagnostics
-}
+export { buildWsUrl, initWs, closeWs, normalizeWsMessages, isValidWsMessage, getWsDiagnostics }

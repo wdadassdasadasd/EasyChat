@@ -92,9 +92,8 @@ beforeEach(() => {
 
 describe('ChatSessionUserModel saveOrUpdateChatSessionBatch4Init', () => {
   it('preserves existing noReadCount and topType on re-init', async () => {
-    const { saveOrUpdateChatSessionBatch4Init } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { saveOrUpdateChatSessionBatch4Init } =
+      await import('../../../src/main/db/ChatSessionUserModel')
 
     await saveOrUpdateChatSessionBatch4Init([
       {
@@ -119,18 +118,16 @@ describe('ChatSessionUserModel saveOrUpdateChatSessionBatch4Init', () => {
   })
 
   it('handles empty array without error', async () => {
-    const { saveOrUpdateChatSessionBatch4Init } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { saveOrUpdateChatSessionBatch4Init } =
+      await import('../../../src/main/db/ChatSessionUserModel')
 
     await saveOrUpdateChatSessionBatch4Init([])
     expect(insertedRows).toHaveLength(0)
   })
 
   it('sets defaults for new sessions', async () => {
-    const { saveOrUpdateChatSessionBatch4Init } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { saveOrUpdateChatSessionBatch4Init } =
+      await import('../../../src/main/db/ChatSessionUserModel')
 
     await saveOrUpdateChatSessionBatch4Init([
       {
@@ -154,9 +151,7 @@ describe('ChatSessionUserModel saveOrUpdateChatSessionBatch4Init', () => {
 
 describe('ChatSessionUserModel selectUserSessionList', () => {
   it('returns only status=1 sessions', async () => {
-    const { selectUserSessionList } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { selectUserSessionList } = await import('../../../src/main/db/ChatSessionUserModel')
 
     const sessions = await selectUserSessionList()
     expect(sessions).toHaveLength(2)
@@ -168,18 +163,14 @@ describe('ChatSessionUserModel selectUserSessionList', () => {
 
 describe('ChatSessionUserModel markSessionRead', () => {
   it('calls updateNoReadCount with zero', async () => {
-    const { markSessionRead } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { markSessionRead } = await import('../../../src/main/db/ChatSessionUserModel')
 
     const result = await markSessionRead('c1')
     expect(result).toBe(1)
   })
 
   it('returns 0 for empty contactId', async () => {
-    const { markSessionRead } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { markSessionRead } = await import('../../../src/main/db/ChatSessionUserModel')
 
     const result = await markSessionRead('')
     expect(result).toBe(0)
@@ -188,9 +179,7 @@ describe('ChatSessionUserModel markSessionRead', () => {
 
 describe('ChatSessionUserModel delChatSession', () => {
   it('sets status to 0 (soft delete)', async () => {
-    const { delChatSession } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { delChatSession } = await import('../../../src/main/db/ChatSessionUserModel')
 
     const result = await delChatSession('c1')
     expect(result).toBe(1)
@@ -199,9 +188,7 @@ describe('ChatSessionUserModel delChatSession', () => {
 
 describe('ChatSessionUserModel topChatSession', () => {
   it('updates topType', async () => {
-    const { topChatSession } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { topChatSession } = await import('../../../src/main/db/ChatSessionUserModel')
 
     const result = await topChatSession('c1', 1)
     expect(result).toBe(1)
@@ -210,9 +197,8 @@ describe('ChatSessionUserModel topChatSession', () => {
 
 describe('ChatSessionUserModel clearChatSessionSummaryBySessionId', () => {
   it('clears lastMessage and noReadCount', async () => {
-    const { clearChatSessionSummaryBySessionId } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { clearChatSessionSummaryBySessionId } =
+      await import('../../../src/main/db/ChatSessionUserModel')
 
     const result = await clearChatSessionSummaryBySessionId('s1')
     expect(result).toBeTruthy()
@@ -221,18 +207,16 @@ describe('ChatSessionUserModel clearChatSessionSummaryBySessionId', () => {
   })
 
   it('returns null for empty sessionId', async () => {
-    const { clearChatSessionSummaryBySessionId } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { clearChatSessionSummaryBySessionId } =
+      await import('../../../src/main/db/ChatSessionUserModel')
 
     const result = await clearChatSessionSummaryBySessionId('')
     expect(result).toBeNull()
   })
 
   it('returns null for nonexistent session', async () => {
-    const { clearChatSessionSummaryBySessionId } = await import(
-      '../../../src/main/db/ChatSessionUserModel'
-    )
+    const { clearChatSessionSummaryBySessionId } =
+      await import('../../../src/main/db/ChatSessionUserModel')
 
     const result = await clearChatSessionSummaryBySessionId('s-nonexistent')
     expect(result).toBeNull()
