@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   getTotalUploadTimeout,
   uploadMediaFile
-} from '@/views/chat/composables/mediaUploadTransport'
+} from '@/utils/MediaUploadTransport'
 
 describe('mediaUploadTransport total timeout', () => {
   afterEach(() => {

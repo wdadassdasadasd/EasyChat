@@ -64,6 +64,30 @@ export const useChatMessages = ({
     })
   }
 
+  const collectMessageObjectUrls = (message = {}) => {
+    return new Set([message?.localPreviewUrl, message?.localCoverUrl].filter(Boolean))
+  }
+
+  const collectMessagesObjectUrls = (messages = []) => {
+    const urls = new Set()
+    messages.forEach((message) => {
+      collectMessageObjectUrls(message).forEach((url) => urls.add(url))
+    })
+    return urls
+  }
+
+  const revokeMessageObjectUrls = (message = {}, retainedUrls = new Set()) => {
+    collectMessageObjectUrls(message).forEach((url) => {
+      if (!retainedUrls.has(url)) {
+        URL.revokeObjectURL(url)
+      }
+    })
+  }
+
+  const revokeMessageObjectUrlsForList = (messages = []) => {
+    messages.forEach((message) => revokeMessageObjectUrls(message))
+  }
+
   const appendMessageIfMissing = (message) => {
     if (!message) {
       return false
@@ -108,12 +132,7 @@ export const useChatMessages = ({
     if (existingServerIndex !== -1) {
       const existingServerMessage = messageList.value[existingServerIndex]
       const mergedMessage = Object.assign({}, existingServerMessage, nextMessage)
-      if (
-        previousMessage?.localPreviewUrl &&
-        previousMessage.localPreviewUrl !== mergedMessage.localPreviewUrl
-      ) {
-        URL.revokeObjectURL(previousMessage.localPreviewUrl)
-      }
+      revokeMessageObjectUrls(previousMessage, collectMessageObjectUrls(mergedMessage))
       // 增量维护 messageIdSet：移除被 splice 位置的旧 ID，确保合并后位置的 ID 已注册
       if (previousMessage?.messageId != null) {
         messageIdSet.delete(String(previousMessage.messageId))
@@ -127,12 +146,7 @@ export const useChatMessages = ({
       return true
     }
 
-    if (
-      previousMessage?.localPreviewUrl &&
-      previousMessage.localPreviewUrl !== nextMessage.localPreviewUrl
-    ) {
-      URL.revokeObjectURL(previousMessage.localPreviewUrl)
-    }
+    revokeMessageObjectUrls(previousMessage, collectMessageObjectUrls(nextMessage))
     if (previousMessage?.messageId != null) {
       messageIdSet.delete(String(previousMessage.messageId))
     }
@@ -163,16 +177,9 @@ export const useChatMessages = ({
 
   const replaceMessageList = (messages = []) => {
     // 收集新列表中已有的 previewUrl，避免 revoke 旧列表时误杀新列表重用的 URL
-    const newPreviewUrls = new Set()
-    messages.forEach((message) => {
-      if (message.localPreviewUrl) {
-        newPreviewUrls.add(message.localPreviewUrl)
-      }
-    })
+    const retainedUrls = collectMessagesObjectUrls(messages)
     messageList.value.forEach((message) => {
-      if (message.localPreviewUrl && !newPreviewUrls.has(message.localPreviewUrl)) {
-        URL.revokeObjectURL(message.localPreviewUrl)
-      }
+      revokeMessageObjectUrls(message, retainedUrls)
     })
     messageList.value = messages
     rebuildMessageIdSet()
@@ -229,14 +236,6 @@ export const useChatMessages = ({
     scrollMessageToBottom
   })
 
-  const revokeMessagePreviewUrls = (messages = []) => {
-    messages.forEach((message) => {
-      if (message?.localPreviewUrl) {
-        URL.revokeObjectURL(message.localPreviewUrl)
-      }
-    })
-  }
-
   const resetVirtualHeightMap = () => {
     messageListRef?.value?.resetHeightMap?.()
   }
@@ -244,7 +243,7 @@ export const useChatMessages = ({
   const clearCurrentMessages = () => {
     // 清空当前会话后主动标记无更多数据，避免滚动到顶部又触发旧消息分页加载。
     startMessagePanelRender()
-    revokeMessagePreviewUrls(messageList.value)
+    revokeMessageObjectUrlsForList(messageList.value)
     messageList.value = []
     messageIdSet.clear()
     messageLoadingMore.value = false
@@ -403,7 +402,7 @@ export const useChatMessages = ({
       const shouldLoadMessages = !currentChatSession.value.sessionId && item.sessionId
       currentChatSession.value = Object.assign({}, currentChatSession.value, item)
       if (shouldLoadMessages) {
-        revokeMessagePreviewUrls(messageList.value)
+        revokeMessageObjectUrlsForList(messageList.value)
         messageList.value = []
         messageIdSet.clear()
         messageLoadingMore.value = false
@@ -420,7 +419,7 @@ export const useChatMessages = ({
     // 切换会话时重置分页游标和渲染序列，旧会话的滚动/分页状态不带入新会话。
     startMessagePanelRender()
     currentChatSession.value = Object.assign({}, item)
-    revokeMessagePreviewUrls(messageList.value)
+    revokeMessageObjectUrlsForList(messageList.value)
     messageList.value = []
     messageIdSet.clear()
     messageLoadingMore.value = false
@@ -639,11 +638,7 @@ export const useChatMessages = ({
     shouldScrollToBottomAfterLoad = false
     shouldScrollToBottomLoadSeq = null
     messageIdSet.clear()
-    messageList.value.forEach((message) => {
-      if (message.localPreviewUrl) {
-        URL.revokeObjectURL(message.localPreviewUrl)
-      }
-    })
+    revokeMessageObjectUrlsForList(messageList.value)
   }
 
   return {

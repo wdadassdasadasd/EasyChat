@@ -238,12 +238,18 @@ const getMessageContactId = (message = {}) => {
 
 const toSessionInfo = (message = {}) => {
   const contactId = getMessageContactId(message)
+  const isGroupMessage = Number(message.contactType) === 1
+  const contactName = isGroupMessage
+    ? message.contactName || message.groupName
+    : message.contactName || message.groupName || message.sendUserNickName
   return {
     contactId,
     contactType: message.contactType,
     sessionId: message.sessionId,
     status: 1,
-    contactName: message.contactName || message.groupName || message.sendUserNickName,
+    // Group messages do not always include the group name. Do not pass an
+    // undefined value to the session upsert, or it would erase a known name.
+    ...(contactName ? { contactName } : {}),
     lastMessage: message.messageContent,
     lastReceiveTime: message.sendTime || Date.now(),
     memberCount: message.memberCount,

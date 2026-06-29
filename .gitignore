@@ -7,3 +7,5 @@ logs/
 check.json
 cookies.txt
 .env
+.agents/
+AGENTS.md

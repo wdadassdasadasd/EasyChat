@@ -1,12 +1,12 @@
 import { createApp } from 'vue'
 import App from './App.vue'
-import ElementPlus from 'element-plus'
 
-import 'element-plus/dist/index.css'
 import '@imengyu/vue3-context-menu/lib/vue3-context-menu.css'
 import './assets/base.scss'
+import '@/utils/elementPlusStyles'
 import './assets/cust-elementplus.scss'
 import * as Pinia from 'pinia'
+import { installElementPlus } from '@/utils/elementPlus'
 import router from '@/router'
 import Utils from '@/utils/Utils.js'
 import Verify from '@/utils/Verify.js'
@@ -28,7 +28,7 @@ import { initializeRendererLogger } from './utils/Logger.js'
 initializeRendererLogger()
 const app = createApp(App)
 
-app.use(ElementPlus)
+installElementPlus(app)
 app.use(router)
 app.use(Pinia.createPinia())
 app.component('Layout', Layout)

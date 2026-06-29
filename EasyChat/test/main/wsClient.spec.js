@@ -322,7 +322,6 @@ describe('wsClient message normalization', () => {
         })
       })
     )
-
     await closeWs()
     vi.useRealTimers()
   })
@@ -505,6 +504,78 @@ describe('wsClient message normalization', () => {
         messages: expect.arrayContaining([expect.objectContaining({ messageId: 2 })])
       })
     )
+
+    await closeWs()
+    vi.useRealTimers()
+  })
+
+  it('does not overwrite group session name with sender nickname on receive', async () => {
+    vi.useFakeTimers()
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const { saveMessageBatch } = await import('../../src/main/db/ChatMessageModel')
+    saveMessageBatch.mockResolvedValueOnce({
+      savedMessages: [
+        {
+          messageId: 3,
+          sessionId: 'g1',
+          contactId: 'g-1',
+          contactType: 1,
+          messageType: 2,
+          messageContent: 'group hello',
+          sendUserId: 'u2',
+          sendUserNickName: 'Flower'
+        }
+      ]
+    })
+    const sender = {
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    }
+
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onopen()
+    socket.emit('pong')
+    socket.onmessage({
+      data: JSON.stringify({
+        messageId: 3,
+        sessionId: 'g1',
+        contactId: 'g-1',
+        contactType: 1,
+        messageType: 2,
+        messageContent: 'group hello',
+        sendUserId: 'u2',
+        sendUserNickName: 'Flower'
+      })
+    })
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(sender.send).toHaveBeenCalledWith(
+      'receiveMessageBatch',
+      expect.objectContaining({
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            contactId: 'g-1',
+            contactType: 1
+          })
+        ])
+      })
+    )
+    const sessionRows = saveMessageBatch.mock.calls[0][1].sessionRows
+    expect(
+      sessionRows([
+        {
+          messageId: 3,
+          sessionId: 'g1',
+          contactId: 'g-1',
+          contactType: 1,
+          messageType: 2,
+          messageContent: 'group hello',
+          sendUserId: 'u2',
+          sendUserNickName: 'Flower'
+        }
+      ])
+    ).toEqual([expect.not.objectContaining({ contactName: expect.anything() })])
 
     await closeWs()
     vi.useRealTimers()

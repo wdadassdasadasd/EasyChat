@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
 
-// P0-1/P0-2: 安全重构 — 只暴露业务白名单 API，不再暴露完整 ipcRenderer。
+//  — 只暴露业务白名单 API，不再暴露完整 ipcRenderer。
 // 所有 IPC 调用通过命名方法转发，renderer 无法访问任意 channel。
 // sandbox: true 后 preload 仍可 import electron 内置模块。
 
@@ -235,8 +235,6 @@ const api = {
   }
 }
 
-// P0-2: 移除 contextIsolation 回退路径。
-// 如果 contextIsolation 未启用，拒绝暴露任何 API — 这是安全底线。
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('api', api)

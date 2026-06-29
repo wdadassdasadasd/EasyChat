@@ -17,6 +17,27 @@ let useChatMessageSender
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+const createDeferred = () => {
+  let resolve
+  const promise = new Promise((nextResolve) => {
+    resolve = nextResolve
+  })
+  return { promise, resolve }
+}
+
+const createServerMediaMessage = (messageId, fileName) => ({
+  messageId,
+  sessionId: 's1',
+  contactId: 'u2',
+  contactType: 0,
+  messageType: 5,
+  messageContent: fileName,
+  fileName,
+  fileType: 2,
+  sendUserId: 'u1',
+  sendTime: messageId * 10
+})
+
 const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
   const messageList = ref([])
   const currentChatSession = ref({
@@ -34,7 +55,11 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
     return next ?? null
   })
   const invokeSaveSendMessage = vi.fn(async () => {
-    return invokeResults.shift() ?? { success: true, session: currentChatSession.value }
+    const next = invokeResults.shift()
+    if (typeof next === 'function') {
+      return await next()
+    }
+    return next ?? { success: true, session: currentChatSession.value }
   })
   const patchChatSessions = vi.fn()
   const proxy = {
@@ -635,7 +660,7 @@ describe('useChatMessageSender', () => {
     })
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
 
-    sender.handleFileUploadDone({
+    await sender.handleFileUploadDone({
       messageId: 404,
       messageType: 6,
       status: 1
@@ -647,12 +672,392 @@ describe('useChatMessageSender', () => {
     expect(messageList.value[0].messageId).toBe(404)
     expect(messageList.value[0].status).toBe(1)
     expect(messageList.value[0].uploading).toBe(false)
-    expect(messageList.value[0].uploadAcked).toBe(true)
+    expect(messageList.value[0].uploadAckReceived).toBe(true)
+    expect(messageList.value[0].uploadAckStatus).toBe(1)
     expect(proxy.Message.error).not.toHaveBeenCalled()
     expect(invokeSaveSendMessage.mock.calls.map((call) => call[0].mode)).toEqual([
       'pending',
-      'replace'
+      'replace',
+      'status'
     ])
+    const ackStatusPayload = invokeSaveSendMessage.mock.calls.at(-1)[0]
+    expect(ackStatusPayload.message.uploadAckReceived).toBeUndefined()
+    expect(ackStatusPayload.message.uploadAckRevision).toBeUndefined()
+    expect(ackStatusPayload.message.uploadAckStatus).toBeUndefined()
+    expect(ackStatusPayload.message.uploadSourceReleased).toBeUndefined()
+  })
+
+  it('allows a successful ack to recover a temporary HTTP upload failure', async () => {
+    const { invokeSaveSendMessage, messageList, request, sender } = createHarness({
+      requestResults: [
+        { data: createServerMediaMessage(405, 'http-failed.txt') },
+        { success: false, kind: 'timeout', msg: 'timeout' }
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'http-failed.txt', size: 12, path: 'D:/tmp/http-failed.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+    await flush()
+
+    expect(messageList.value[0].status).toBe(0)
+
+    await sender.handleFileUploadDone({
+      messageId: 405,
+      messageType: 6,
+      status: 1
+    })
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 1,
+      uploading: false,
+      uploadProgress: 100,
+      uploadAckReceived: true,
+      uploadAckStatus: 1
+    })
+    expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledWith({
+      uploadSourceId: 'source-http-failed.txt'
+    })
+    expect(
+      invokeSaveSendMessage.mock.calls
+        .map((call) => call[0])
+        .filter((payload) => payload.mode === 'status')
+        .map((payload) => payload.status)
+    ).toEqual([0, 1])
+  })
+
+  it('suppresses a stale HTTP failure message when ack succeeds during local status save', async () => {
+    const statusSave = createDeferred()
+    const { messageList, proxy, request, sender, invokeSaveSendMessage } = createHarness({
+      invokeResults: [
+        { success: true },
+        { success: true },
+        () => statusSave.promise,
+        { success: true }
+      ],
+      requestResults: [
+        { data: createServerMediaMessage(409, 'racing-failure.txt') },
+        { success: false, kind: 'timeout', msg: 'timeout' }
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'racing-failure.txt', size: 12, path: 'D:/tmp/racing-failure.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(invokeSaveSendMessage).toHaveBeenCalledTimes(3))
+
+    await sender.handleFileUploadDone({
+      messageId: 409,
+      messageType: 6,
+      status: 1
+    })
+    statusSave.resolve({ success: true })
+    await flush()
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 1,
+      uploadAckReceived: true,
+      uploadAckStatus: 1
+    })
+    expect(proxy.Message.error).not.toHaveBeenCalled()
+  })
+
+  it('lets an ack failure override an earlier HTTP upload success', async () => {
+    const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
+      requestResults: [{ data: createServerMediaMessage(406, 'ack-failed.txt') }, { data: null }]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'ack-failed.txt', size: 12, path: 'D:/tmp/ack-failed.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+    await flush()
+
+    expect(messageList.value[0].status).toBe(1)
+    expect(window.api.invokeReleaseUploadSource).not.toHaveBeenCalled()
+
+    await sender.handleFileUploadDone({
+      messageId: 406,
+      messageType: 6,
+      status: 0,
+      msg: 'server processing failed'
+    })
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 0,
+      uploading: false,
+      uploadError: 'server processing failed',
+      uploadAckReceived: true,
+      uploadAckStatus: 0
+    })
+    expect(proxy.Message.error).toHaveBeenCalledWith('server processing failed')
+    expect(window.api.invokeReleaseUploadSource).not.toHaveBeenCalled()
+    expect(
+      invokeSaveSendMessage.mock.calls
+        .map((call) => call[0])
+        .filter((payload) => payload.mode === 'status')
+        .map((payload) => payload.status)
+    ).toEqual([1, 0])
+  })
+
+  it('ignores a late HTTP success after an ack failure', async () => {
+    const upload = createDeferred()
+    const { invokeSaveSendMessage, messageList, request, sender } = createHarness({
+      requestResults: [
+        { data: createServerMediaMessage(407, 'ack-first-failure.txt') },
+        upload.promise
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'ack-first-failure.txt', size: 12, path: 'D:/tmp/ack-first-failure.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+
+    await sender.handleFileUploadDone({
+      messageId: 407,
+      messageType: 6,
+      status: 0
+    })
+    upload.resolve({ data: null })
+    await flush()
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 0,
+      uploading: false,
+      uploadAckReceived: true,
+      uploadAckStatus: 0
+    })
+    expect(window.api.invokeReleaseUploadSource).not.toHaveBeenCalled()
+    expect(
+      invokeSaveSendMessage.mock.calls
+        .map((call) => call[0])
+        .filter((payload) => payload.mode === 'status')
+        .map((payload) => payload.status)
+    ).toEqual([0])
+  })
+
+  it('allows a later ack to correct an earlier ack and deduplicates repeated side effects', async () => {
+    const upload = createDeferred()
+    const { invokeSaveSendMessage, messageList, proxy, request, sender } = createHarness({
+      requestResults: [{ data: createServerMediaMessage(408, 'ack-corrected.txt') }, upload.promise]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'ack-corrected.txt', size: 12, path: 'D:/tmp/ack-corrected.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+
+    await sender.handleFileUploadDone({
+      messageId: 408,
+      messageType: 6,
+      status: 0,
+      msg: 'temporary server failure'
+    })
+    await sender.handleFileUploadDone({
+      messageId: 408,
+      messageType: 6,
+      status: 0,
+      msg: 'temporary server failure'
+    })
+    await sender.handleFileUploadDone({
+      messageId: 408,
+      messageType: 6,
+      status: 1
+    })
+    upload.resolve(null)
+    await flush()
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 1,
+      uploading: false,
+      uploadProgress: 100,
+      uploadAckReceived: true,
+      uploadAckStatus: 1
+    })
+    expect(proxy.Message.error).toHaveBeenCalledTimes(1)
+    expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledTimes(1)
+    expect(
+      invokeSaveSendMessage.mock.calls
+        .map((call) => call[0])
+        .filter((payload) => payload.mode === 'status')
+        .map((payload) => payload.status)
+    ).toEqual([0, 0, 1])
+  })
+
+  it('keeps a later failed ack authoritative while an earlier successful ack is persisting', async () => {
+    const firstAckSave = createDeferred()
+    const { invokeSaveSendMessage, messageList, request, sender } = createHarness({
+      invokeResults: [
+        { success: true },
+        { success: true },
+        () => firstAckSave.promise,
+        { success: true }
+      ],
+      requestResults: [
+        { data: createServerMediaMessage(410, 'ack-race.txt') },
+        createDeferred().promise
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'ack-race.txt', size: 12, path: 'D:/tmp/ack-race.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+
+    const successfulAck = sender.handleFileUploadDone({
+      messageId: 410,
+      messageType: 6,
+      status: 1
+    })
+    await vi.waitFor(() => expect(invokeSaveSendMessage).toHaveBeenCalledTimes(3))
+
+    await sender.handleFileUploadDone({
+      messageId: 410,
+      messageType: 6,
+      status: 0,
+      msg: 'final server failure'
+    })
+    firstAckSave.resolve({ success: true })
+    await successfulAck
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 0,
+      uploadError: 'final server failure',
+      uploadAckReceived: true,
+      uploadAckStatus: 0
+    })
+    expect(window.api.invokeReleaseUploadSource).not.toHaveBeenCalled()
+    expect(
+      invokeSaveSendMessage.mock.calls
+        .map((call) => call[0])
+        .filter((payload) => payload.mode === 'status')
+        .map((payload) => payload.status)
+    ).toEqual([1, 0])
+  })
+
+  it('ignores the previous HTTP upload result after an ack failure starts a retry', async () => {
+    const previousUpload = createDeferred()
+    const retryUpload = createDeferred()
+    const { messageList, request, sender } = createHarness({
+      requestResults: [
+        { data: createServerMediaMessage(411, 'retry-race.txt') },
+        previousUpload.promise,
+        retryUpload.promise
+      ]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'retry-race.txt', size: 12, path: 'D:/tmp/retry-race.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+
+    await sender.handleFileUploadDone({
+      messageId: 411,
+      messageType: 6,
+      status: 0
+    })
+    sender.retryFailedMessage(messageList.value[0])
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3))
+
+    previousUpload.resolve({ data: null })
+    await flush()
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 2,
+      uploading: true,
+      uploadAckReceived: false
+    })
+
+    retryUpload.resolve({ data: null })
+    await flush()
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 1,
+      uploading: false,
+      uploadProgress: 100
+    })
+  })
+
+  it('retries upload source release after a successful ack release failure', async () => {
+    const upload = createDeferred()
+    const { messageList, request, sender } = createHarness({
+      requestResults: [{ data: createServerMediaMessage(412, 'release-retry.txt') }, upload.promise]
+    })
+    window.api.invokeReleaseUploadSource
+      .mockRejectedValueOnce(new Error('release failed'))
+      .mockResolvedValueOnce({ success: true })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'release-retry.txt', size: 12, path: 'D:/tmp/release-retry.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+
+    await sender.handleFileUploadDone({
+      messageId: 412,
+      messageType: 6,
+      status: 1
+    })
+    expect(messageList.value[0].uploadSourceReleased).not.toBe(true)
+
+    await sender.handleFileUploadDone({
+      messageId: 412,
+      messageType: 6,
+      status: 1
+    })
+
+    expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledTimes(2)
+    expect(messageList.value[0].uploadSourceReleased).toBe(true)
+  })
+
+  it('retries a successful ack source release without requiring a duplicate ack', async () => {
+    vi.useFakeTimers()
+    const upload = createDeferred()
+    const { messageList, request, sender } = createHarness({
+      requestResults: [
+        { data: createServerMediaMessage(413, 'release-auto-retry.txt') },
+        upload.promise
+      ]
+    })
+    window.api.invokeReleaseUploadSource
+      .mockRejectedValueOnce(new Error('release failed'))
+      .mockResolvedValueOnce({ success: true })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'release-auto-retry.txt', size: 12, path: 'D:/tmp/release-auto-retry.txt' }
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
+
+    await sender.handleFileUploadDone({
+      messageId: 413,
+      messageType: 6,
+      status: 1
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledTimes(2)
+    expect(messageList.value[0].uploadSourceReleased).toBe(true)
+    vi.useRealTimers()
   })
 
   it('updates upload progress while uploading a media message', async () => {

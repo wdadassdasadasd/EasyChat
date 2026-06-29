@@ -246,6 +246,68 @@ describe('useChatMessages receive flow', () => {
     ])
   })
 
+  it('releases preview and cover object URLs when messages leave the active list', async () => {
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    const revokeObjectURL = vi.fn()
+    URL.revokeObjectURL = revokeObjectURL
+
+    try {
+      const { chat, handlers } = createHarness()
+
+      chat.messageList.value = [
+        {
+          messageId: 1,
+          sessionId: 's1',
+          localPreviewUrl: 'blob://old-preview',
+          localCoverUrl: 'blob://old-cover'
+        }
+      ]
+
+      await handlers.loadChatMessageCallback({
+        dataList: [{ messageId: 2, sessionId: 's1' }],
+        hasMore: false,
+        loadMode: 'context',
+        loadSeq: 1,
+        sessionId: 's1'
+      })
+
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob://old-preview')
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob://old-cover')
+
+      revokeObjectURL.mockClear()
+      chat.messageList.value = [
+        {
+          messageId: 3,
+          sessionId: 's1',
+          localPreviewUrl: 'blob://switch-preview',
+          localCoverUrl: 'blob://switch-cover'
+        }
+      ]
+
+      chat.chatSessionClickHandler({ contactId: 'u3', contactType: 0, sessionId: 's3' })
+
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob://switch-preview')
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob://switch-cover')
+
+      revokeObjectURL.mockClear()
+      chat.messageList.value = [
+        {
+          messageId: 4,
+          sessionId: 's3',
+          localPreviewUrl: 'blob://cleanup-preview',
+          localCoverUrl: 'blob://cleanup-cover'
+        }
+      ]
+
+      chat.cleanupChatMessages()
+
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob://cleanup-preview')
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob://cleanup-cover')
+    } finally {
+      URL.revokeObjectURL = originalRevokeObjectURL
+    }
+  })
+
   it('registers message listeners idempotently', () => {
     const { chat, window } = createHarness()
 

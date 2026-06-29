@@ -691,7 +691,6 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
       resolve(result)
     }
 
-    // H-6: 使用立即调用的 async IIFE 替代 async executor 反模式
     // 初始化、URL 解析或网络创建失败时统一清理活动下载状态。
     ;(async () => {
       if (_redirectDepth >= MAX_DOWNLOAD_REDIRECTS) {
@@ -765,7 +764,7 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
         }
 
         response.on('data', (chunk) => {
-          // H-4: 收到数据后重置超时定时器
+          //  收到数据后重置超时定时器
           if (downloadTimeout) {
             clearTimeout(downloadTimeout)
             downloadTimeout = setTimeout(() => {
@@ -807,7 +806,7 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
           }
           finishDownload({ success: false, error: getErrorMessage(error) })
         })
-        // M-2: 处理响应流错误，清理临时文件
+        //  处理响应流错误，清理临时文件
         response.on('error', (error) => {
           try {
             if (fs.existsSync(tempPath)) {
@@ -857,7 +856,7 @@ const onChatFileDownload = () => {
       request.destroy(new Error('Download canceled'))
       activeDownloads.delete(String(data.messageId))
     }
-    // H-5: 清理取消下载时残留的临时文件
+    // 清理取消下载时残留的临时文件
     try {
       const folderInfo = await getLocalFileFolder()
       const tempPattern = String(data.messageId || '')

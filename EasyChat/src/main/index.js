@@ -26,6 +26,7 @@ import { dbReady } from './db/ADB.js'
 import { initializeLogger } from './logger.js'
 import { cleanupExpiredTempVideos } from './tempVideoFiles.js'
 import { openExternalHttpUrl, restoreOrCreateMainWindow } from './windowLifecycle.js'
+import { closeWs } from './wsClient.js'
 
 initializeLogger()
 
@@ -265,8 +266,7 @@ app.on('before-quit', (event) => {
   }
   shutdownStarted = true
   event.preventDefault()
-  import('./wsClient.js')
-    .then(({ closeWs }) => closeWs())
+  Promise.resolve(closeWs())
     .catch((error) => console.error('WebSocket shutdown failed', error))
     .then(() => cleanupExpiredTempVideos({ tempRoot: app.getPath('temp') }))
     .catch((error) => console.error('Temporary video cleanup failed', error))

@@ -7,7 +7,7 @@ import {
   getUploadFailureMessage,
   isRequestFailure
 } from '@/utils/RequestFailure'
-import { cancelMediaUpload, uploadMediaFile } from './mediaUploadTransport'
+import { cancelMediaUpload, uploadMediaFile } from '@/utils/MediaUploadTransport'
 
 /**
  * 出站消息发送链路的执行入口。
@@ -38,6 +38,7 @@ export const useChatMessageSender = ({
   const uploadTaskQueue = []
   let activeUploadCount = 0
   const uploadControllers = new Map()
+  const uploadSourceReleaseRetryTimers = []
 
   const runNextUploadTask = () => {
     if (activeUploadCount >= maxUploadConcurrency || uploadTaskQueue.length === 0) {
@@ -101,6 +102,10 @@ export const useChatMessageSender = ({
     delete dbMessage.downloadPath
     delete dbMessage.downloadError
     delete dbMessage.uploadAcked
+    delete dbMessage.uploadAckReceived
+    delete dbMessage.uploadAckRevision
+    delete dbMessage.uploadAckStatus
+    delete dbMessage.uploadSourceReleased
     delete dbMessage.forceGet
     return dbMessage
   }
@@ -221,7 +226,7 @@ export const useChatMessageSender = ({
     }
   }
 
-  const markMessageFailed = async (message, errorText) => {
+  const markMessageFailed = async (message, errorText, { shouldReportError } = {}) => {
     Object.assign(message, {
       status: 0,
       uploading: false,
@@ -235,7 +240,7 @@ export const useChatMessageSender = ({
     await persistMessageStatus(message).catch((error) => {
       console.error('save failed message status failed', error)
     })
-    if (errorText) {
+    if (errorText && (!shouldReportError || shouldReportError())) {
       proxy.Message.error(errorText)
     }
   }
@@ -454,8 +459,16 @@ export const useChatMessageSender = ({
     }
 
     const controller = new AbortController()
-    uploadControllers.set(String(message.messageId), controller)
+    const uploadKey = String(message.messageId)
+    uploadControllers.set(uploadKey, controller)
+    const isCurrentUpload = () => uploadControllers.get(uploadKey) === controller
+    const getLatestMessage = () => {
+      return messageList.value.find((item) => item.messageId == message.messageId)
+    }
     const updateUploadProgress = (progress) => {
+      if (!isCurrentUpload() || getLatestMessage()?.uploadAckReceived) {
+        return
+      }
       const nextProgress = Math.min(99, Math.max(0, Number(progress) || 0))
       Object.assign(message, {
         uploading: true,
@@ -493,27 +506,34 @@ export const useChatMessageSender = ({
       proxy,
       signal: controller.signal
     })
-    uploadControllers.delete(String(message.messageId))
+    if (!isCurrentUpload()) {
+      return
+    }
+    uploadControllers.delete(uploadKey)
 
-    if (!uploadResult || isRequestFailure(uploadResult)) {
-      const latestMessage = messageList.value.find((item) => {
-        return item.messageId == message.messageId
-      })
-      if (latestMessage?.uploadAcked || latestMessage?.status == 1) {
-        return
-      }
-      const canceled = uploadResult?.kind === 'canceled'
-      Object.assign(message, { uploadCanceled: canceled })
-      updateMessageById?.(message.messageId, { uploadCanceled: canceled })
-      await markMessageFailed(message, getUploadFailureMessage(uploadResult, canceled))
+    const latestMessage = getLatestMessage()
+    if (latestMessage?.uploadAckReceived) {
       return
     }
 
-    message.uploading = false
-    message.status = 1
-    message.uploadProgress = 100
-    message.uploadError = ''
-    message.uploadCanceled = false
+    if (!uploadResult || isRequestFailure(uploadResult)) {
+      const canceled = uploadResult?.kind === 'canceled'
+      Object.assign(message, { uploadCanceled: canceled })
+      updateMessageById?.(message.messageId, { uploadCanceled: canceled })
+      await markMessageFailed(message, getUploadFailureMessage(uploadResult, canceled), {
+        shouldReportError: () => !getLatestMessage()?.uploadAckReceived
+      })
+      return
+    }
+
+    const successfulMessage = latestMessage || message
+    Object.assign(successfulMessage, {
+      uploading: false,
+      status: 1,
+      uploadProgress: 100,
+      uploadError: '',
+      uploadCanceled: false
+    })
     updateMessageById?.(message.messageId, {
       uploading: false,
       status: 1,
@@ -521,15 +541,10 @@ export const useChatMessageSender = ({
       uploadError: '',
       uploadCanceled: false
     })
-    await persistMessageStatus(message).catch((error) => {
+    await persistMessageStatus(successfulMessage).catch((error) => {
       console.error('save uploaded media status failed', error)
       proxy.Message.error('File uploaded, but local message status could not be saved.')
     })
-    if (message.uploadSourceId) {
-      await window.api
-        .invokeReleaseUploadSource({ uploadSourceId: message.uploadSourceId })
-        .catch((error) => console.error('release upload source failed', error))
-    }
   }
 
   const sendMediaMessage = async (
@@ -609,7 +624,13 @@ export const useChatMessageSender = ({
 
     if (retryMessage) {
       try {
-        await markMessageSending(localMessage, { uploading: false })
+        await markMessageSending(localMessage, {
+          uploading: false,
+          uploadAckReceived: false,
+          uploadAckRevision: 0,
+          uploadAckStatus: null,
+          uploadSourceReleased: false
+        })
       } catch (error) {
         console.error('save retry media message status failed', error)
         await markMessageFailed(
@@ -736,26 +757,94 @@ export const useChatMessageSender = ({
     })
   }
 
-  const handleFileUploadDone = (message) => {
-    // WebSocket 文件 ACK 可能晚于本地上传请求结束。
+  const releaseUploadSourceAfterAck = async (targetMessage, ackRevision, attempt = 0) => {
+    if (
+      targetMessage.uploadAckRevision !== ackRevision ||
+      Number(targetMessage.uploadAckStatus) !== 1 ||
+      targetMessage.uploadSourceReleased ||
+      !targetMessage.uploadSourceId
+    ) {
+      return
+    }
+
+    const releaseResult = await window.api
+      .invokeReleaseUploadSource({ uploadSourceId: targetMessage.uploadSourceId })
+      .catch((error) => {
+        console.error('release acknowledged upload source failed', error)
+        return null
+      })
+    if (releaseResult?.success === true) {
+      targetMessage.uploadSourceReleased = true
+      return
+    }
+
+    // ACK 不保证重复投递；在本地有限重试，且只对同一条成功 ACK 保持有效。
+    if (attempt >= 2) {
+      return
+    }
+    const timer = setTimeout(() => {
+      const index = uploadSourceReleaseRetryTimers.indexOf(timer)
+      if (index >= 0) {
+        uploadSourceReleaseRetryTimers.splice(index, 1)
+      }
+      releaseUploadSourceAfterAck(targetMessage, ackRevision, attempt + 1)
+    }, 1000 * (attempt + 1))
+    uploadSourceReleaseRetryTimers.push(timer)
+  }
+
+  const handleFileUploadDone = async (message) => {
+    // WebSocket 文件 ACK 是媒体处理的最终状态，迟到的 HTTP 结果不能再覆盖它。
     const targetMessage = messageList.value.find((item) => {
       return item.messageId == message.messageId
     })
 
-    if (targetMessage) {
-      targetMessage.status = message.status ?? 1
-      targetMessage.uploading = false
-      targetMessage.uploadProgress = 100
-      targetMessage.uploadError = ''
-      targetMessage.uploadCanceled = false
-      targetMessage.uploadAcked = true
-      targetMessage.forceGet = Date.now()
-      if (targetMessage.uploadSourceId) {
-        window.api
-          .invokeReleaseUploadSource({ uploadSourceId: targetMessage.uploadSourceId })
-          .catch((error) => console.error('release acknowledged upload source failed', error))
-      }
+    if (!targetMessage) {
+      return
     }
+
+    const ackStatus = Number(message.status ?? 1)
+    const ackSucceeded = ackStatus === 1
+    const repeatedAck =
+      targetMessage.uploadAckReceived && Number(targetMessage.uploadAckStatus) === ackStatus
+    const ackError = message.error || message.msg || 'File processing failed. Please retry.'
+    const ackRevision = Number(targetMessage.uploadAckRevision || 0) + 1
+
+    Object.assign(targetMessage, {
+      status: ackStatus,
+      uploading: false,
+      uploadError: ackSucceeded ? '' : ackError,
+      uploadCanceled: false,
+      uploadAckReceived: true,
+      uploadAckRevision: ackRevision,
+      uploadAckStatus: ackStatus
+    })
+
+    const activeController = uploadControllers.get(String(targetMessage.messageId))
+    uploadControllers.delete(String(targetMessage.messageId))
+    activeController?.abort()
+
+    if (ackSucceeded) {
+      targetMessage.uploadProgress = 100
+      targetMessage.forceGet = Date.now()
+    } else if (!repeatedAck) {
+      proxy.Message.error(ackError)
+    }
+
+    await persistMessageStatus(targetMessage).catch((error) => {
+      console.error('save acknowledged media status failed', error)
+      proxy.Message.error('Media status was confirmed, but could not be saved locally.')
+    })
+
+    if (
+      targetMessage.uploadAckRevision !== ackRevision ||
+      !ackSucceeded ||
+      targetMessage.uploadSourceReleased ||
+      !targetMessage.uploadSourceId
+    ) {
+      return
+    }
+
+    await releaseUploadSourceAfterAck(targetMessage, ackRevision)
     // 文件 ACK 不影响会话列表排序。
   }
 
@@ -784,7 +873,11 @@ export const useChatMessageSender = ({
           uploading: true,
           uploadProgress: 0,
           uploadError: '',
-          uploadCanceled: false
+          uploadCanceled: false,
+          uploadAckReceived: false,
+          uploadAckRevision: 0,
+          uploadAckStatus: null,
+          uploadSourceReleased: false
         })
           .then(() => {
             enqueueUploadTask(() => uploadMessageFile(message, retryFile, message.retryCover))
@@ -872,6 +965,10 @@ export const useChatMessageSender = ({
       }
     })
     localSyncRetryTimers.length = 0
+    uploadSourceReleaseRetryTimers.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    uploadSourceReleaseRetryTimers.length = 0
   }
 
   return {
