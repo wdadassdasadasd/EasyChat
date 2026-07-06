@@ -19,6 +19,7 @@ import {
   compactReceiveRecoveryMessages,
   readReceiveRecoveryMessages
 } from './receiveRecoveryStore.js'
+import logger from './logger.js'
 
 const NODE_ENV = process.env.NODE_ENV
 
@@ -587,7 +588,7 @@ const initWs = async (config, sender) => {
   if (!wsDomain) {
     maxReConnectTimes = 0
     const error = `missing ${domainKey}, skip WebSocket connect`
-    console.log(error)
+    logger.warn(error)
     recordWsError(new Error(error))
     publishWsStatus({
       status: 'failed',
@@ -759,7 +760,7 @@ const createWs = () => {
   }
 
   ws.onopen = function () {
-    console.log('WebSocket connected')
+    logger.info('WebSocket connected')
     lockReconnect = false
     maxReConnectTimes = WS_MAX_RECONNECT_TIMES
     updateWsDiagnostics({ lastError: '' })
@@ -785,7 +786,7 @@ const createWs = () => {
   }
 
   ws.onclose = function () {
-    console.log('WebSocket closed, reconnecting')
+    logger.info('WebSocket closed, reconnecting')
     clearHeartbeatTimer()
     reconnect().catch((err) => console.error('reconnect failed', err))
   }
@@ -793,7 +794,7 @@ const createWs = () => {
   ws.onerror = function (error) {
     // onclose always follows onerror in the WebSocket spec, so let onclose
     // handle the actual reconnection to avoid double-reconnect races.
-    console.log('WebSocket error', error?.message || String(error))
+    logger.warn('WebSocket error', error?.message || String(error))
     recordWsError(error)
     publishWsStatus({
       status: 'reconnecting',
@@ -805,7 +806,7 @@ const createWs = () => {
 
 const reconnect = async () => {
   if (!needReconnect) {
-    console.log('WebSocket closed intentionally')
+    logger.info('WebSocket closed intentionally')
     return
   }
   if (lockReconnect) {
@@ -821,7 +822,7 @@ const reconnect = async () => {
   lockReconnect = true
 
   if (maxReConnectTimes > 0) {
-    console.log('prepare reconnect, remaining times: ' + maxReConnectTimes, new Date().getTime())
+    logger.info('prepare reconnect, remaining times:', maxReConnectTimes, Date.now())
     updateWsDiagnostics({ reconnectCount: wsDiagnostics.reconnectCount + 1 })
     publishWsStatus({ status: 'reconnecting', retryLeft: maxReConnectTimes })
     maxReConnectTimes--
@@ -833,7 +834,7 @@ const reconnect = async () => {
     }, WS_RECONNECT_DELAY)
   } else {
     lockReconnect = false
-    console.log('WebSocket reconnect timeout')
+    logger.warn('WebSocket reconnect timeout')
     publishWsStatus({ status: 'failed', retryLeft: 0 })
   }
 }

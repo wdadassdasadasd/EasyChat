@@ -7,5 +7,6 @@ logs/
 check.json
 cookies.txt
 .env
+.vscode/
 .agents/
 AGENTS.md

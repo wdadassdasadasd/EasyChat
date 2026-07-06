@@ -49,7 +49,7 @@
             </div>
         </div>
     </ContactPanel>
-    <GroupEditDialag ref="groupEditDialogRef" @reloadGroupInfo="getGroupInfo"></GroupEditDialag>
+    <GroupEditDialog ref="groupEditDialogRef" @reloadGroupInfo="getGroupInfo"></GroupEditDialog>
 </template>
 
 <script setup>
@@ -58,7 +58,7 @@ import { MoreFilled } from '@element-plus/icons-vue';
 import { useContactStateStore } from '../../stores/ContactStateStore';
 import { useRoute ,useRouter} from 'vue-router';
 import { useUserInfoStore } from '../../stores/UserInfoStore';
-import GroupEditDialag from './GroupEditDialag.vue';
+import GroupEditDialog from './GroupEditDialog.vue';
 
 const contactStateStore = useContactStateStore();
 const userInfoStore=useUserInfoStore();

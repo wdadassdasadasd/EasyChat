@@ -782,13 +782,16 @@ export const useChatMessageSender = ({
     if (attempt >= 2) {
       return
     }
-    const timer = setTimeout(() => {
-      const index = uploadSourceReleaseRetryTimers.indexOf(timer)
-      if (index >= 0) {
-        uploadSourceReleaseRetryTimers.splice(index, 1)
-      }
-      releaseUploadSourceAfterAck(targetMessage, ackRevision, attempt + 1)
-    }, 1000 * (attempt + 1))
+    const timer = setTimeout(
+      () => {
+        const index = uploadSourceReleaseRetryTimers.indexOf(timer)
+        if (index >= 0) {
+          uploadSourceReleaseRetryTimers.splice(index, 1)
+        }
+        releaseUploadSourceAfterAck(targetMessage, ackRevision, attempt + 1)
+      },
+      1000 * (attempt + 1)
+    )
     uploadSourceReleaseRetryTimers.push(timer)
   }
 

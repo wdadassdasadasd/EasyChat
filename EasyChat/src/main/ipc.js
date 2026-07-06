@@ -5,6 +5,7 @@ import https from 'https'
 import path from 'path'
 import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
 import { initWs, closeWs } from './wsClient.js'
+import logger from './logger.js'
 import store from './store.js'
 import {
   addUserSetting,
@@ -151,11 +152,11 @@ const onLoginSuccess = (mainWindow, callback) => {
       try {
         const replaceRecovery = await recoverLocalReplaceQueue()
         if (replaceRecovery.recoveredCount) {
-          console.log(`Recovered local message replacements: ${replaceRecovery.recoveredCount}`)
+          logger.info(`Recovered local message replacements: ${replaceRecovery.recoveredCount}`)
         }
         const result = await recoverStalePendingMessages()
         if (result?.recoveredCount) {
-          console.log(`Recovered stale pending messages: ${result.recoveredCount}`)
+          logger.info(`Recovered stale pending messages: ${result.recoveredCount}`)
         }
       } catch (error) {
         console.error('Failed to recover stale pending messages', error)

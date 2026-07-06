@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import {
-  getTotalUploadTimeout,
-  uploadMediaFile
-} from '@/utils/MediaUploadTransport'
+import { getTotalUploadTimeout, uploadMediaFile } from '@/utils/MediaUploadTransport'
 
 describe('mediaUploadTransport total timeout', () => {
   afterEach(() => {
