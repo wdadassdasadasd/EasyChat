@@ -10,7 +10,7 @@ const defaultLocalFileFolder = () => {
 }
 
 const ensureFolder = async (folder) => {
-  // H-15: 异步文件操作，避免同步 fs 阻塞主进程
+  // 文件目录检查使用异步 I/O，避免同步 fs 阻塞 Electron 主进程。
   if (!folder) {
     return
   }
@@ -25,14 +25,14 @@ const parseSysSetting = (sysSetting) => {
   try {
     return sysSetting ? JSON.parse(sysSetting) : {}
   } catch (e) {
-    // M-7: 解析失败时记录警告而非静默丢弃
+    // 解析失败时记录警告而非静默丢弃，便于定位本地设置损坏问题。
     console.error('Failed to parse sys_setting JSON, resetting to empty object', e)
     return {}
   }
 }
 
 const getFolderStats = async (folder) => {
-  // H-15: 异步文件操作，避免同步 fs 阻塞主进程
+  // 统计下载目录可能递归大量文件，必须使用异步 I/O 保持主进程响应。
   const stats = {
     exists: false,
     fileCount: 0,
@@ -91,7 +91,7 @@ const updateNoReadCount = async (userId, noReadCount) => {
 }
 
 const addUserSetting = async (userId, email) => {
-  // H-14: 整个端口分配+插入操作包裹在事务中，防止并发分配相同端口
+  // 端口分配和用户设置写入必须在同一事务中，防止并发注册拿到相同端口。
   return runInTransaction(async () => {
     let sql = 'select max(server_port) maxserver_port from user_setting'
     const maxServerInfo = await queryOne(sql, [])

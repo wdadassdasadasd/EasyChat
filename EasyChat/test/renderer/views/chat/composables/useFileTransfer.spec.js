@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/utils/Request', () => ({
   getApiUrl: (url) => `/api${url}`
@@ -6,27 +6,69 @@ vi.mock('@/utils/Request', () => ({
 
 let useFileTransfer
 
+const createProxy = (streamUrl = '/chat/streamFile?fileId=10&downloadToken=t') => ({
+  Api: {
+    createDownloadToken: '/chat/createDownloadToken',
+    downloadFile: '/chat/downloadFile'
+  },
+  Request: vi.fn(async () => ({
+    data: {
+      streamUrl
+    }
+  })),
+  Message: {
+    error: vi.fn(),
+    success: vi.fn()
+  }
+})
+
+const createFileMessage = (patch = {}) => ({
+  messageId: 10,
+  messageType: 5,
+  fileType: 2,
+  status: 1,
+  fileName: 'doc.txt',
+  fileSize: 100,
+  ...patch
+})
+
+let progressHandler
+let unsubscribeProgress
+let invokeDownloadChatFile
+let invokeOpenDownloadedFile
+
+beforeEach(() => {
+  progressHandler = null
+  unsubscribeProgress = vi.fn()
+  invokeDownloadChatFile = vi.fn(async () => ({
+    success: true,
+    filePath: 'D:/chat/doc.txt',
+    progress: 100
+  }))
+  invokeOpenDownloadedFile = vi.fn(async () => ({ success: true }))
+  global.window = {
+    api: {
+      invokeDownloadChatFile,
+      invokeOpenDownloadedFile,
+      invokeShowDownloadedFileInFolder: vi.fn(async () => ({ success: true })),
+      invokeReadLocalVideoFile: vi.fn(async () => ({ success: false })),
+      invokeOpenLocalVideoFile: vi.fn(async () => ({ success: false })),
+      invokeOpenTempVideoFile: vi.fn(async () => ({ success: true })),
+      onDownloadChatFileProgress: vi.fn((handler) => {
+        progressHandler = handler
+        return unsubscribeProgress
+      })
+    }
+  }
+})
+
 describe('useFileTransfer', () => {
   beforeAll(async () => {
     ;({ useFileTransfer } = await import('@/views/chat/composables/useFileTransfer'))
   })
 
   it('uses a signed stream url for video preview by default', async () => {
-    const proxy = {
-      Api: {
-        createDownloadToken: '/chat/createDownloadToken',
-        downloadFile: '/chat/downloadFile'
-      },
-      Request: vi.fn(async () => ({
-        data: {
-          streamUrl: '/chat/streamFile?fileId=10&downloadToken=t'
-        }
-      })),
-      Message: {
-        error: vi.fn(),
-        success: vi.fn()
-      }
-    }
+    const proxy = createProxy()
     const transfer = useFileTransfer({ proxy })
 
     await transfer.openVideoPreviewDialog({
@@ -43,5 +85,107 @@ describe('useFileTransfer', () => {
       })
     )
     expect(transfer.videoPreviewUrl.value).toBe('/api/chat/streamFile?fileId=10&downloadToken=t')
+  })
+
+  it('downloads a selected file, tracks progress, and unsubscribes the progress listener', async () => {
+    const proxy = createProxy()
+    invokeDownloadChatFile.mockImplementationOnce(async () => {
+      progressHandler?.({ messageId: 10, progress: 42 })
+      return {
+        success: true,
+        filePath: 'D:/chat/doc.txt',
+        progress: 100
+      }
+    })
+    const transfer = useFileTransfer({ proxy })
+    const message = createFileMessage()
+
+    transfer.openFilePreviewDialog(message)
+    await transfer.receiveSelectedFileMessage()
+
+    expect(invokeDownloadChatFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 10,
+        fileName: 'doc.txt'
+      })
+    )
+    expect(message.downloadStatus).toBe('done')
+    expect(message.downloadProgress).toBe(100)
+    expect(message.downloadPath).toBe('D:/chat/doc.txt')
+    expect(unsubscribeProgress).toHaveBeenCalled()
+    expect(proxy.Message.success).toHaveBeenCalledWith('Download complete')
+  })
+
+  it('marks a selected file download as failed when main process download fails', async () => {
+    const proxy = createProxy()
+    invokeDownloadChatFile.mockResolvedValueOnce({
+      success: false,
+      progress: 35,
+      error: 'network down'
+    })
+    const transfer = useFileTransfer({ proxy })
+    const message = createFileMessage()
+
+    transfer.openFilePreviewDialog(message)
+    await transfer.receiveSelectedFileMessage()
+
+    expect(message.downloadStatus).toBe('failed')
+    expect(message.downloadProgress).toBe(35)
+    expect(message.downloadError).toBe('network down')
+    expect(proxy.Message.error).toHaveBeenCalledWith('network down')
+  })
+
+  it('rejects oversized downloads before requesting a signed download url', async () => {
+    const proxy = createProxy()
+    const transfer = useFileTransfer({ proxy })
+    const message = createFileMessage({ fileSize: Number.MAX_SAFE_INTEGER })
+
+    transfer.openFilePreviewDialog(message)
+    await transfer.receiveSelectedFileMessage()
+
+    expect(proxy.Request).not.toHaveBeenCalled()
+    expect(invokeDownloadChatFile).not.toHaveBeenCalled()
+    expect(message.downloadStatus).toBe('failed')
+  })
+
+  it('does not invoke duplicate downloads while one is already in progress', async () => {
+    const proxy = createProxy()
+    let resolveDownload
+    invokeDownloadChatFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDownload = resolve
+        })
+    )
+    const transfer = useFileTransfer({ proxy })
+    const message = createFileMessage()
+
+    transfer.openFilePreviewDialog(message)
+    const firstDownload = transfer.receiveSelectedFileMessage()
+    const secondResult = await transfer.receiveSelectedFileMessage()
+    resolveDownload({ success: true, filePath: 'D:/chat/doc.txt', progress: 100 })
+    await firstDownload
+
+    expect(secondResult).toBeUndefined()
+    expect(invokeDownloadChatFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows an error when opening a downloaded file fails', async () => {
+    const proxy = createProxy()
+    invokeOpenDownloadedFile.mockResolvedValueOnce({
+      success: false,
+      error: 'open denied'
+    })
+    const transfer = useFileTransfer({ proxy })
+    const message = createFileMessage()
+
+    transfer.openFilePreviewDialog(message)
+    await transfer.receiveSelectedFileMessage()
+    await transfer.openDownloadedFile(message)
+
+    expect(invokeOpenDownloadedFile).toHaveBeenCalledWith({
+      filePath: 'D:/chat/doc.txt'
+    })
+    expect(proxy.Message.error).toHaveBeenCalledWith('open denied')
   })
 })

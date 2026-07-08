@@ -90,7 +90,7 @@ const router = createRouter({
   ]
 })
 
-// A-3: 导航守卫，访问需要登录的页面时检查 token
+// 导航守卫：访问需要登录的页面时检查本地 token。
 router.beforeEach((to) => {
   if (to.path === '/login' || to.path === '/') {
     return true

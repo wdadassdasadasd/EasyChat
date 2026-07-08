@@ -72,7 +72,7 @@ vi.mock('../../../src/main/db/ADB', async () => {
         writeQueueLog.push({ type: 'task-end', queueSize: __writeQueueSize.value })
         return result
       })
-    // M-30: 定期压缩 Promise 链
+    // 定期压缩 Promise 链。
     if (__writeQueueSize.value >= 1000) {
       nextTask.finally(() => {
         queueCompressCount.value++
@@ -726,7 +726,7 @@ describe('Stress: End-to-End Message Flow Simulation', () => {
       topType: 0
     }
 
-    // Phase 1: 用户发送消息（pending）
+    // 用户发送消息并先保存为 pending。
     const sendResults = []
     const e2eChatSession = {
       contactId: 'contact-e2e',
@@ -751,7 +751,7 @@ describe('Stress: End-to-End Message Flow Simulation', () => {
 
     expect(sendResults.every((r) => r.success)).toBe(true)
 
-    // Phase 2: 服务器确认 → replace pending
+    // 服务端确认后用正式消息替换本地 pending。
     const replaceResults = []
     for (let i = 0; i < 10; i++) {
       const realMsg = makeWsMessage({
@@ -777,7 +777,7 @@ describe('Stress: End-to-End Message Flow Simulation', () => {
 
     expect(replaceResults.every((r) => r.success)).toBe(true)
 
-    // Phase 3: 状态更新
+    // 最后更新消息状态。
     const statusResult = await updateLocalMessageStatus({
       messageId: 10005,
       status: 1,

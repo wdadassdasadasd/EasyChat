@@ -266,18 +266,19 @@ const filterNewMessages = async (messageList = []) => {
  * 使用 OR 逻辑：消息满足 messageId > clearMessageId 或 send_time > clearTime 任一条件即为可见，
  * 防止仅依赖 messageId 在服务端 ID 回绕/异常时错误隐藏新消息。
  */
-const appendClearFilter = (sqlParts, params, clearInfo) => {
+const appendClearFilter = (sqlParts, params, clearInfo, { alias = '' } = {}) => {
   const clearMessageId = Number(clearInfo?.clearMessageId || 0)
   const clearTime = Number(clearInfo?.clearTime || 0)
+  const prefix = alias ? `${alias}.` : ''
 
   if (clearMessageId > 0 && clearTime > 0) {
-    sqlParts.push('and (message_id>? or send_time is null or send_time>?)')
+    sqlParts.push(`and (${prefix}message_id>? or ${prefix}send_time is null or ${prefix}send_time>?)`)
     params.push(clearMessageId, clearTime)
   } else if (clearMessageId > 0) {
-    sqlParts.push('and message_id>?')
+    sqlParts.push(`and ${prefix}message_id>?`)
     params.push(clearMessageId)
   } else if (clearTime > 0) {
-    sqlParts.push('and (send_time is null or send_time>?)')
+    sqlParts.push(`and (${prefix}send_time is null or ${prefix}send_time>?)`)
     params.push(clearTime)
   }
 }
@@ -351,6 +352,7 @@ const savePendingMessage = async ({ message, chatSession } = {}) => {
     }
   }
 
+  // 发送链路先写本地 pending，再发 HTTP；消息和会话摘要必须同事务提交。
   return runInTransaction(async () => {
     const pendingMessage = {
       ...message,
@@ -381,6 +383,7 @@ const replacePendingMessage = async ({ localMessageId, message, chatSession } = 
     }
   }
 
+  // 服务端 messageId 替换本地临时 id 时，同步更新 FTS 和会话摘要，避免搜索或列表指向旧 id。
   return runInTransaction(async () => {
     if (localMessageId && String(localMessageId) !== String(message.messageId)) {
       const deleteSql = 'delete from chat_message where user_id=? and message_id=?'
@@ -699,15 +702,7 @@ const searchMessageBySessionIdFts = async ({ sessionId, keyword } = {}) => {
     'where f.user_id=? and f.session_id=? and chat_message_fts match ?'
   ]
   const params = [store.getUserId(), sessionId, ftsKeyword]
-  const clearMessageId = Number(clearInfo?.clearMessageId || 0)
-  const clearTime = Number(clearInfo?.clearTime || 0)
-  if (clearMessageId > 0) {
-    sqlParts.push('and m.message_id>?')
-    params.push(clearMessageId)
-  } else if (clearTime > 0) {
-    sqlParts.push('and (m.send_time is null or m.send_time>?)')
-    params.push(clearTime)
-  }
+  appendClearFilter(sqlParts, params, clearInfo, { alias: 'm' })
   sqlParts.push('order by m.message_id desc limit ?')
   params.push(MESSAGE_SEARCH_LIMIT)
   return await queryAll(sqlParts.join(' '), params)

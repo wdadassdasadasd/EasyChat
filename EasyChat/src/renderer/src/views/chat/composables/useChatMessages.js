@@ -313,7 +313,7 @@ export const useChatMessages = ({
     const messagePanel = getMessagePanel()
     if (!messagePanel) return
 
-    // Phase 1 — 锚点定位：找到 prepend 前视口顶部的消息，将其恢复到相同位置。
+    // 锚点定位：找到 prepend 前视口顶部的消息，将其恢复到相同位置。
     let restored = false
     if (scrollState.anchorMessageId) {
       const anchorEl = document.getElementById(`message${scrollState.anchorMessageId}`)
@@ -336,7 +336,7 @@ export const useChatMessages = ({
       }
     }
 
-    // Phase 2 — 测量修正：等待虚拟列表高度测量完成后二次校正。
+    // 测量修正：等待虚拟列表高度测量完成后二次校正。
     // measureVisibleHeights 通过 watch(visibleRenderList, flush: 'post') 触发，
     // 内部使用 nextTick + rAF，需要额外等待 2 帧确保测量结果已反映到布局。
     await new Promise((resolve) => window.requestAnimationFrame(resolve))
@@ -398,8 +398,10 @@ export const useChatMessages = ({
   const chatSessionClickHandler = (item) => {
     markSessionRead?.(item.contactId)
     if (currentChatSession.value.contactId == item.contactId) {
-      // 同一会话从路由补齐 sessionId 后，需要补拉一次历史消息。
-      const shouldLoadMessages = !currentChatSession.value.sessionId && item.sessionId
+      // 同一会话从路由/联系人页临时态补齐 sessionId 后，可能已经被会话同步写入
+      // currentChatSession，但历史消息还没有真正拉取，需要在空列表时补拉一次。
+      const shouldLoadMessages =
+        item.sessionId && (!currentChatSession.value.sessionId || messageList.value.length === 0)
       currentChatSession.value = Object.assign({}, currentChatSession.value, item)
       if (shouldLoadMessages) {
         revokeMessageObjectUrlsForList(messageList.value)

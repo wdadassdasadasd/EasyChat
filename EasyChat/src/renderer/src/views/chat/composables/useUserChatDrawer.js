@@ -11,7 +11,7 @@ export const useUserChatDrawer = ({ currentChatSession, proxy }) => {
   const userInfo = ref({})
   let activeContactId = ''
   let loadSeq = 0
-  // H-19: 组件销毁标志，防止异步回调写入已销毁组件的状态
+  // 组件销毁标志，防止异步回调写入已销毁组件的状态。
   let isAlive = true
 
   const getFallbackUserInfo = () => {

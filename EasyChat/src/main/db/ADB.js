@@ -140,7 +140,7 @@ const enqueueDbWrite = (task) => {
       scheduleWalCheckpoint()
       return result
     })
-  // M-30: 定期压缩 Promise 链，防止长时间运行下链无限增长导致内存压力
+  // 定期压缩 Promise 链，防止长时间运行下链无限增长造成内存压力。
   if (writeQueueSize >= 1000) {
     nextTask.finally(() => {
       writeQueueSize = 0

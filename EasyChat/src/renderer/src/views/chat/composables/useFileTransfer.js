@@ -16,6 +16,7 @@ export const useFileTransfer = ({ proxy }) => {
   const downloadStates = ref({})
   let videoPreviewBlob = null
   let ownsVideoPreviewUrl = false
+  const activeDownloadKeys = new Set()
 
   const getDownloadKey = (message) => String(message?.messageId || '')
 
@@ -201,8 +202,9 @@ export const useFileTransfer = ({ proxy }) => {
       return false
     }
 
+    const downloadKey = getDownloadKey(message)
     const currentState = getDownloadState(message)
-    if (currentState.status === 'downloading') {
+    if (currentState.status === 'downloading' || activeDownloadKeys.has(downloadKey)) {
       return false
     }
 
@@ -214,63 +216,68 @@ export const useFileTransfer = ({ proxy }) => {
       return false
     }
 
-    const url = await createDownloadUrl(message, { download: true })
-    if (!url) {
-      patchDownloadState(message, {
-        status: 'failed',
-        progress: 0,
-        error: 'Download link could not be created.'
-      })
-      proxy.Message.error('Download failed')
-      return false
-    }
-
+    activeDownloadKeys.add(downloadKey)
     patchDownloadState(message, { status: 'downloading', progress: 0, error: '', path: '' })
     isReceivingFile.value = true
-    const progressHandler = (payload = {}) => {
-      if (String(payload.messageId) !== String(message.messageId)) {
-        return
-      }
-      patchDownloadState(message, {
-        status: 'downloading',
-        progress: Number(payload.progress || 0),
-        error: '',
-        path: ''
-      })
-    }
-    const unsubscribeProgress = window.api.onDownloadChatFileProgress(progressHandler)
-    let result
     try {
-      result = await window.api.invokeDownloadChatFile({
-        url,
-        fileName: Utils.getFileMessageName(message),
-        fileSize: declaredSize,
-        maxSize: CHAT_CONSTANTS.MAX_DOWNLOAD_SIZE,
-        messageId: message.messageId
-      })
-    } finally {
-      unsubscribeProgress?.()
-    }
-    isReceivingFile.value = false
+      const url = await createDownloadUrl(message, { download: true })
+      if (!url) {
+        patchDownloadState(message, {
+          status: 'failed',
+          progress: 0,
+          error: 'Download link could not be created.'
+        })
+        proxy.Message.error('Download failed')
+        return false
+      }
 
-    if (!result?.success) {
+      const progressHandler = (payload = {}) => {
+        if (String(payload.messageId) !== String(message.messageId)) {
+          return
+        }
+        patchDownloadState(message, {
+          status: 'downloading',
+          progress: Number(payload.progress || 0),
+          error: '',
+          path: ''
+        })
+      }
+      const unsubscribeProgress = window.api.onDownloadChatFileProgress(progressHandler)
+      let result
+      try {
+        result = await window.api.invokeDownloadChatFile({
+          url,
+          fileName: Utils.getFileMessageName(message),
+          fileSize: declaredSize,
+          maxSize: CHAT_CONSTANTS.MAX_DOWNLOAD_SIZE,
+          messageId: message.messageId
+        })
+      } finally {
+        unsubscribeProgress?.()
+      }
+
+      if (!result?.success) {
+        patchDownloadState(message, {
+          status: 'failed',
+          progress: Number(result?.progress || 0),
+          error: result?.error || 'Download failed'
+        })
+        proxy.Message.error(result?.error || 'Download failed')
+        return false
+      }
+
       patchDownloadState(message, {
-        status: 'failed',
-        progress: Number(result?.progress || 0),
-        error: result?.error || 'Download failed'
+        status: 'done',
+        progress: 100,
+        path: result.filePath,
+        error: ''
       })
-      proxy.Message.error(result?.error || 'Download failed')
-      return false
+      proxy.Message.success('Download complete')
+      return true
+    } finally {
+      activeDownloadKeys.delete(downloadKey)
+      isReceivingFile.value = false
     }
-
-    patchDownloadState(message, {
-      status: 'done',
-      progress: 100,
-      path: result.filePath,
-      error: ''
-    })
-    proxy.Message.success('Download complete')
-    return true
   }
 
   const openVideoPreviewDialog = async (message) => {

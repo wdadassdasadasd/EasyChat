@@ -212,7 +212,7 @@ const handleScroll = (event) => {
 // 测量已渲染消息的实际高度，并回填到虚拟列表高度缓存。
 // 时间分割线没有独立的 data-msg-key，其高度并入后面第一条消息的测量值，
 // 这样虚拟列表的累积高度计算才能与实际 DOM 布局匹配。
-// M-29: 高度变化时自动补偿 scrollTop，防止媒体消息实测高度与估算值差异导致滚动跳变。
+// 高度变化时自动补偿 scrollTop，防止媒体消息实测高度与估算值差异导致滚动跳变。
 const measureVisibleHeights = async () => {
   await nextTick()
   await new Promise((resolve) => window.requestAnimationFrame(resolve))

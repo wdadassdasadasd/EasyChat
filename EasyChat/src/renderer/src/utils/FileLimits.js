@@ -22,7 +22,7 @@ export const validateFileSize = (file, fileType) => {
   if (!file) {
     return { valid: false, message: 'File is empty' }
   }
-  // L-13: Number(undefined) → NaN，NaN > limit → false（静默通过）；显式校验 size 有效
+  // 显式校验 size，避免 Number(undefined) 变成 NaN 后静默绕过大小限制。
   const fileSize = Number(file.size)
   if (Number.isNaN(fileSize) || fileSize <= 0) {
     return { valid: false, message: 'File size is invalid' }

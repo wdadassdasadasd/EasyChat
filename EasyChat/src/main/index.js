@@ -55,7 +55,7 @@ function createWindow() {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
-      // C-1: 启用 contextIsolation，隔离预加载与渲染进程上下文
+      // 启用 contextIsolation，隔离预加载与渲染进程上下文。
       contextIsolation: true
     }
   })
@@ -258,7 +258,7 @@ app.on('window-all-closed', () => {
   }
 })
 
-// M-10: 应用退出时清理资源
+// 应用退出前先关闭 WebSocket，避免主进程结束时留下未完成的连接和计时器。
 let shutdownStarted = false
 app.on('before-quit', (event) => {
   if (shutdownStarted) {

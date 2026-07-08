@@ -15,7 +15,7 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 
 const locale = zhCn
 
-// A-1: 全局错误边界，防止未捕获的组件异常导致白屏
+// 全局错误边界，防止未捕获的组件异常导致白屏。
 onErrorCaptured((err, instance, info) => {
   console.error('[App ErrorBoundary]', err, 'component:', instance?.$.type?.name || '<anonymous>', 'info:', info)
   // 返回 false 阻止错误继续向上传播

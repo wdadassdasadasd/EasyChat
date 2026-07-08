@@ -266,7 +266,7 @@ export const useChatMessageSender = ({
     console.error('message sent but local replace failed', error)
     proxy.Message.error('消息已发出，但本地记录保存失败，请稍后重新打开会话同步。')
 
-    // P0-4: 后台异步重试 replace，最多重试 3 次，指数退避
+    // 后台异步重试 replace，最多重试 3 次并使用指数退避。
     scheduleLocalSyncRetry(
       localMessage.messageId,
       {
@@ -292,6 +292,7 @@ export const useChatMessageSender = ({
     maxRetries,
     onRecovered
   ) => {
+    // replace 失败只影响本地一致性，不能把已发送成功的消息回滚成发送失败。
     if (attempt > maxRetries) {
       console.error('local sync retry exhausted after', maxRetries, 'attempts')
       return
@@ -342,7 +343,7 @@ export const useChatMessageSender = ({
   }
 
   const replaceLocalWithServerMessage = async (localMessage, serverMessage, patch = {}) => {
-    // C-7: 验证消息所属会话是否与当前活跃会话一致，防止切换会话后跨会话写入
+    // 验证消息所属会话是否仍是当前活跃会话，防止切换会话后跨会话写入 UI。
     const activeSessionId = currentChatSession.value?.sessionId
     const messageSessionId = localMessage.sessionId || serverMessage.sessionId
     if (activeSessionId && messageSessionId && activeSessionId !== messageSessionId) {
@@ -450,7 +451,7 @@ export const useChatMessageSender = ({
       return
     }
 
-    // C-7: 上传前验证消息所属会话是否与当前活跃会话一致
+    // 上传前再次验证消息所属会话，避免切换会话后继续更新错误的消息项。
     const activeSessionId = currentChatSession.value?.sessionId
     const messageSessionId = message.sessionId
     if (activeSessionId && messageSessionId && activeSessionId !== messageSessionId) {
@@ -486,7 +487,7 @@ export const useChatMessageSender = ({
     }
     updateUploadProgress(message.uploadProgress || 0)
 
-    // 媒体消息先创建消息记录，文件上传只更新该消息状态。
+    // 媒体消息先创建消息记录，文件上传只更新该消息状态，避免上传失败丢失已发送消息。
     let uploadCover = cover
     if (!uploadCover && message.fileType === 1 && message.uploadSourceId) {
       const thumbnailResult = await window.api
@@ -613,7 +614,7 @@ export const useChatMessageSender = ({
       file instanceof Blob
     ) {
       localMessage.localPreviewUrl = URL.createObjectURL(file)
-      // H-16: 记录需要清理的 blob URL，消息替换/移除时 revoke
+      // 记录需要清理的 blob URL，消息替换或移除时统一 revoke。
       blobUrlsToRevoke.add(localMessage.localPreviewUrl)
     }
     // 视频消息额外保存封面 blob URL，缩略图用图片渲染，避免编码不支持时 video 标签黑屏。
@@ -950,7 +951,7 @@ export const useChatMessageSender = ({
       }
     })
     uploadControllers.clear()
-    // H-16: 清理所有 blob URL，防止内存泄漏
+    // 清理所有本地预览 blob URL，防止长时间聊天后内存泄漏。
     blobUrlsToRevoke.forEach((url) => {
       try {
         URL.revokeObjectURL(url)
@@ -959,7 +960,7 @@ export const useChatMessageSender = ({
       }
     })
     blobUrlsToRevoke.clear()
-    // P0-4: 清理后台重试定时器
+    // 清理后台重试定时器，避免组件卸载后继续写入消息状态。
     localSyncRetryTimers.forEach((timer) => {
       try {
         clearTimeout(timer)

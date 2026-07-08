@@ -71,7 +71,7 @@ const {
     proxy
 });
 
-// H-19: 组件卸载时标记 isAlive=false，阻止异步回调写入已销毁状态
+// 组件卸载时清理抽屉状态，阻止异步回调写入已销毁组件。
 onBeforeUnmount(() => {
     cleanupUserDrawer();
 });

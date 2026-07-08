@@ -8,7 +8,7 @@ const contentTypeJson = 'application/json'
 const responseTypeJson = 'json'
 let loading = null
 let loadingCount = 0
-// A-4: 请求去重缓存 — 相同 url+params 的并发请求复用 pending Promise，避免重复请求
+// 相同 url+params 的并发请求复用同一个 pending Promise，避免重复请求。
 const inFlightCache = new Map()
 
 export const stableStringify = (value) => {
@@ -40,7 +40,7 @@ export const stableStringify = (value) => {
   }
   return JSON.stringify(normalize(value))
 }
-// H-7: loading 状态安全操作，确保 close 异常不破坏计数
+// Loading 计数必须容错关闭异常，避免导航卸载时破坏全局加载状态。
 const showLoadingIfNeeded = () => {
   if (!loading) {
     loading = ElLoading.service({
@@ -199,7 +199,7 @@ instance.interceptors.response.use(
       if (errorCallback) {
         errorCallback(responseData)
       }
-      // M-12: errorCallback 已调用时不再重复弹窗
+      // errorCallback 已接管错误展示时不再重复弹窗。
       return Promise.reject({
         kind: 'api_code',
         showError: errorCallback ? false : showError,
@@ -286,7 +286,7 @@ const request = (config) => {
     headers['Content-Type'] = contentType
   }
 
-  // A-4: 请求去重 — FormData/带 signal 的请求不缓存（含文件或需手动取消）
+  // 请求去重只缓存普通请求；FormData 和带 signal 的请求可能包含文件或需要手动取消。
   let dedupKey = null
   if (!shouldUseFormData && !signal) {
     try {
@@ -336,7 +336,7 @@ const request = (config) => {
     .catch((error) => {
       clearDedup()
       const normalizedError = normalizeRequestError(error, url)
-      // M-11: 记录错误码便于调试，保持 null 返回维持向后兼容
+      // 记录错误码便于调试，同时保持 null 返回维持向后兼容。
       if (normalizedError.code || normalizedError.status || normalizedError.kind) {
         console.error(
           `[Request] ${url} failed kind=${normalizedError.kind}, code=${normalizedError.code || '-'}, status=${normalizedError.status || '-'}, error=${normalizedError.msg || '-'}`

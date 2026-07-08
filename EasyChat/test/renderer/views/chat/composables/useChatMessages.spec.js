@@ -195,6 +195,29 @@ describe('useChatMessages receive flow', () => {
     )
   })
 
+  it('loads history when the current route session was hydrated before messages loaded', () => {
+    const { chat, currentChatSession, window } = createHarness()
+
+    currentChatSession.value = {
+      contactId: 'u2',
+      contactType: 0,
+      sessionId: 's1'
+    }
+    chat.messageList.value = []
+
+    chat.chatSessionClickHandler({
+      contactId: 'u2',
+      contactType: 0,
+      sessionId: 's1'
+    })
+
+    expect(window.api.sendLoadChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 's1'
+      })
+    )
+  })
+
   it('merges a self WebSocket echo when HTTP replacement arrives later', async () => {
     let resolveRequest
     const requestPromise = new Promise((resolve) => {

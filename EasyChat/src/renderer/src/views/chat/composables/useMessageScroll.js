@@ -175,7 +175,7 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
     setMessagePanelToBottom()
     if (renderSeq !== state.renderSeq) return
     messagePanelPhase.value = 'ready'
-    // H-18: 使用当前活跃 renderSeq 而非传入的旧值，避免锁定过期状态
+    // 使用当前活跃 renderSeq 加锁，避免旧渲染批次把面板固定在过期状态。
     keepInitialBottomLock(state.renderSeq)
   }
 
@@ -197,7 +197,7 @@ export const useMessageScroll = ({ messageListRef } = {}) => {
   const cleanupMessageScroll = () => {
     clearInitialBottomLock()
     cancelSettleFrame()
-    // M-27: 重置 messagePanelPhase，防止后续渲染被 'preparing' 卡住
+    // 重置 messagePanelPhase，防止后续渲染被 preparing 状态卡住。
     messagePanelPhase.value = 'idle'
   }
 

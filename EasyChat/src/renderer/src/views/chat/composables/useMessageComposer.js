@@ -428,7 +428,7 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
 
   onBeforeUnmount(() => {
     clearPendingImages()
-    // H-17: 清理 pending 文件的 blob URL，释放内存
+    // 组件卸载时释放待发送文件的 blob URL，避免预览资源泄漏。
     pendingFileList.value.forEach((item) => {
       if (item.previewUrl) {
         URL.revokeObjectURL(item.previewUrl)

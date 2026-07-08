@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
 
-//  — 只暴露业务白名单 API，不再暴露完整 ipcRenderer。
+// 预加载层只暴露业务白名单 API，不再暴露完整 ipcRenderer。
 // 所有 IPC 调用通过命名方法转发，renderer 无法访问任意 channel。
 // sandbox: true 后 preload 仍可 import electron 内置模块。
 

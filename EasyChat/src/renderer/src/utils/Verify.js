@@ -1,7 +1,7 @@
 const regs = {
   email: /^[\w-]+(\.[\w-]+)*@[\w-]+(\.[\w-]+)+$/,
   number: /^\+?[1-9][0-9]*$/,
-  // H-22: 统一密码规则为 8-18 位，与 UserInfoPassword.vue 和 UserInfo.vue 一致
+  // 密码规则统一为 8-18 位，与 UserInfoPassword.vue 和 UserInfo.vue 保持一致。
   password: /^(?=.*\d)(?=.*[a-zA-Z])[\da-zA-Z~!@#$%^&*_]{8,18}$/,
   version: /^[0-9.]+$/
 }

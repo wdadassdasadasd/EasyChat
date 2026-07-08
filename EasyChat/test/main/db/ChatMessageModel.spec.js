@@ -39,6 +39,11 @@ vi.mock('../../../src/main/db/ADB', () => ({
     return []
   }),
   queryOne: vi.fn(async (sql, params = []) => {
+    if (sql.includes('chat_session_clear')) {
+      return params[1] === 's-cleared'
+        ? { sessionId: 's-cleared', clearMessageId: 1000, clearTime: 5000 }
+        : null
+    }
     if (sql.includes('file_path')) {
       return params[1] === 'D:/allowed/video.mp4' ? { filePath: 'D:/allowed/video.mp4' } : null
     }
@@ -409,6 +414,20 @@ describe('ChatMessageModel searchMessageBySessionId', () => {
         fileName: ''
       }
     ])
+  })
+
+  it('uses the same clear cursor visibility rules for FTS search', async () => {
+    const { queryAll } = await import('../../../src/main/db/ADB')
+    const { searchMessageBySessionId } = await import('../../../src/main/db/ChatMessageModel')
+
+    await searchMessageBySessionId({ sessionId: 's-cleared', keyword: 'hello' })
+
+    const ftsCall = queryAll.mock.calls.findLast((call) => {
+      return String(call[0]).includes('chat_message_fts f')
+    })
+    expect(ftsCall).toBeDefined()
+    expect(ftsCall[0]).toContain('m.message_id>? or m.send_time is null or m.send_time>?')
+    expect(ftsCall[1]).toEqual(['u1', 's-cleared', '"hello"', 1000, 5000, 50])
   })
 
   it('falls back to LIKE when FTS query fails', async () => {

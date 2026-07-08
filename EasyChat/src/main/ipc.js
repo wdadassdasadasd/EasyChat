@@ -64,6 +64,11 @@ import { getTempVideoFolder } from './tempVideoFiles.js'
 const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
 const MAX_LOCAL_REPLACE_RECOVERY_ITEMS = 100
 const MAX_LOCAL_VIDEO_READ_SIZE = 128 * 1024 * 1024
+const NODE_ENV = process.env.NODE_ENV
+const DEFAULT_DEV_RENDERER_DOWNLOAD_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173'
+]
 
 const getLocalReplaceRecoveryQueue = () => {
   const queue = store.getUserData(LOCAL_REPLACE_RECOVERY_KEY)
@@ -86,6 +91,7 @@ const queueLocalReplaceRecovery = (payload = {}) => {
   if (payload.mode !== 'replace' || !payload.localMessageId || !payload.message?.messageId) {
     return false
   }
+  // HTTP 已成功但本地 replace 失败时，把替换请求持久化，下一次打开聊天窗口继续回放。
   const recoveryId = getLocalReplaceRecoveryId(payload)
   const queue = getLocalReplaceRecoveryQueue().filter(
     (item) => getLocalReplaceRecoveryId(item) !== recoveryId
@@ -110,6 +116,7 @@ const recoverLocalReplaceQueue = async () => {
     return { recoveredCount: 0, remainingCount: 0 }
   }
 
+  // 回放失败的 replace 会保留在队列中，避免已发送消息长期停留在本地临时 id。
   const remaining = []
   let recoveredCount = 0
   for (const payload of queue) {
@@ -199,6 +206,12 @@ const getErrorKind = (error) => {
   return 'ipc_error'
 }
 
+const buildValidationError = (message) => {
+  const error = new Error(message)
+  error.kind = 'validation_error'
+  return error
+}
+
 const buildIpcErrorPayload = (callbackChannel, error, payload = {}) => {
   return {
     ...payload,
@@ -282,7 +295,7 @@ const onLoadSessionData = () => {
       const result = await selectUserSessionList()
       e.sender.send(IPC_CALLBACK_CHANNELS.loadSessionData, result)
     } catch (error) {
-      // P0-3: DB 读错误显式传播到 renderer，避免 renderer 将错误对象当作空列表
+      // DB 读错误显式传播到 renderer，避免 renderer 将错误对象当作空列表。
       e.sender.send(
         IPC_CALLBACK_CHANNELS.loadSessionData,
         buildIpcErrorPayload(IPC_CALLBACK_CHANNELS.loadSessionData, error)
@@ -291,7 +304,7 @@ const onLoadSessionData = () => {
   })
 }
 
-// H-10: 移除不安全的重复 IPC 监听器，仅保留 Safe 版本
+// 仅保留带校验和统一错误回包的安全 IPC 监听器。
 
 //分页查询聊天消息
 const onDelChatSessionSafe = () => {
@@ -329,7 +342,7 @@ const onTopChatSessionSafe = () => {
 const onLoadChatMessage = () => {
   registerSafeIpcOn('loadChatMessage', IPC_CALLBACK_CHANNELS.loadChatMessage, async (e, data) => {
     validateLoadChatMessage(data)
-    // P0-3: 包裹 DB 查询以捕获错误，显式传播到 renderer
+    // 包裹 DB 查询以捕获错误，显式传播到 renderer。
     let result
     try {
       result = data?.targetMessageId
@@ -566,7 +579,7 @@ const onOpenTempVideoFile = () => {
   registerSafeIpcHandle('openTempVideoFile', async (e, data = {}) => {
     // 没有本地原文件时，renderer 会把已下载视频 blob 交给主进程写入临时文件再打开。
     const { fileName = 'video.mp4', buffer } = data
-    // M-4: 限制临时视频文件大小，防止内存耗尽
+    // 限制临时视频文件大小，防止 renderer 传入超大 blob 耗尽主进程内存。
     const MAX_TEMP_VIDEO_SIZE = 256 * 1024 * 1024
     validateTempVideo(data, MAX_TEMP_VIDEO_SIZE)
 
@@ -671,6 +684,45 @@ const resolveConflictFilePath = (folder, fileName) => {
 
 const MAX_DOWNLOAD_REDIRECTS = 10
 
+const addHttpOrigin = (origins, value, label) => {
+  if (!value) {
+    return
+  }
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      origins.add(parsed.origin)
+    }
+  } catch (error) {
+    console.error(`Invalid configured download domain: ${label}`, error)
+  }
+}
+
+const getAllowedDownloadOrigins = () => {
+  const domainKeys =
+    NODE_ENV === 'development' ? ['devDomain', 'prodDomain'] : ['prodDomain', 'devDomain']
+  const origins = new Set()
+  domainKeys.forEach((key) => {
+    addHttpOrigin(origins, store.getData(key), key)
+  })
+  if (NODE_ENV === 'development') {
+    addHttpOrigin(origins, process.env.ELECTRON_RENDERER_URL, 'ELECTRON_RENDERER_URL')
+    DEFAULT_DEV_RENDERER_DOWNLOAD_ORIGINS.forEach((origin) =>
+      addHttpOrigin(origins, origin, 'default dev renderer origin')
+    )
+  }
+  return origins
+}
+
+const validateDownloadUrlOrigin = (url, allowedOrigins = getAllowedDownloadOrigins()) => {
+  const normalizedUrl = validateHttpUrl(url)
+  const parsedUrl = new URL(normalizedUrl)
+  if (!allowedOrigins.has(parsedUrl.origin)) {
+    throw buildValidationError('Download URL origin is not allowed')
+  }
+  return normalizedUrl
+}
+
 const isPathWithinFolder = async (filePath, folderPath) => {
   const [realFilePath, realFolderPath] = await Promise.all([
     fs.promises.realpath(filePath),
@@ -680,7 +732,16 @@ const isPathWithinFolder = async (filePath, folderPath) => {
   return Boolean(relativePath) && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
 }
 
-const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redirectDepth = 0 }) => {
+const downloadToFile = ({
+  e,
+  fileName,
+  fileSize,
+  maxSize,
+  messageId,
+  url,
+  allowedOrigins,
+  _redirectDepth = 0
+}) => {
   return new Promise((resolve) => {
     let settled = false
     const finish = (result) => {
@@ -698,7 +759,7 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
         finish({ success: false, error: 'Download failed: too many redirects' })
         return
       }
-      const normalizedUrl = validateHttpUrl(url)
+      const normalizedUrl = validateDownloadUrlOrigin(url, allowedOrigins)
       const folderInfo = await getLocalFileFolder()
       const targetPath = resolveConflictFilePath(folderInfo.localFileFolder, fileName)
       const tempPath = `${targetPath}.download`
@@ -713,7 +774,7 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
           response.resume()
           try {
             const redirectUrl = new URL(response.headers.location, normalizedUrl).toString()
-            validateHttpUrl(redirectUrl)
+            validateDownloadUrlOrigin(redirectUrl, allowedOrigins)
             downloadToFile({
               e,
               fileName,
@@ -721,18 +782,20 @@ const downloadToFile = ({ e, fileName, fileSize, maxSize, messageId, url, _redir
               maxSize,
               messageId,
               url: redirectUrl,
+              allowedOrigins,
               _redirectDepth: _redirectDepth + 1
             })
               .then(finish)
               .catch((error) => {
                 finish({ success: false, error: getErrorMessage(error) })
               })
-          } catch (error) {
-            finish({
-              success: false,
-              error: `Download redirect rejected: ${getErrorMessage(error)}`
-            })
-          }
+            } catch (error) {
+              finish({
+                success: false,
+                ...(error?.kind ? { kind: error.kind } : {}),
+                error: `Download redirect rejected: ${getErrorMessage(error)}`
+              })
+            }
           return
         }
 
@@ -841,13 +904,15 @@ const onChatFileDownload = () => {
   registerSafeIpcHandle('downloadChatFile', async (e, data = {}) => {
     validateDownload(data)
     const { fileName, fileSize, maxSize, messageId, url } = data
+    const allowedOrigins = getAllowedDownloadOrigins()
+    validateDownloadUrlOrigin(url, allowedOrigins)
     if (activeDownloads.has(String(messageId))) {
       return {
         success: false,
         error: 'File is already downloading'
       }
     }
-    return await downloadToFile({ e, fileName, fileSize, maxSize, messageId, url })
+    return await downloadToFile({ e, fileName, fileSize, maxSize, messageId, url, allowedOrigins })
   })
 
   registerSafeIpcHandle('cancelDownloadChatFile', async (_e, data = {}) => {

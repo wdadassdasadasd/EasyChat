@@ -195,7 +195,7 @@ export const useChatSessions = ({ proxy, route }) => {
     removeSessionListener()
 
     loadSessionDataHandler = async (dataList) => {
-      // P0-3: DB 错误时 dataList 为 {success:false, error, kind}，非数组
+      // DB 错误时 dataList 为 { success:false, error, kind }，不能按会话数组处理。
       if (dataList && !Array.isArray(dataList) && dataList.success === false) {
         proxy.Message.error(dataList.error || '会话列表加载失败，数据库可能不可用。')
         return

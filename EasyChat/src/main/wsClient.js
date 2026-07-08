@@ -145,6 +145,7 @@ const persistRecoveryMessages = async (messages, kind, error) => {
     return true
   }
   try {
+    // 接收链路落库失败或队列溢出时先写恢复日志，再通知 renderer 做增量会话兜底。
     await appendReceiveRecoveryMessages(store.getUserId(), messages)
     publishReceiveRecoveryNeeded({
       error,
@@ -199,6 +200,7 @@ const resetWsRuntime = async () => {
     return resetRuntimePromise
   }
   resetRuntimePromise = (async () => {
+    // reset 期间先尽量刷完当前接收队列，再递增运行代次丢弃旧 WebSocket 的异步回包。
     clearHeartbeatTimer()
     clearReconnectTimer()
     clearReceiveFlushTimer()
@@ -371,6 +373,7 @@ const saveAndPublishMessageBatch = async (messages) => {
     return
   }
 
+  // 普通消息必须先批量落库，再发布给 renderer，保证 UI 展示的数据已经可恢复。
   const genAtStart = wsRuntimeGeneration
   const { savedMessages = [] } = await saveMessageBatch(messages, {
     sessionRows: (newMessages) => {
@@ -422,6 +425,7 @@ const flushReceiveQueue = async () => {
 
   try {
     while (receiveQueue.length > 0) {
+      // 按固定批量写库，既降低 SQLite 写放大，也让失败批次能独立进入恢复流程。
       const messages = receiveQueue.slice(0, RECEIVE_FLUSH_MAX)
       try {
         await saveAndPublishMessageBatch(messages)
@@ -618,7 +622,7 @@ const closeWs = async () => {
 }
 
 const normalizeWsMessages = (payload, depth = 0) => {
-  // M-5: 递归深度限制，防止恶意深层嵌套导致栈溢出
+  // 限制递归深度，防止异常或恶意嵌套的 WebSocket payload 导致栈溢出。
   if (depth > 10) {
     console.warn('normalizeWsMessages: max recursion depth reached, dropping nested payload')
     return []
@@ -781,7 +785,7 @@ const createWs = () => {
       return
     }
 
-    // C-4: 串行化消息处理，防止多个 handleWsMessage 并发执行竞争共享状态
+    // 串行化消息处理，防止多个 handleWsMessage 并发竞争接收队列和运行代次。
     enqueueMessageProcessing(message)
   }
 
