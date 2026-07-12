@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ElButton, ElConfigProvider, ElInfiniteScroll, ElLoading } from 'element-plus'
-import { elementPlusPlugins, installElementPlus } from '@/utils/elementPlus'
+
+vi.mock('@/utils/elementPlusAppStyles', () => ({}))
+
+import { ElButton, ElConfigProvider, ElInfiniteScroll, ElInput } from 'element-plus'
+import {
+  elementPlusPlugins,
+  ensureElementPlusAppFeatures,
+  installElementPlus
+} from '@/utils/elementPlus'
+import { elementPlusAppPlugins } from '@/utils/elementPlusAppFeatures'
 
 describe('installElementPlus', () => {
-  it('registers the required Element Plus components and directives', () => {
+  it('registers only the Element Plus components required before login', () => {
     const app = {
       use: vi.fn().mockReturnThis()
     }
@@ -12,10 +20,22 @@ describe('installElementPlus', () => {
     const registeredPlugins = app.use.mock.calls.map(([plugin]) => plugin)
 
     expect(result).toBe(app)
-    expect(elementPlusPlugins).toHaveLength(25)
+    expect(elementPlusPlugins).toHaveLength(6)
     expect(registeredPlugins).toHaveLength(elementPlusPlugins.length)
     expect(registeredPlugins).toEqual(
-      expect.arrayContaining([ElConfigProvider, ElButton, ElInfiniteScroll, ElLoading])
+      expect.arrayContaining([ElConfigProvider, ElButton, ElInput])
     )
+  })
+
+  it('loads and installs application-only components once', async () => {
+    const app = {
+      use: vi.fn().mockReturnThis()
+    }
+
+    await Promise.all([ensureElementPlusAppFeatures(app), ensureElementPlusAppFeatures(app)])
+
+    const registeredPlugins = app.use.mock.calls.map(([plugin]) => plugin)
+    expect(registeredPlugins).toHaveLength(elementPlusAppPlugins.length)
+    expect(registeredPlugins).toEqual(expect.arrayContaining([ElInfiniteScroll]))
   })
 })

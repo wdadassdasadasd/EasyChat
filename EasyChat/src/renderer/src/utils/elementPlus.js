@@ -1,62 +1,43 @@
 import {
   ElButton,
-  ElCascader,
-  ElCheckbox,
-  ElCheckboxGroup,
   ElConfigProvider,
-  ElDialog,
-  ElDropdown,
-  ElDropdownItem,
-  ElDropdownMenu,
   ElForm,
   ElFormItem,
   ElIcon,
-  ElImage,
-  ElInfiniteScroll,
-  ElInput,
-  ElLoading,
-  ElPopover,
-  ElProgress,
-  ElRadio,
-  ElRadioGroup,
-  ElSwitch,
-  ElTabPane,
-  ElTabs,
-  ElTag,
-  ElUpload
+  ElInput
 } from 'element-plus'
 
+// 登录页和 App 根节点需要同步可用的最小组件集合。
 const elementPlusPlugins = [
   ElConfigProvider,
   ElForm,
   ElFormItem,
   ElInput,
   ElButton,
-  ElIcon,
-  ElSwitch,
-  ElTag,
-  ElRadio,
-  ElRadioGroup,
-  ElDropdown,
-  ElDropdownMenu,
-  ElDropdownItem,
-  ElUpload,
-  ElImage,
-  ElPopover,
-  ElDialog,
-  ElProgress,
-  ElTabs,
-  ElTabPane,
-  ElCascader,
-  ElCheckbox,
-  ElCheckboxGroup,
-  ElInfiniteScroll,
-  ElLoading
+  ElIcon
 ]
 
 export const installElementPlus = (app) => {
   elementPlusPlugins.forEach((plugin) => app.use(plugin))
   return app
+}
+
+let appFeaturesPromise = null
+
+// 仅在离开登录页时加载主应用的组件与样式，避免冷启动加载聊天/设置能力。
+export const ensureElementPlusAppFeatures = (app) => {
+  if (!appFeaturesPromise) {
+    appFeaturesPromise = Promise.all([
+      import('./elementPlusAppFeatures'),
+      import('./elementPlusAppStyles')
+    ])
+      .then(([{ installElementPlusAppFeatures }]) => installElementPlusAppFeatures(app))
+      .catch((error) => {
+        appFeaturesPromise = null
+        throw error
+      })
+  }
+  return appFeaturesPromise
 }
 
 export { elementPlusPlugins }

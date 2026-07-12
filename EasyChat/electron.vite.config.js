@@ -8,12 +8,14 @@ const createRendererChunks = (id) => {
     return
   }
 
+  // Element Plus 的登录核心和主应用组件通过动态 import 分开加载。
+  // 不在这里强制合并，否则 Rollup 会把延迟组件重新并入首屏 vendor chunk。
   if (
     normalizedId.includes('/node_modules/element-plus/') ||
     normalizedId.includes('/node_modules/@element-plus/icons-vue/') ||
     normalizedId.includes('/node_modules/@imengyu/vue3-context-menu/')
   ) {
-    return 'element-plus-vendor'
+    return
   }
 
   if (
