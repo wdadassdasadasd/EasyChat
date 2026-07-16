@@ -64,6 +64,7 @@
                             @openFilePreview="openFilePreviewDialog"
                             @openVideoPreview="openVideoPreviewDialog"
                             @cancelUploadMessage="cancelUploadMessage"
+                            @toggleUploadPause="toggleUploadPause"
                             @retryMessage="retryFailedMessage"
                             @userScroll="clearInitialBottomLock"
                         />
@@ -211,6 +212,7 @@ const {
     messageLoadingMore,
     messagePanelPhase,
     cancelUploadMessage,
+    toggleUploadPause,
     onSendChatMessage,
     onSendFileMessage,
     onSendImageMessage,

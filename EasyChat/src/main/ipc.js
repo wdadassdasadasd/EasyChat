@@ -38,6 +38,17 @@ import {
   releaseUploadSource
 } from './uploadSourceRegistry.js'
 import {
+  acknowledgeUploadTask,
+  cancelUploadTask,
+  enqueueUploadTask,
+  pauseUploadTask,
+  resumePersistedUploadTasks,
+  resumeUploadTask,
+  setUploadTaskEventTarget,
+  activateUploadTasks,
+  deactivateUploadTasks
+} from './uploadTaskManager.js'
+import {
   validateClearChatMessage,
   validateContactId,
   validateDownload,
@@ -56,6 +67,8 @@ import {
   validateTopChatSession,
   validateUploadSourceChunk,
   validateUploadSourceId,
+  validateUploadTaskMessageId,
+  validateEnqueueUploadTask,
   validateUploadSourceRegistration,
   validateWindowOperation
 } from './ipcValidation.js'
@@ -153,15 +166,24 @@ const onLoginSuccess = (mainWindow, callback) => {
   ipcMain.on('openChat', async (e, config) => {
     try {
       validateOpenChat(config)
+      await deactivateUploadTasks()
       store.initUserId(config.userId)
       store.setUserData('token', config.token)
       await addUserSetting(config.userId, config.email)
       try {
+        activateUploadTasks({ userId: config.userId, token: config.token, eventTarget: e.sender })
         const replaceRecovery = await recoverLocalReplaceQueue()
         if (replaceRecovery.recoveredCount) {
           logger.info(`Recovered local message replacements: ${replaceRecovery.recoveredCount}`)
         }
-        const result = await recoverStalePendingMessages()
+        const uploadRecovery = await resumePersistedUploadTasks({
+          onTerminalStatus: async ({ messageId, succeeded }) => {
+            await updateLocalMessageStatus({ messageId, status: succeeded ? 1 : 0 })
+          }
+        })
+        const result = await recoverStalePendingMessages({
+          excludeMessageIds: uploadRecovery?.protectedMessageIds || []
+        })
         if (result?.recoveredCount) {
           logger.info(`Recovered stale pending messages: ${result.recoveredCount}`)
         }
@@ -169,6 +191,7 @@ const onLoginSuccess = (mainWindow, callback) => {
         console.error('Failed to recover stale pending messages', error)
       }
       await initWs(config, e.sender)
+      setUploadTaskEventTarget(e.sender)
       callback(config)
     } catch (error) {
       console.error('IPC openChat failed', error)
@@ -394,6 +417,7 @@ const onMarkSessionRead = () => {
 
 const onResetToLogin = (_mainWindow, callback) => {
   const reset = async () => {
+    await deactivateUploadTasks()
     await closeWs()
     callback()
     return true
@@ -428,6 +452,30 @@ const onUploadSources = () => {
   registerSafeIpcHandle('generateUploadSourceThumbnail', async (_e, data = {}) => {
     validateUploadSourceId(data)
     return await generateUploadSourceThumbnail(data)
+  })
+}
+
+const onUploadTasks = () => {
+  registerSafeIpcHandle('enqueueUploadTask', async (_e, data = {}) => {
+    validateEnqueueUploadTask(data)
+    return enqueueUploadTask(data)
+  })
+  registerSafeIpcHandle('pauseUploadTask', async (_e, data = {}) => {
+    validateUploadTaskMessageId(data)
+    return pauseUploadTask(data)
+  })
+  registerSafeIpcHandle('resumeUploadTask', async (_e, data = {}) => {
+    validateUploadTaskMessageId(data)
+    return resumeUploadTask(data)
+  })
+  registerSafeIpcHandle('cancelUploadTask', async (_e, data = {}) => {
+    validateUploadTaskMessageId(data)
+    return cancelUploadTask(data)
+  })
+  registerSafeIpcHandle('acknowledgeUploadTask', async (_e, data = {}) => {
+    validateUploadTaskMessageId(data)
+    if (typeof data.succeeded !== 'boolean') throw buildValidationError('succeeded must be boolean')
+    return acknowledgeUploadTask(data)
   })
 }
 
@@ -1003,6 +1051,7 @@ export {
   onClearChatMessage,
   onSearchChatMessage,
   onUploadSources,
+  onUploadTasks,
   onLocalFileFolder,
   onOpenTempVideoFile,
   onChatFileDownload

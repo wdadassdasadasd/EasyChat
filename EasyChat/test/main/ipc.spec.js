@@ -52,6 +52,18 @@ vi.mock('../../src/main/uploadSourceRegistry', () => ({
   releaseUploadSource: vi.fn(() => ({ success: true, released: true }))
 }))
 
+vi.mock('../../src/main/uploadTaskManager', () => ({
+  acknowledgeUploadTask: vi.fn(async () => ({ success: true })),
+  activateUploadTasks: vi.fn(),
+  cancelUploadTask: vi.fn(async () => ({ success: true })),
+  deactivateUploadTasks: vi.fn(async () => {}),
+  enqueueUploadTask: vi.fn(async () => ({ success: true })),
+  pauseUploadTask: vi.fn(async () => ({ success: true })),
+  resumePersistedUploadTasks: vi.fn(async () => ({ protectedMessageIds: [] })),
+  resumeUploadTask: vi.fn(async () => ({ success: true })),
+  setUploadTaskEventTarget: vi.fn()
+}))
+
 vi.mock('../../src/main/db/ChatSessionUserModel', () => ({
   selectUserSessionList: vi.fn(async () => [
     { contactId: 'c1', sessionId: 's1', contactType: 0, contactName: 'Test User' }

@@ -39,11 +39,17 @@
                 <template v-if="message.status == 2">
                     <span>{{ sendingText }}</span>
                     <button
-                        v-if="message.uploading"
+                        v-if="message.uploading || message.uploadPaused"
                         class="message-retry-btn"
                         type="button"
                         @click="$emit('cancelUploadMessage', message)"
                     >Cancel</button>
+                    <button
+                        v-if="message.messageType == 5 && (message.uploading || message.uploadPaused)"
+                        class="message-retry-btn"
+                        type="button"
+                        @click="$emit('toggleUploadPause', message)"
+                    >{{ message.uploadPaused ? 'Resume' : 'Pause' }}</button>
                 </template>
                 <button
                     v-else-if="message.status == 0"
@@ -90,7 +96,7 @@ const props = defineProps({
     }
 });
 
-defineEmits(['cancelUploadMessage', 'imageLoaded', 'openFilePreview', 'openVideoPreview', 'retryMessage']);
+defineEmits(['cancelUploadMessage', 'toggleUploadPause', 'imageLoaded', 'openFilePreview', 'openVideoPreview', 'retryMessage']);
 
 const isSelf = computed(() => {
     // 自己发送的消息右对齐，别人消息左对齐；群聊昵称展示也依赖这个判断。

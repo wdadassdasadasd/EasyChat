@@ -723,11 +723,35 @@ const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
   return searchMessageBySessionIdLike({ sessionId, keyword })
 }
 
-const recoverStalePendingMessages = async ({ timeoutMs = PENDING_RECOVERY_TIMEOUT_MS } = {}) => {
+const recoverStalePendingMessages = async ({
+  timeoutMs = PENDING_RECOVERY_TIMEOUT_MS,
+  excludeMessageIds = []
+} = {}) => {
   const cutoffTime = Date.now() - Number(timeoutMs || PENDING_RECOVERY_TIMEOUT_MS)
-  const sql =
-    'update chat_message set status=? where user_id=? and status=? and (send_time is null or send_time<?)'
-  const recoveredCount = await runStrict(sql, [0, store.getUserId(), 2, cutoffTime])
+  const userId = store.getUserId()
+  const condition = 'where user_id=? and status=? and (send_time is null or send_time<?)'
+  const protectedIds = new Set(excludeMessageIds.map((id) => String(id)).filter(Boolean))
+  if (protectedIds.size === 0) {
+    const recoveredCount = await runStrict(`update chat_message set status=? ${condition}`, [0, userId, 2, cutoffTime])
+    return { success: true, recoveredCount, cutoffTime }
+  }
+
+  // SQLite 绑定参数总数受限。先找出候选 pending，再按每批 496 个 messageId 更新，
+  // 保证任意数量的受保护上传任务都不会在较早批次里被误标失败。
+  const rows = await queryAll(`select message_id from chat_message ${condition}`, [userId, 2, cutoffTime])
+  const recoverableIds = rows
+    .map((row) => String(row?.messageId || ''))
+    .filter((messageId) => messageId && !protectedIds.has(messageId))
+  const maxIdsPerBatch = MAX_SQL_IN_PARAMS - 4
+  let recoveredCount = 0
+  for (let offset = 0; offset < recoverableIds.length; offset += maxIdsPerBatch) {
+    const batch = recoverableIds.slice(offset, offset + maxIdsPerBatch)
+    const placeholders = batch.map(() => '?').join(',')
+    recoveredCount += await runStrict(
+      `update chat_message set status=? ${condition} and message_id in (${placeholders})`,
+      [0, userId, 2, cutoffTime, ...batch]
+    )
+  }
   return {
     success: true,
     recoveredCount,

@@ -46,6 +46,25 @@ const add_tables = [
     'clear_message_id bigint default 0,' +
     'clear_time bigint default 0,' +
     'primary key (user_id, session_id)' +
+    ');',
+  // 主进程托管的上传任务独立于 chat_message：消息负责业务展示，任务负责可恢复传输状态。
+  'create table if not exists upload_task(' +
+    'user_id varchar not null,' +
+    'task_id varchar not null,' +
+    'message_id bigint not null,' +
+    'upload_source_id varchar not null,' +
+    'state varchar not null,' +
+    'upload_id varchar,' +
+    'file_name varchar not null,' +
+    'file_size bigint not null,' +
+    'file_type integer,' +
+    'total_chunks integer,' +
+    'uploaded_bytes bigint default 0,' +
+    'last_error varchar,' +
+    'created_at bigint not null,' +
+    'updated_at bigint not null,' +
+    'primary key (user_id, task_id),' +
+    'unique (user_id, message_id)' +
     ');'
 ]
 
@@ -91,7 +110,8 @@ const add_index = [
     ' status asc,' +
     ' top_type desc,' +
     ' last_receive_time desc' +
-    ');'
+    ');',
+  'create index if not exists idx_upload_task_user_state on upload_task(user_id asc, state asc, updated_at asc);'
 ]
 
 export { add_tables, optional_tables, add_index, alter_tables }

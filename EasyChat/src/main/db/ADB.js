@@ -23,6 +23,22 @@ const globalColumnMap = {
     uploadSourceId: 'upload_source_id',
     fileType: 'file_type'
   },
+  upload_task: {
+    userId: 'user_id',
+    taskId: 'task_id',
+    messageId: 'message_id',
+    uploadSourceId: 'upload_source_id',
+    state: 'state',
+    uploadId: 'upload_id',
+    fileName: 'file_name',
+    fileSize: 'file_size',
+    fileType: 'file_type',
+    totalChunks: 'total_chunks',
+    uploadedBytes: 'uploaded_bytes',
+    lastError: 'last_error',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at'
+  },
   chat_session_user: {
     userId: 'user_id',
     contactId: 'contact_id',

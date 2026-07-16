@@ -1139,7 +1139,7 @@ describe('useChatMessageSender', () => {
     })
   })
 
-  it('falls back to legacy upload when chunk init is unavailable', async () => {
+  it('does not fall back to whole-file upload when a large-file chunk init is unavailable', async () => {
     const { request, sender } = createHarness({
       requestResults: [
         {
@@ -1156,8 +1156,7 @@ describe('useChatMessageSender', () => {
             sendTime: 6000
           }
         },
-        null,
-        { data: null }
+        null
       ]
     })
 
@@ -1172,14 +1171,13 @@ describe('useChatMessageSender', () => {
       },
       cover: { name: 'cover.png' }
     })
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
 
     const configs = request.mock.calls.map((call) => call[0]).filter(Boolean)
     const initConfig = configs.find((config) => config.url === '/chat/uploadFile/init')
-    const legacyUploadConfig = configs.find((config) => config.url === '/chat/uploadFile')
 
     expect(initConfig).toBeTruthy()
     expect(initConfig.showError).toBe(false)
-    expect(legacyUploadConfig).toBeTruthy()
+    expect(configs.find((config) => config.url === '/chat/uploadFile')).toBeUndefined()
   })
 })

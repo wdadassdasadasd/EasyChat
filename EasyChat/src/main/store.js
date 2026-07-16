@@ -31,6 +31,21 @@ const setUserData = (key, value) => {
   }
   store.set(userId + key, value)
 }
+const getUserStoreKey = (targetUserId, key) => {
+  if (!targetUserId) {
+    throw new Error('userId is required')
+  }
+  return targetUserId + key
+}
+const setUserDataForUser = (targetUserId, key, value) => {
+  store.set(getUserStoreKey(targetUserId, key), value)
+}
+const getUserDataForUser = (targetUserId, key) => {
+  return store.get(getUserStoreKey(targetUserId, key))
+}
+const deleteUserDataForUser = (targetUserId, key) => {
+  store.delete(getUserStoreKey(targetUserId, key))
+}
 const getUserData = (key) => {
   if (!userId) {
     console.error('getUserData called before initUserId, key:', key)
@@ -46,4 +61,15 @@ const deleteUserData = (key) => {
   store.delete(userId + key)
 }
 
-export default { initUserId, getUserId, setData, getData, setUserData, getUserData, deleteUserData }
+export default {
+  initUserId,
+  getUserId,
+  setData,
+  getData,
+  setUserData,
+  getUserData,
+  deleteUserData,
+  setUserDataForUser,
+  getUserDataForUser,
+  deleteUserDataForUser
+}

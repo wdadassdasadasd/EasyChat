@@ -222,7 +222,8 @@ export const useChatMessages = ({
     onSendFileMessage,
     onSendImageMessage,
     onSendVideoMessage,
-    retryFailedMessage
+    retryFailedMessage,
+    toggleUploadPause
   } = useChatMessageSender({
     appendMessageIfMissing,
     currentChatSession,
@@ -659,6 +660,7 @@ export const useChatMessages = ({
     onSendImageMessage,
     onSendVideoMessage,
     cancelUploadMessage,
+    toggleUploadPause,
     registerMessageListeners,
     retryFailedMessage,
     settleScrollToBottom

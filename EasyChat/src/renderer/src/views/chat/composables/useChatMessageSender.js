@@ -39,6 +39,7 @@ export const useChatMessageSender = ({
   let activeUploadCount = 0
   const uploadControllers = new Map()
   const uploadSourceReleaseRetryTimers = []
+  let unsubscribeUploadTaskProgress = null
 
   const runNextUploadTask = () => {
     if (activeUploadCount >= maxUploadConcurrency || uploadTaskQueue.length === 0) {
@@ -459,6 +460,28 @@ export const useChatMessageSender = ({
       return
     }
 
+    // 文件路径和网络传输由主进程托管；渲染进程只保留展示状态，窗口卸载不会中断上传。
+    if (message.uploadSourceId && typeof window.api?.invokeEnqueueUploadTask === 'function') {
+      updateMessageById?.(message.messageId, {
+        status: 2,
+        uploading: true,
+        uploadProgress: Number(message.uploadProgress || 0),
+        uploadError: '',
+        uploadCanceled: false
+      })
+      const taskResult = await window.api.invokeEnqueueUploadTask({
+        messageId: Number(message.messageId),
+        uploadSourceId: message.uploadSourceId,
+        fileName: message.fileName || file?.name || message.messageContent,
+        fileSize: Number(message.fileSize || file?.size || 0),
+        fileType: Number(message.fileType)
+      })
+      if (!taskResult?.success) {
+        await markMessageFailed(message, taskResult?.error || '无法创建文件上传任务。')
+      }
+      return
+    }
+
     const controller = new AbortController()
     const uploadKey = String(message.messageId)
     uploadControllers.set(uploadKey, controller)
@@ -839,6 +862,12 @@ export const useChatMessageSender = ({
       proxy.Message.error('Media status was confirmed, but could not be saved locally.')
     })
 
+    window.api?.invokeAcknowledgeUploadTask?.({
+      messageId: Number(targetMessage.messageId),
+      succeeded: ackSucceeded,
+      error: ackSucceeded ? '' : ackError
+    }).catch((error) => console.error('acknowledge upload task failed', error))
+
     if (
       targetMessage.uploadAckRevision !== ackRevision ||
       !ackSucceeded ||
@@ -918,21 +947,22 @@ export const useChatMessageSender = ({
   }
 
   const cancelUploadMessage = (message = {}) => {
-    if (!message.messageId || !message.uploading) {
+    if (!message.messageId || (!message.uploading && !message.uploadPaused)) {
       return
     }
     const controller = uploadControllers.get(String(message.messageId))
     controller?.abort()
     Object.assign(message, {
-      uploadCanceled: true
+      uploadCanceled: true,
+      uploadPaused: false
     })
     updateMessageById?.(message.messageId, {
       uploadCanceled: true
     })
-    cancelMediaUpload({
-      messageId: message.messageId,
-      proxy
-    }).catch((error) => {
+    const cancel = window.api?.invokeCancelUploadTask
+      ? window.api.invokeCancelUploadTask({ messageId: Number(message.messageId) })
+      : cancelMediaUpload({ messageId: message.messageId, proxy })
+    cancel.catch((error) => {
       console.error('cancel media upload failed', error)
     })
     markMessageFailed(message, '文件上传已取消。').catch((error) => {
@@ -941,6 +971,62 @@ export const useChatMessageSender = ({
   }
 
   const localSyncRetryTimers = []
+
+  const toggleUploadPause = (message = {}) => {
+    if (!message.messageId || typeof window.api?.invokePauseUploadTask !== 'function') return
+    const paused = Boolean(message.uploadPaused)
+    const request = paused
+      ? window.api.invokeResumeUploadTask({ messageId: Number(message.messageId) })
+      : window.api.invokePauseUploadTask({ messageId: Number(message.messageId) })
+    request
+      .then((result) => {
+        if (!result?.success) throw new Error(result?.error || '上传任务状态切换失败')
+        Object.assign(message, { uploading: paused, uploadPaused: !paused, uploadError: '' })
+        updateMessageById?.(message.messageId, {
+          uploading: paused,
+          uploadPaused: !paused,
+          uploadError: ''
+        })
+      })
+      .catch((error) => {
+        console.error('toggle upload pause failed', error)
+        proxy.Message.error('无法切换上传状态，请稍后重试。')
+      })
+  }
+
+  const handleUploadTaskProgress = (payload = {}) => {
+    const message = messageList.value.find((item) => item.messageId == payload.messageId)
+    if (!message || message.uploadAckReceived) return
+    const state = payload.state
+    const progress = Math.min(99, Math.max(0, Number(payload.progress) || 0))
+    if (state === 'failed') {
+      markMessageFailed(message, payload.error || '文件上传失败，请重试。').catch((error) => {
+        console.error('save failed upload task status failed', error)
+      })
+      return
+    }
+    const paused = state === 'paused'
+    Object.assign(message, {
+      status: 2,
+      uploading: !paused,
+      uploadProgress: progress,
+      uploadError: paused ? '上传已暂停。' : '',
+      uploadCanceled: state === 'canceled',
+      uploadPaused: paused
+    })
+    updateMessageById?.(message.messageId, {
+      status: 2,
+      uploading: !paused,
+      uploadProgress: progress,
+      uploadError: paused ? '上传已暂停。' : '',
+      uploadCanceled: state === 'canceled',
+      uploadPaused: paused
+    })
+  }
+
+  if (typeof window.api?.onUploadTaskProgress === 'function') {
+    unsubscribeUploadTaskProgress = window.api.onUploadTaskProgress(handleUploadTaskProgress)
+  }
 
   const cleanupUploadControllers = () => {
     uploadControllers.forEach((controller) => {
@@ -951,6 +1037,8 @@ export const useChatMessageSender = ({
       }
     })
     uploadControllers.clear()
+    unsubscribeUploadTaskProgress?.()
+    unsubscribeUploadTaskProgress = null
     // 清理所有本地预览 blob URL，防止长时间聊天后内存泄漏。
     blobUrlsToRevoke.forEach((url) => {
       try {
@@ -983,6 +1071,7 @@ export const useChatMessageSender = ({
     onSendFileMessage,
     onSendImageMessage,
     onSendVideoMessage,
-    retryFailedMessage
+    retryFailedMessage,
+    toggleUploadPause
   }
 }

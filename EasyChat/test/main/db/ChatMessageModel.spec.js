@@ -476,4 +476,25 @@ describe('ChatMessageModel recoverStalePendingMessages', () => {
     })
     expect(strictRuns.at(-1).sql).toContain('status=?')
   })
+
+  it('protects every active upload while keeping SQL parameters within the configured limit', async () => {
+    const adb = await import('../../../src/main/db/ADB')
+    const protectedIds = Array.from({ length: 600 }, (_item, index) => index + 1)
+    adb.queryAll.mockResolvedValueOnce([
+      { messageId: 1 },
+      { messageId: 600 },
+      { messageId: 601 },
+      { messageId: 602 }
+    ])
+    const { recoverStalePendingMessages } = await import('../../../src/main/db/ChatMessageModel')
+
+    const result = await recoverStalePendingMessages({ timeoutMs: 60000, excludeMessageIds: protectedIds })
+
+    expect(result.recoveredCount).toBe(1)
+    expect(strictRuns.at(-1).params).toHaveLength(6)
+    expect(strictRuns.at(-1).params).toContain('601')
+    expect(strictRuns.at(-1).params).toContain('602')
+    expect(strictRuns.at(-1).params).not.toContain('1')
+    expect(strictRuns.at(-1).params).not.toContain('600')
+  })
 })

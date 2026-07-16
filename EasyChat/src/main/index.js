@@ -20,7 +20,8 @@ import {
   onSaveSendMessage,
   onClearChatMessage,
   onSearchChatMessage,
-  onUploadSources
+  onUploadSources,
+  onUploadTasks
 } from './ipc.js'
 import { dbReady } from './db/ADB.js'
 import { initializeLogger } from './logger.js'
@@ -177,6 +178,7 @@ function createWindow() {
     onOpenTempVideoFile()
     onChatFileDownload()
     onUploadSources()
+    onUploadTasks()
 
     winTitleOp((e, { action, data }) => {
       const webContents = e.sender

@@ -298,6 +298,23 @@ const validateUploadSourceId = (value) => {
   requireString(payload.uploadSourceId, 'uploadSourceId', { maxLength: 128 })
 }
 
+const validateUploadTaskMessageId = (value) => {
+  const payload = requireObject(value)
+  if (!Number.isSafeInteger(Number(payload.messageId)) || Number(payload.messageId) <= 0) {
+    fail('messageId must be a positive safe integer')
+  }
+}
+
+const validateEnqueueUploadTask = (value) => {
+  validateUploadTaskMessageId(value)
+  const payload = requireObject(value)
+  requireString(payload.uploadSourceId, 'uploadSourceId', { maxLength: 128 })
+  requireString(payload.fileName, 'fileName', { maxLength: 512 })
+  if (!Number.isSafeInteger(Number(payload.fileSize)) || Number(payload.fileSize) <= 0) {
+    fail('fileSize must be a positive safe integer')
+  }
+}
+
 const validateUploadSourceChunk = (value, maxChunkSize) => {
   const payload = requireObject(value)
   requireString(payload.uploadSourceId, 'uploadSourceId', { maxLength: 128 })
@@ -368,6 +385,8 @@ export {
   validateTempVideo,
   validateTopChatSession,
   validateUploadSourceChunk,
+  validateUploadTaskMessageId,
+  validateEnqueueUploadTask,
   validateUploadSourceId,
   validateUploadSourceRegistration,
   validateWindowOperation

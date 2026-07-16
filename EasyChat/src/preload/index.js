@@ -35,6 +35,11 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   'readUploadSourceChunk',
   'releaseUploadSource',
   'generateUploadSourceThumbnail',
+  'enqueueUploadTask',
+  'pauseUploadTask',
+  'resumeUploadTask',
+  'cancelUploadTask',
+  'acknowledgeUploadTask',
   'downloadChatFile',
   'cancelDownloadChatFile',
   'openDownloadedFile',
@@ -53,7 +58,8 @@ const ALLOWED_LISTEN_CHANNELS = new Set([
   IPC_CALLBACK_CHANNELS.searchChatMessage,
   'wsStatusChange',
   'winStateChange',
-  'downloadChatFileProgress'
+  'downloadChatFileProgress',
+  'uploadTaskProgress'
 ])
 
 // --- 白名单 IPC 底层实现 ---
@@ -175,6 +181,21 @@ const api = {
   invokeGenerateUploadSourceThumbnail(data) {
     return electronAPI.ipcInvoke('generateUploadSourceThumbnail', data)
   },
+  invokeEnqueueUploadTask(data) {
+    return electronAPI.ipcInvoke('enqueueUploadTask', data)
+  },
+  invokePauseUploadTask(data) {
+    return electronAPI.ipcInvoke('pauseUploadTask', data)
+  },
+  invokeResumeUploadTask(data) {
+    return electronAPI.ipcInvoke('resumeUploadTask', data)
+  },
+  invokeCancelUploadTask(data) {
+    return electronAPI.ipcInvoke('cancelUploadTask', data)
+  },
+  invokeAcknowledgeUploadTask(data) {
+    return electronAPI.ipcInvoke('acknowledgeUploadTask', data)
+  },
   invokeDownloadChatFile(data) {
     return electronAPI.ipcInvoke('downloadChatFile', data)
   },
@@ -218,6 +239,9 @@ const api = {
   },
   onWsStatusChange(listener) {
     return electronAPI.ipcOn('wsStatusChange', listener)
+  },
+  onUploadTaskProgress(listener) {
+    return electronAPI.ipcOn('uploadTaskProgress', listener)
   },
   onWinStateChange(listener) {
     return electronAPI.ipcOn('winStateChange', listener)

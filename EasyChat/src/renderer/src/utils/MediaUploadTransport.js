@@ -8,6 +8,7 @@ const chunkUploadTimeout = Math.max(
   120000,
   (CHAT_CONSTANTS.UPLOAD_CHUNK_SIZE / (100 * 1024)) * 1000
 )
+const CHUNK_RETRY_DELAYS = [0, 1000, 3000]
 
 const normalizeUploadedChunks = (value) => {
   if (!Array.isArray(value)) return new Set()
@@ -64,6 +65,19 @@ const readWholeUploadSource = async (file) => {
 const shouldUseLegacyFallback = (result) => {
   if (!result) return true
   return result.kind === 'http_status' && [404, 405, 501].includes(Number(result.status))
+}
+
+const isRetryableChunkFailure = (result) => {
+  if (!result) return true
+  if (result.kind === 'timeout' || result.kind === 'network') return true
+  if (result.kind !== 'http_status') return false
+  const status = Number(result.status)
+  return status === 408 || status === 429 || status >= 500
+}
+
+const waitForRetry = async (delay, signal) => {
+  if (!delay || signal?.aborted) return
+  await new Promise((resolve) => setTimeout(resolve, delay))
 }
 
 export const uploadMediaFile = async ({
@@ -134,7 +148,17 @@ export const uploadMediaFile = async ({
         })
 
         if (shouldUseLegacyFallback(initResult)) {
-          result = await uploadWithLegacyEndpoint()
+          // 大文件绝不能降级成整文件 Blob 上传：跨重启恢复时这会把最大 2GB
+          // 文件聚合到 renderer 内存中。旧服务只保留小文件兼容路径。
+          if (fileSize >= CHAT_CONSTANTS.CHUNK_UPLOAD_THRESHOLD) {
+            result = {
+              success: false,
+              kind: 'unsupported_upload_protocol',
+              msg: 'The server does not support resumable uploads for this large file.'
+            }
+          } else {
+            result = await uploadWithLegacyEndpoint()
+          }
         } else if (isRequestFailure(initResult) || !initResult) {
           result = initResult || null
         } else {
@@ -161,19 +185,31 @@ export const uploadMediaFile = async ({
             const start = chunkIndex * chunkSize
             const end = Math.min(fileSize, start + chunkSize)
             const chunk = await readUploadSlice(file, start, end)
-            const chunkResult = await request({
-              url: proxy.Api.uploadFileChunk,
-              params: { uploadId, messageId: message.messageId, chunkIndex, totalChunks, chunk },
-              uploadProgressCallback: (event) => {
-                reportProgress(
-                  onProgress,
-                  ((uploadedBytes + Number(event?.loaded || 0)) / fileSize) * 100
-                )
-              },
-              showLoading: false,
-              returnError: true,
-              timeout: chunkUploadTimeout
-            })
+            let chunkResult = null
+            for (let attempt = 0; attempt < CHUNK_RETRY_DELAYS.length; attempt += 1) {
+              await waitForRetry(CHUNK_RETRY_DELAYS[attempt], controller.signal)
+              if (controller.signal.aborted) break
+              chunkResult = await request({
+                url: proxy.Api.uploadFileChunk,
+                params: { uploadId, messageId: message.messageId, chunkIndex, totalChunks, chunk },
+                uploadProgressCallback: (event) => {
+                  reportProgress(
+                    onProgress,
+                    ((uploadedBytes + Number(event?.loaded || 0)) / fileSize) * 100
+                  )
+                },
+                showLoading: false,
+                returnError: true,
+                timeout: chunkUploadTimeout
+              })
+              if (!chunkResult || isRequestFailure(chunkResult)) {
+                if (!isRetryableChunkFailure(chunkResult) || attempt === CHUNK_RETRY_DELAYS.length - 1) {
+                  break
+                }
+                continue
+              }
+              break
+            }
             if (!chunkResult || isRequestFailure(chunkResult)) {
               result = chunkResult || null
               break

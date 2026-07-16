@@ -9,29 +9,44 @@ const MAX_REGISTRY_ITEMS = 100
 const MAX_CHUNK_SIZE = 4 * 1024 * 1024
 const FFMPEG_THUMBNAIL_TIMEOUT_MS = 10000
 
-const getRegistry = () => {
-  const value = store.getUserData(REGISTRY_KEY)
+const getRegistry = (userId = store.getUserId()) => {
+  const value = store.getUserDataForUser(userId, REGISTRY_KEY)
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
-const saveRegistry = (registry) => {
-  const entries = Object.entries(registry)
-    .sort(([, left], [, right]) => Number(left.createdAt || 0) - Number(right.createdAt || 0))
-    .slice(-MAX_REGISTRY_ITEMS)
-  store.setUserData(REGISTRY_KEY, Object.fromEntries(entries))
+const saveRegistry = (registry, userId = store.getUserId()) => {
+  const entries = Object.entries(registry).sort(
+    ([, left], [, right]) => Number(left.createdAt || 0) - Number(right.createdAt || 0)
+  )
+  // 正在被持久化上传任务引用的源文件绝不能因数量上限被淘汰；极端情况下
+  // 宁可临时超过上限，也不能破坏断点续传。
+  while (entries.length > MAX_REGISTRY_ITEMS) {
+    const index = entries.findIndex(([, source]) => !source.pinned)
+    if (index < 0) break
+    entries.splice(index, 1)
+  }
+  store.setUserDataForUser(userId, REGISTRY_KEY, Object.fromEntries(entries))
 }
 
-const getUploadSource = async (uploadSourceId) => {
+const getUploadSource = async (uploadSourceId, { userId = store.getUserId() } = {}) => {
   if (!uploadSourceId || typeof uploadSourceId !== 'string') {
     throw new Error('Invalid upload source id')
   }
-  const source = getRegistry()[uploadSourceId]
+  const source = getRegistry(userId)[uploadSourceId]
   if (!source?.filePath) {
     throw new Error('Unknown upload source')
   }
   const stat = await fs.promises.stat(source.filePath)
   if (!stat.isFile() || stat.size !== Number(source.size)) {
     throw new Error('Upload source is unavailable or has changed')
+  }
+  const expectedMtime = Number(source.sourceMtimeMs || source.lastModified || 0)
+  // 仅比较文件大小无法识别“同大小内容被覆盖”的情况；恢复上传前必须拒绝
+  // 已变化的源文件，避免把错误内容拼接到既有上传会话中。
+  if (expectedMtime > 0 && Number.isFinite(Number(stat.mtimeMs))) {
+    if (Math.abs(Number(stat.mtimeMs) - expectedMtime) > 2000) {
+      throw new Error('Upload source is unavailable or has changed')
+    }
   }
   return source
 }
@@ -45,16 +60,19 @@ const registerUploadSource = async ({ filePath, name, size, type, lastModified }
     throw new Error('Upload source metadata does not match the selected file')
   }
   const uploadSourceId = randomUUID()
-  const registry = getRegistry()
+  const userId = store.getUserId()
+  const registry = getRegistry(userId)
   registry[uploadSourceId] = {
     filePath,
     name: String(name || '').slice(0, 512),
     size: stat.size,
     type: String(type || '').slice(0, 255),
     lastModified: Number(lastModified || 0),
+    sourceMtimeMs: Number.isFinite(Number(stat.mtimeMs)) ? Math.trunc(stat.mtimeMs) : 0,
+    pinned: false,
     createdAt: Date.now()
   }
-  saveRegistry(registry)
+  saveRegistry(registry, userId)
   return {
     success: true,
     uploadSourceId,
@@ -64,8 +82,8 @@ const registerUploadSource = async ({ filePath, name, size, type, lastModified }
   }
 }
 
-const readUploadSourceChunk = async ({ uploadSourceId, start, end } = {}) => {
-  const source = await getUploadSource(uploadSourceId)
+const readUploadSourceChunk = async ({ uploadSourceId, start, end, userId } = {}) => {
+  const source = await getUploadSource(uploadSourceId, { userId })
   const rangeStart = Number(start)
   const rangeEnd = Number(end)
   if (
@@ -96,13 +114,14 @@ const readUploadSourceChunk = async ({ uploadSourceId, start, end } = {}) => {
   }
 }
 
-const releaseUploadSource = ({ uploadSourceId } = {}) => {
-  const registry = getRegistry()
+const releaseUploadSource = ({ uploadSourceId, userId } = {}) => {
+  const targetUserId = userId || store.getUserId()
+  const registry = getRegistry(targetUserId)
   if (!registry[uploadSourceId]) {
     return { success: true, released: false }
   }
   delete registry[uploadSourceId]
-  saveRegistry(registry)
+  saveRegistry(registry, targetUserId)
   return { success: true, released: true }
 }
 
@@ -163,8 +182,19 @@ const generateThumbnailFromPath = (filePath, { timeoutMs = FFMPEG_THUMBNAIL_TIME
   })
 }
 
-const generateUploadSourceThumbnail = async ({ uploadSourceId } = {}) => {
-  const source = await getUploadSource(uploadSourceId)
+const setUploadSourcePinned = ({ uploadSourceId, userId, pinned = true } = {}) => {
+  const targetUserId = userId || store.getUserId()
+  const registry = getRegistry(targetUserId)
+  if (!registry[uploadSourceId]) return false
+  registry[uploadSourceId].pinned = Boolean(pinned)
+  saveRegistry(registry, targetUserId)
+  return true
+}
+
+const pinUploadSource = (options = {}) => setUploadSourcePinned({ ...options, pinned: true })
+
+const generateUploadSourceThumbnail = async ({ uploadSourceId, userId } = {}) => {
+  const source = await getUploadSource(uploadSourceId, { userId })
   return await generateThumbnailFromPath(source.filePath)
 }
 
@@ -174,7 +204,9 @@ export {
   generateThumbnailFromPath,
   generateUploadSourceThumbnail,
   getUploadSource,
+  pinUploadSource,
   readUploadSourceChunk,
   registerUploadSource,
-  releaseUploadSource
+  releaseUploadSource,
+  setUploadSourcePinned
 }

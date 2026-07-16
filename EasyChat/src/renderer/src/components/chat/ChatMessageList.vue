@@ -29,6 +29,7 @@
                 @openFilePreview="$emit('openFilePreview', $event)"
                 @openVideoPreview="$emit('openVideoPreview', $event)"
                 @cancelUploadMessage="$emit('cancelUploadMessage', $event)"
+                @toggleUploadPause="$emit('toggleUploadPause', $event)"
                 @retryMessage="$emit('retryMessage', $event)"
               />
             </div>
@@ -60,6 +61,7 @@ const emit = defineEmits([
   'openFilePreview',
   'openVideoPreview',
   'cancelUploadMessage',
+  'toggleUploadPause',
   'retryMessage',
   'userScroll'
 ])
