@@ -1,272 +1,21 @@
 import { CHAT_CONSTANTS } from '@/utils/ChatConstants'
-import { validateFileSize } from '@/utils/FileLimits'
-import {
-  getSendFailureMessage,
-  getUploadFailureMessage,
-  isRequestFailure
-} from '@/utils/RequestFailure'
-import { cancelMediaUpload, uploadMediaFile } from '@/utils/MediaUploadTransport'
-import { createMediaUploadCoordinator } from './mediaUploadCoordinator'
-import { createOutboundMessagePersistence } from './outboundMessagePersistence'
+import { getSendFailureMessage, isRequestFailure } from '@/utils/RequestFailure'
+import { createMediaMessageTransferController } from './outbound/mediaMessageTransferController'
+import { createOutboundMessageLifecycle } from './outbound/outboundMessageLifecycle'
 
 /**
  * 出站消息发送链路的执行入口。
  *
- * 负责把 UI 发送事件转换成本地 pending 消息，通过 IPC 落库，
- * 用服务端 messageId 替换本地临时 id，上传媒体文件，处理文件 ACK，
- * 并支持失败消息重试；不管理输入框草稿状态。
+ * 只组装文本发送、出站生命周期和媒体传输控制器；不直接持有媒体副作用。
  */
-export const useChatMessageSender = ({
-  appendMessageIfMissing,
-  currentChatSession,
-  currentUserId,
-  isNearMessageBottom,
-  messageList,
-  patchChatSessions,
-  proxy,
-  replaceMessageById,
-  updateMessageById,
-  scrollMessageToBottom
-}) => {
-  let localMessageSeq = -Date.now()
-  const blobUrlsToRevoke = new Set()
-  let unsubscribeUploadTaskProgress = null
-  let sendTaskChain = Promise.resolve()
-  let pendingSendTaskCount = 0
-  const mediaUploadCoordinator = createMediaUploadCoordinator({
-    maxConcurrency: 3,
-    onTaskError: (error) => console.error('upload message file failed', error)
+
+export const useChatMessageSender = (dependencies) => {
+  const { proxy } = dependencies
+  const lifecycle = createOutboundMessageLifecycle(dependencies)
+  const media = createMediaMessageTransferController({
+    ...dependencies,
+    lifecycle
   })
-  const enqueueUploadTask = mediaUploadCoordinator.enqueue
-
-  const enqueueSendTask = (task, { onRejected } = {}) => {
-    if (pendingSendTaskCount >= CHAT_CONSTANTS.MAX_SEND_TASK_QUEUE) {
-      onRejected?.()
-      proxy.Message.warning('发送任务过多，请等待当前消息处理完成后再试。')
-      return false
-    }
-
-    pendingSendTaskCount += 1
-    sendTaskChain = sendTaskChain
-      .catch((error) => console.error('send queue: previous task failed, continuing', error))
-      .then(task)
-      .catch((error) => console.error('send message failed', error))
-      .finally(() => {
-        pendingSendTaskCount = Math.max(0, pendingSendTaskCount - 1)
-      })
-    return sendTaskChain
-  }
-
-  const saveSendMessageToLocal = async (payload) => {
-    return await window.api.invokeSaveSendMessage(payload)
-  }
-
-  const nextLocalMessageId = () => {
-    localMessageSeq -= 1
-    return localMessageSeq
-  }
-
-  const getLocalSessionId = (contactId, contactType) => {
-    return currentChatSession.value.sessionId || `${contactType}_${contactId}`
-  }
-  const { persistMessageStatus, persistPendingMessage, persistServerMessage } =
-    createOutboundMessagePersistence({
-      currentChatSession,
-      patchChatSessions,
-      saveSendMessageToLocal
-    })
-
-  const appendSentMessageIfMissing = (message) => {
-    const shouldStickToBottom = isNearMessageBottom()
-    const appended =
-      typeof appendMessageIfMissing === 'function'
-        ? appendMessageIfMissing(message)
-        : (() => {
-            messageList.value.push(message)
-            return true
-          })()
-
-    if (appended) {
-      scrollMessageToBottom({ force: shouldStickToBottom })
-    }
-    return appended
-  }
-
-  const createPendingMessage = ({
-    contactId,
-    contactType,
-    messageType,
-    messageContent,
-    file,
-    fileType,
-    filePath,
-    uploadSourceId
-  }) => {
-    return {
-      messageId: nextLocalMessageId(),
-      sessionId: getLocalSessionId(contactId, contactType),
-      contactId,
-      contactType,
-      messageType,
-      messageContent,
-      fileSize: file?.size,
-      fileName: file?.name,
-      filePath,
-      uploadSourceId,
-      fileType,
-      sendUserId: currentUserId?.value,
-      sendTime: Date.now(),
-      status: 2
-    }
-  }
-
-  const markMessageFailed = async (message, errorText, { shouldReportError } = {}) => {
-    Object.assign(message, {
-      status: 0,
-      uploading: false,
-      uploadError: errorText || ''
-    })
-    updateMessageById?.(message.messageId, {
-      status: 0,
-      uploading: false,
-      uploadError: errorText || ''
-    })
-    await persistMessageStatus(message).catch((error) => {
-      console.error('save failed message status failed', error)
-    })
-    if (errorText && (!shouldReportError || shouldReportError())) {
-      proxy.Message.error(errorText)
-    }
-  }
-
-  const markMessageLocalSyncFailed = (
-    localMessage,
-    serverMessage,
-    error,
-    { recoveredStatus = 1, onRecovered } = {}
-  ) => {
-    const nextMessage = {
-      ...localMessage,
-      ...serverMessage,
-      status: 0,
-      uploading: false,
-      uploadError: '消息已发出，但本地记录保存失败，正在等待同步恢复。',
-      localSyncFailed: true
-    }
-    const replaced = replaceMessageById?.(localMessage.messageId, nextMessage)
-    if (!replaced) {
-      updateMessageById?.(localMessage.messageId, nextMessage)
-    }
-    console.error('message sent but local replace failed', error)
-    proxy.Message.error('消息已发出，但本地记录保存失败，请稍后重新打开会话同步。')
-
-    // 后台异步重试 replace，最多重试 3 次并使用指数退避。
-    scheduleLocalSyncRetry(
-      localMessage.messageId,
-      {
-        ...localMessage,
-        ...serverMessage,
-        status: recoveredStatus,
-        uploading: recoveredStatus === 2,
-        uploadError: '',
-        localSyncFailed: false
-      },
-      1,
-      3,
-      onRecovered
-    )
-
-    return nextMessage
-  }
-
-  const scheduleLocalSyncRetry = (
-    localMessageId,
-    recoveryMessage,
-    attempt,
-    maxRetries,
-    onRecovered
-  ) => {
-    // replace 失败只影响本地一致性，不能把已发送成功的消息回滚成发送失败。
-    if (attempt > maxRetries) {
-      console.error('local sync retry exhausted after', maxRetries, 'attempts')
-      return
-    }
-    const delay = Math.min(2000 * attempt, 10000)
-    const timer = setTimeout(async () => {
-      // 从列表中移除此 timer
-      const idx = localSyncRetryTimers.indexOf(timer)
-      if (idx >= 0) localSyncRetryTimers.splice(idx, 1)
-      try {
-        await persistServerMessage(localMessageId, {
-          ...recoveryMessage
-        })
-        const recoveredMessage = {
-          ...recoveryMessage
-        }
-        const wasReplaced =
-          replaceMessageById?.(localMessageId, recoveredMessage) ||
-          replaceMessageById?.(recoveredMessage.messageId, recoveredMessage)
-        if (!wasReplaced) {
-          appendSentMessageIfMissing(recoveredMessage)
-        }
-        onRecovered?.(recoveredMessage)
-      } catch (retryError) {
-        console.error('local sync retry failed (attempt', attempt, ')', retryError)
-        scheduleLocalSyncRetry(
-          localMessageId,
-          recoveryMessage,
-          attempt + 1,
-          maxRetries,
-          onRecovered
-        )
-      }
-    }, delay)
-    localSyncRetryTimers.push(timer)
-  }
-
-  const markMessageSending = async (message, patch = {}) => {
-    Object.assign(message, {
-      status: 2,
-      ...patch
-    })
-    updateMessageById?.(message.messageId, {
-      status: 2,
-      ...patch
-    })
-    await persistMessageStatus(message)
-  }
-
-  const replaceLocalWithServerMessage = async (localMessage, serverMessage, patch = {}) => {
-    // 验证消息所属会话是否仍是当前活跃会话，防止切换会话后跨会话写入 UI。
-    const activeSessionId = currentChatSession.value?.sessionId
-    const messageSessionId = localMessage.sessionId || serverMessage.sessionId
-    if (activeSessionId && messageSessionId && activeSessionId !== messageSessionId) {
-      await persistServerMessage(localMessage.messageId, {
-        ...localMessage,
-        ...serverMessage,
-        ...patch,
-        status: patch.status ?? serverMessage.status ?? 1
-      })
-      return {
-        ...localMessage,
-        ...serverMessage,
-        ...patch,
-        status: patch.status ?? serverMessage.status ?? 1
-      }
-    }
-    const nextMessage = {
-      ...localMessage,
-      ...serverMessage,
-      ...patch,
-      status: patch.status ?? serverMessage.status ?? 1
-    }
-    await persistServerMessage(localMessage.messageId, nextMessage)
-    const replaced = replaceMessageById?.(localMessage.messageId, nextMessage)
-    if (!replaced) {
-      appendSentMessageIfMissing(nextMessage)
-    }
-    return nextMessage
-  }
 
   const sendChatMessage = async (
     { contactId, contactType, messageContent },
@@ -280,581 +29,72 @@ export const useChatMessageSender = ({
       proxy.Message.warning(`消息内容不能超过 ${CHAT_CONSTANTS.MAX_MESSAGE_LENGTH} 个字符。`)
       return
     }
-
     const localMessage =
       retryMessage ||
-      createPendingMessage({
+      lifecycle.createPendingMessage({
         contactId,
         contactType,
         messageType: 2,
         messageContent
       })
-
     if (retryMessage) {
       try {
-        await markMessageSending(localMessage)
+        await lifecycle.markMessageSending(localMessage)
       } catch (error) {
         console.error('save retry text message status failed', error)
-        await markMessageFailed(
+        await lifecycle.markMessageFailed(
           localMessage,
           'Message retry failed. Local status could not be saved.'
         )
         return
       }
     } else {
-      appendSentMessageIfMissing(localMessage)
+      lifecycle.appendSentMessageIfMissing(localMessage)
       try {
-        await persistPendingMessage(localMessage)
+        await lifecycle.persistPendingMessage(localMessage)
       } catch (error) {
         console.error('save pending text message failed', error)
-        await markMessageFailed(localMessage, 'Message could not be saved locally. Retry later.')
-        return
-      }
-    }
-
-    // 文本消息先拿到服务端 messageId，再替换本地临时消息。
-    const result = await proxy.Request({
-      url: proxy.Api.sendMessage,
-      params: {
-        contactId,
-        contactType,
-        messageType: 2,
-        messageContent
-      },
-      showLoading: false,
-      returnError: true
-    })
-
-    if (!result || isRequestFailure(result)) {
-      await markMessageFailed(localMessage, getSendFailureMessage(result))
-      return
-    }
-
-    const message = result.data
-    try {
-      await replaceLocalWithServerMessage(localMessage, message)
-    } catch (error) {
-      markMessageLocalSyncFailed(localMessage, message, error)
-    }
-  }
-
-  const uploadMessageFile = async (message, file, cover) => {
-    const sizeResult = validateFileSize(file, message.fileType)
-    if (!sizeResult.valid) {
-      await markMessageFailed(message, sizeResult.message)
-      return
-    }
-
-    // 上传前再次验证消息所属会话，避免切换会话后继续更新错误的消息项。
-    const activeSessionId = currentChatSession.value?.sessionId
-    const messageSessionId = message.sessionId
-    if (activeSessionId && messageSessionId && activeSessionId !== messageSessionId) {
-      await markMessageFailed(message, 'Session changed during upload. Please retry.')
-      return
-    }
-
-    // 文件路径和网络传输由主进程托管；渲染进程只保留展示状态，窗口卸载不会中断上传。
-    if (message.uploadSourceId && typeof window.api?.invokeEnqueueUploadTask === 'function') {
-      let coverSourceId = message.coverSourceId
-      let registeredCoverSourceId = ''
-      if (cover && !coverSourceId && typeof window.api?.registerUploadCover !== 'function') {
-        await markMessageFailed(message, '当前客户端不支持持久化上传封面，请更新后重试。')
-        return
-      }
-      if (cover && !coverSourceId && typeof window.api?.registerUploadCover === 'function') {
-        try {
-          const coverResult = await window.api.registerUploadCover(cover)
-          if (!coverResult?.success || !coverResult.coverSourceId) {
-            await markMessageFailed(message, coverResult?.error || '无法保存上传封面。')
-            return
-          }
-          coverSourceId = coverResult.coverSourceId
-          registeredCoverSourceId = coverSourceId
-          message.coverSourceId = coverSourceId
-        } catch (error) {
-          console.error('register upload cover failed', error)
-          await markMessageFailed(message, '无法保存上传封面。')
-          return
-        }
-      }
-      updateMessageById?.(message.messageId, {
-        status: 2,
-        uploading: true,
-        uploadProgress: Number(message.uploadProgress || 0),
-        uploadError: '',
-        uploadCanceled: false
-      })
-      let taskResult
-      try {
-        taskResult = await window.api.invokeEnqueueUploadTask({
-          messageId: Number(message.messageId),
-          uploadSourceId: message.uploadSourceId,
-          coverSourceId,
-          fileName: message.fileName || file?.name || message.messageContent,
-          fileSize: Number(message.fileSize || file?.size || 0),
-          fileType: Number(message.fileType)
-        })
-      } catch (error) {
-        taskResult = { success: false, error: error?.message || '无法创建文件上传任务。' }
-      }
-      if (!taskResult?.success) {
-        if (registeredCoverSourceId) {
-          window.api
-            .invokeReleaseUploadCover?.({ coverSourceId: registeredCoverSourceId })
-            .catch((error) => console.error('release rejected upload cover failed', error))
-          delete message.coverSourceId
-        }
-        await markMessageFailed(message, taskResult?.error || '无法创建文件上传任务。')
-      }
-      return
-    }
-
-    const controller = new AbortController()
-    const uploadKey = String(message.messageId)
-    mediaUploadCoordinator.setController(uploadKey, controller)
-    const isCurrentUpload = () => mediaUploadCoordinator.isCurrentController(uploadKey, controller)
-    const getLatestMessage = () => {
-      return messageList.value.find((item) => item.messageId == message.messageId)
-    }
-    const updateUploadProgress = (progress) => {
-      if (!isCurrentUpload() || getLatestMessage()?.uploadAckReceived) {
-        return
-      }
-      const nextProgress = Math.min(99, Math.max(0, Number(progress) || 0))
-      Object.assign(message, {
-        uploading: true,
-        uploadProgress: nextProgress,
-        uploadError: '',
-        uploadCanceled: false
-      })
-      updateMessageById?.(message.messageId, {
-        status: 2,
-        uploading: true,
-        uploadProgress: nextProgress,
-        uploadError: '',
-        uploadCanceled: false
-      })
-    }
-    updateUploadProgress(message.uploadProgress || 0)
-
-    // 媒体消息先创建消息记录，文件上传只更新该消息状态，避免上传失败丢失已发送消息。
-    let uploadCover = cover
-    if (!uploadCover && message.fileType === 1 && message.uploadSourceId) {
-      const thumbnailResult = await window.api
-        .invokeGenerateUploadSourceThumbnail({ uploadSourceId: message.uploadSourceId })
-        .catch(() => null)
-      if (thumbnailResult?.success && thumbnailResult.arrayBuffer) {
-        uploadCover = new Blob([thumbnailResult.arrayBuffer], { type: 'image/jpeg' })
-      }
-    }
-
-    const uploadResult = await uploadMediaFile({
-      cover: uploadCover,
-      file,
-      fileType: message.fileType,
-      message,
-      onProgress: updateUploadProgress,
-      proxy,
-      signal: controller.signal
-    })
-    if (!isCurrentUpload()) {
-      return
-    }
-    mediaUploadCoordinator.deleteController(uploadKey)
-
-    const latestMessage = getLatestMessage()
-    if (latestMessage?.uploadAckReceived) {
-      return
-    }
-
-    if (!uploadResult || isRequestFailure(uploadResult)) {
-      const canceled = uploadResult?.kind === 'canceled'
-      Object.assign(message, { uploadCanceled: canceled })
-      updateMessageById?.(message.messageId, { uploadCanceled: canceled })
-      await markMessageFailed(message, getUploadFailureMessage(uploadResult, canceled), {
-        shouldReportError: () => !getLatestMessage()?.uploadAckReceived
-      })
-      return
-    }
-
-    const successfulMessage = latestMessage || message
-    Object.assign(successfulMessage, {
-      uploading: false,
-      status: 1,
-      uploadProgress: 100,
-      uploadError: '',
-      uploadCanceled: false
-    })
-    updateMessageById?.(message.messageId, {
-      uploading: false,
-      status: 1,
-      uploadProgress: 100,
-      uploadError: '',
-      uploadCanceled: false
-    })
-    await persistMessageStatus(successfulMessage).catch((error) => {
-      console.error('save uploaded media status failed', error)
-      proxy.Message.error('File uploaded, but local message status could not be saved.')
-    })
-  }
-
-  const sendMediaMessage = async (
-    { contactId, contactType, file, cover, uploadSourceId: registeredUploadSourceId },
-    fileType,
-    retryMessage = null
-  ) => {
-    const releaseUnusedRegisteredSource = async () => {
-      if (!registeredUploadSourceId || retryMessage?.uploadSourceId) {
-        return
-      }
-      await window.api
-        .invokeReleaseUploadSource({ uploadSourceId: registeredUploadSourceId })
-        .catch((error) => console.error('release unused upload source failed', error))
-    }
-
-    if (!file) {
-      await releaseUnusedRegisteredSource()
-      return
-    }
-
-    const sizeResult = validateFileSize(file, fileType)
-    if (!sizeResult.valid) {
-      await releaseUnusedRegisteredSource()
-      proxy.Message.warning(sizeResult.message)
-      return
-    }
-
-    let uploadSourceId = retryMessage?.uploadSourceId || registeredUploadSourceId
-    if (!uploadSourceId) {
-      let sourceResult
-      try {
-        sourceResult = await window.api.registerUploadSource(file)
-      } catch (error) {
-        console.error('register upload source failed', error)
-        proxy.Message.warning('无法读取所选文件，请重新选择后再试。')
-        return
-      }
-      if (!sourceResult?.success || !sourceResult.uploadSourceId) {
-        proxy.Message.warning(sourceResult?.error || '无法注册上传文件，请重新选择后再试。')
-        return
-      }
-      uploadSourceId = sourceResult.uploadSourceId
-    }
-    const filePath = ''
-    const sourceFile = typeof file.slice === 'function' ? file : { ...file, uploadSourceId }
-    const localMessage =
-      retryMessage ||
-      createPendingMessage({
-        contactId,
-        contactType,
-        messageType: 5,
-        messageContent: file.name,
-        file: sourceFile,
-        fileType,
-        filePath,
-        uploadSourceId
-      })
-    localMessage.uploadSourceId = uploadSourceId
-    localMessage.retryFile = sourceFile
-    localMessage.retryCover = cover
-    if (
-      !localMessage.localPreviewUrl &&
-      (fileType === 0 || fileType === 1) &&
-      typeof Blob !== 'undefined' &&
-      file instanceof Blob
-    ) {
-      localMessage.localPreviewUrl = URL.createObjectURL(file)
-      // 记录需要清理的 blob URL，消息替换或移除时统一 revoke。
-      blobUrlsToRevoke.add(localMessage.localPreviewUrl)
-    }
-    // 视频消息额外保存封面 blob URL，缩略图用图片渲染，避免编码不支持时 video 标签黑屏。
-    if (fileType === 1 && cover && !localMessage.localCoverUrl) {
-      localMessage.localCoverUrl = URL.createObjectURL(cover)
-      blobUrlsToRevoke.add(localMessage.localCoverUrl)
-    }
-
-    if (retryMessage) {
-      try {
-        await markMessageSending(localMessage, {
-          uploading: false,
-          uploadAckReceived: false,
-          uploadAckRevision: 0,
-          uploadAckStatus: null,
-          uploadSourceReleased: false
-        })
-      } catch (error) {
-        console.error('save retry media message status failed', error)
-        await markMessageFailed(
+        await lifecycle.markMessageFailed(
           localMessage,
-          'Media retry failed. Local status could not be saved.'
-        )
-        return
-      }
-    } else {
-      appendSentMessageIfMissing(localMessage)
-      try {
-        await persistPendingMessage(localMessage)
-      } catch (error) {
-        console.error('save pending media message failed', error)
-        await markMessageFailed(
-          localMessage,
-          'Media message could not be saved locally. Retry later.'
+          'Message could not be saved locally. Retry later.'
         )
         return
       }
     }
-
-    // 图片、视频、文件统一使用 messageType=5，fileType 决定展示方式。
     const result = await proxy.Request({
       url: proxy.Api.sendMessage,
-      params: {
-        contactId,
-        contactType,
-        messageType: 5,
-        messageContent: file.name,
-        fileSize: file.size,
-        fileName: file.name,
-        fileType
-      },
+      params: { contactId, contactType, messageType: 2, messageContent },
       showLoading: false,
       returnError: true
     })
-
     if (!result || isRequestFailure(result)) {
-      await markMessageFailed(
-        localMessage,
-        getSendFailureMessage(result, '媒体消息发送失败，请检查网络后重试。')
-      )
+      await lifecycle.markMessageFailed(localMessage, getSendFailureMessage(result))
       return
     }
-
-    const message = result.data
-    if (!message?.messageId) {
-      await markMessageFailed(localMessage, 'Media message send failed. Missing message id.')
-      return
-    }
-
-    if (filePath) {
-      message.filePath = filePath
-    }
-    message.uploadSourceId = uploadSourceId
-
-    let serverMessage = null
     try {
-      serverMessage = await replaceLocalWithServerMessage(localMessage, message, {
-        localPreviewUrl: localMessage.localPreviewUrl,
-        localCoverUrl: localMessage.localCoverUrl,
-        retryFile: sourceFile,
-        retryCover: cover,
-        uploading: true,
-        uploadProgress: 0,
-        uploadError: '',
-        uploadCanceled: false,
-        status: 2
-      })
+      await lifecycle.replaceLocalWithServerMessage(localMessage, result.data)
     } catch (error) {
-      markMessageLocalSyncFailed(localMessage, message, error, {
-        recoveredStatus: 2,
-        onRecovered: (recoveredMessage) => {
-          enqueueUploadTask(() => uploadMessageFile(recoveredMessage, sourceFile, cover))
-        }
-      })
-      return
+      lifecycle.markMessageLocalSyncFailed(localMessage, result.data, error)
     }
-    enqueueUploadTask(() => uploadMessageFile(serverMessage, sourceFile, cover))
   }
 
-  const sendImageMessage = (payload) => {
-    return sendMediaMessage(payload, 0)
-  }
-
-  const sendFileMessage = (payload) => {
-    return sendMediaMessage(payload, 2)
-  }
-
-  const sendVideoMessage = (payload) => {
-    return sendMediaMessage(payload, 1)
-  }
-
-  const onSendChatMessage = (payload) => {
-    // 文本消息也进入发送队列，避免连续发送时展示顺序错乱。
-    return enqueueSendTask(() => sendChatMessage(payload))
-  }
-
-  const releaseRejectedMediaSource = (payload = {}) => {
-    if (!payload.uploadSourceId) {
-      return
-    }
-    window.api
-      .invokeReleaseUploadSource({ uploadSourceId: payload.uploadSourceId })
-      .catch((error) => console.error('release rejected upload source failed', error))
-  }
-
-  const onSendImageMessage = (payload) => {
-    return enqueueSendTask(() => sendImageMessage(payload), {
-      onRejected: () => releaseRejectedMediaSource(payload)
+  const onSendChatMessage = (payload) => lifecycle.enqueueSendTask(() => sendChatMessage(payload))
+  const onSendImageMessage = (payload) =>
+    lifecycle.enqueueSendTask(() => media.sendMediaMessage(payload, 0), {
+      onRejected: () => media.releaseRejectedMediaSource(payload)
     })
-  }
-
-  const onSendFileMessage = (payload) => {
-    return enqueueSendTask(() => sendFileMessage(payload), {
-      onRejected: () => releaseRejectedMediaSource(payload)
+  const onSendFileMessage = (payload) =>
+    lifecycle.enqueueSendTask(() => media.sendMediaMessage(payload, 2), {
+      onRejected: () => media.releaseRejectedMediaSource(payload)
     })
-  }
-
-  const onSendVideoMessage = (payload) => {
-    return enqueueSendTask(() => sendVideoMessage(payload), {
-      onRejected: () => releaseRejectedMediaSource(payload)
+  const onSendVideoMessage = (payload) =>
+    lifecycle.enqueueSendTask(() => media.sendMediaMessage(payload, 1), {
+      onRejected: () => media.releaseRejectedMediaSource(payload)
     })
-  }
-
-  const releaseUploadSourceAfterAck = async (targetMessage, ackRevision, attempt = 0) => {
-    if (
-      targetMessage.uploadAckRevision !== ackRevision ||
-      Number(targetMessage.uploadAckStatus) !== 1 ||
-      targetMessage.uploadSourceReleased ||
-      !targetMessage.uploadSourceId
-    ) {
-      return
-    }
-
-    const releaseResult = await window.api
-      .invokeReleaseUploadSource({ uploadSourceId: targetMessage.uploadSourceId })
-      .catch((error) => {
-        console.error('release acknowledged upload source failed', error)
-        return null
-      })
-    if (releaseResult?.success === true) {
-      targetMessage.uploadSourceReleased = true
-      return
-    }
-
-    // ACK 不保证重复投递；在本地有限重试，且只对同一条成功 ACK 保持有效。
-    if (attempt >= 2) {
-      return
-    }
-    mediaUploadCoordinator.scheduleRetry(
-      () => releaseUploadSourceAfterAck(targetMessage, ackRevision, attempt + 1),
-      1000 * (attempt + 1)
-    )
-  }
-
-  const handleFileUploadDone = async (message) => {
-    // WebSocket 文件 ACK 是媒体处理的最终状态，迟到的 HTTP 结果不能再覆盖它。
-    const targetMessage = messageList.value.find((item) => {
-      return item.messageId == message.messageId
-    })
-
-    if (!targetMessage) {
-      return
-    }
-
-    const ackStatus = Number(message.status ?? 1)
-    const ackSucceeded = ackStatus === 1
-    const repeatedAck =
-      targetMessage.uploadAckReceived && Number(targetMessage.uploadAckStatus) === ackStatus
-    const ackError = message.error || message.msg || 'File processing failed. Please retry.'
-    const ackRevision = Number(targetMessage.uploadAckRevision || 0) + 1
-
-    Object.assign(targetMessage, {
-      status: ackStatus,
-      uploading: false,
-      uploadError: ackSucceeded ? '' : ackError,
-      uploadCanceled: false,
-      uploadAckReceived: true,
-      uploadAckRevision: ackRevision,
-      uploadAckStatus: ackStatus
-    })
-
-    const activeController = mediaUploadCoordinator.getController(targetMessage.messageId)
-    mediaUploadCoordinator.deleteController(targetMessage.messageId)
-    activeController?.abort()
-
-    if (ackSucceeded) {
-      targetMessage.uploadProgress = 100
-      targetMessage.forceGet = Date.now()
-    } else if (!repeatedAck) {
-      proxy.Message.error(ackError)
-    }
-
-    await persistMessageStatus(targetMessage).catch((error) => {
-      console.error('save acknowledged media status failed', error)
-      proxy.Message.error('Media status was confirmed, but could not be saved locally.')
-    })
-
-    window.api?.invokeAcknowledgeUploadTask?.({
-      messageId: Number(targetMessage.messageId),
-      succeeded: ackSucceeded,
-      error: ackSucceeded ? '' : ackError
-    }).catch((error) => console.error('acknowledge upload task failed', error))
-
-    if (
-      targetMessage.uploadAckRevision !== ackRevision ||
-      !ackSucceeded ||
-      targetMessage.uploadSourceReleased ||
-      !targetMessage.uploadSourceId
-    ) {
-      return
-    }
-
-    await releaseUploadSourceAfterAck(targetMessage, ackRevision)
-    // 文件 ACK 不影响会话列表排序。
-  }
-
   const retryFailedMessage = (message = {}) => {
-    if (message.status != 0) {
-      return
-    }
-
-    if (message.messageType == 5) {
-      const retryFile =
-        message.retryFile ||
-        (message.uploadSourceId
-          ? {
-              uploadSourceId: message.uploadSourceId,
-              name: message.fileName || message.messageContent,
-              size: Number(message.fileSize || 0),
-              type: ''
-            }
-          : null)
-      if (!retryFile) {
-        proxy.Message.warning('原文件来源已丢失，请重新选择文件后发送。')
-        return
-      }
-      if (Number(message.messageId) > 0) {
-        markMessageSending(message, {
-          uploading: true,
-          uploadProgress: 0,
-          uploadError: '',
-          uploadCanceled: false,
-          uploadAckReceived: false,
-          uploadAckRevision: 0,
-          uploadAckStatus: null,
-          uploadSourceReleased: false
-        })
-          .then(() => {
-            enqueueUploadTask(() => uploadMessageFile(message, retryFile, message.retryCover))
-          })
-          .catch((error) => {
-            console.error('retry media upload failed', error)
-          })
-        return
-      }
-      return enqueueSendTask(() =>
-        sendMediaMessage(
-          {
-            contactId: message.contactId,
-            contactType: message.contactType,
-            file: retryFile,
-            cover: message.retryCover
-          },
-          message.fileType,
-          message
-        )
-      )
-    }
-
-    return enqueueSendTask(() =>
+    if (message.status != 0) return
+    if (message.messageType == 5) return media.retryMediaMessage(message)
+    return lifecycle.enqueueSendTask(() =>
       sendChatMessage(
         {
           contactId: message.contactId,
@@ -866,149 +106,18 @@ export const useChatMessageSender = ({
     )
   }
 
-  const cancelUploadMessage = (message = {}) => {
-    if (!message.messageId || (!message.uploading && !message.uploadPaused)) {
-      return
-    }
-    const controller = mediaUploadCoordinator.getController(message.messageId)
-    controller?.abort()
-    Object.assign(message, {
-      uploadCanceled: true,
-      uploadPaused: false
-    })
-    updateMessageById?.(message.messageId, {
-      uploadCanceled: true
-    })
-    const cancel = window.api?.invokeCancelUploadTask
-      ? window.api.invokeCancelUploadTask({ messageId: Number(message.messageId) })
-      : cancelMediaUpload({ messageId: message.messageId, proxy })
-    cancel.catch((error) => {
-      console.error('cancel media upload failed', error)
-    })
-    markMessageFailed(message, '文件上传已取消。').catch((error) => {
-      console.error('save canceled media status failed', error)
-    })
-  }
-
-  const localSyncRetryTimers = []
-
-  const toggleUploadPause = (message = {}) => {
-    if (!message.messageId || typeof window.api?.invokePauseUploadTask !== 'function') return
-    const paused = Boolean(message.uploadPaused)
-    const request = paused
-      ? window.api.invokeResumeUploadTask({ messageId: Number(message.messageId) })
-      : window.api.invokePauseUploadTask({ messageId: Number(message.messageId) })
-    request
-      .then((result) => {
-        if (!result?.success) throw new Error(result?.error || '上传任务状态切换失败')
-        Object.assign(message, { uploading: paused, uploadPaused: !paused, uploadError: '' })
-        updateMessageById?.(message.messageId, {
-          uploading: paused,
-          uploadPaused: !paused,
-          uploadError: ''
-        })
-      })
-      .catch((error) => {
-        console.error('toggle upload pause failed', error)
-        proxy.Message.error('无法切换上传状态，请稍后重试。')
-      })
-  }
-
-  const handleUploadTaskProgress = (payload = {}) => {
-    const message = messageList.value.find((item) => item.messageId == payload.messageId)
-    if (!message || message.uploadAckReceived) return
-    const state = payload.state
-    const progress = Math.min(99, Math.max(0, Number(payload.progress) || 0))
-    if (state === 'succeeded') {
-      Object.assign(message, {
-        status: 1,
-        uploading: false,
-        uploadProgress: 100,
-        uploadError: '',
-        uploadCanceled: false,
-        uploadPaused: false
-      })
-      updateMessageById?.(message.messageId, {
-        status: 1,
-        uploading: false,
-        uploadProgress: 100,
-        uploadError: '',
-        uploadCanceled: false,
-        uploadPaused: false
-      })
-      persistMessageStatus(message).catch((error) => {
-        console.error('save completed upload task status failed', error)
-      })
-      return
-    }
-    if (state === 'failed') {
-      markMessageFailed(message, payload.error || '文件上传失败，请重试。').catch((error) => {
-        console.error('save failed upload task status failed', error)
-      })
-      return
-    }
-    if (state === 'canceled') {
-      markMessageFailed(message, '文件上传已取消。').catch((error) => {
-        console.error('save canceled upload task status failed', error)
-      })
-      return
-    }
-    const paused = state === 'paused'
-    Object.assign(message, {
-      status: 2,
-      uploading: !paused,
-      uploadProgress: progress,
-      uploadError: paused ? '上传已暂停。' : '',
-      uploadCanceled: state === 'canceled',
-      uploadPaused: paused
-    })
-    updateMessageById?.(message.messageId, {
-      status: 2,
-      uploading: !paused,
-      uploadProgress: progress,
-      uploadError: paused ? '上传已暂停。' : '',
-      uploadCanceled: state === 'canceled',
-      uploadPaused: paused
-    })
-  }
-
-  if (typeof window.api?.onUploadTaskProgress === 'function') {
-    unsubscribeUploadTaskProgress = window.api.onUploadTaskProgress(handleUploadTaskProgress)
-  }
-
-  const cleanupUploadControllers = () => {
-    mediaUploadCoordinator.cleanup()
-    unsubscribeUploadTaskProgress?.()
-    unsubscribeUploadTaskProgress = null
-    // 清理所有本地预览 blob URL，防止长时间聊天后内存泄漏。
-    blobUrlsToRevoke.forEach((url) => {
-      try {
-        URL.revokeObjectURL(url)
-      } catch (e) {
-        // Blob URL may already have been revoked.
-      }
-    })
-    blobUrlsToRevoke.clear()
-    // 清理后台重试定时器，避免组件卸载后继续写入消息状态。
-    localSyncRetryTimers.forEach((timer) => {
-      try {
-        clearTimeout(timer)
-      } catch (e) {
-        // Timer cleanup is best effort during component teardown.
-      }
-    })
-    localSyncRetryTimers.length = 0
-  }
-
   return {
-    cancelUploadMessage,
-    cleanupUploadControllers,
-    handleFileUploadDone,
+    cancelUploadMessage: media.cancelUploadMessage,
+    cleanupUploadControllers: () => {
+      media.cleanup()
+      lifecycle.cleanup()
+    },
+    handleFileUploadDone: media.handleFileUploadDone,
     onSendChatMessage,
     onSendFileMessage,
     onSendImageMessage,
     onSendVideoMessage,
     retryFailedMessage,
-    toggleUploadPause
+    toggleUploadPause: media.toggleUploadPause
   }
 }

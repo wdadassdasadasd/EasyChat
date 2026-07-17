@@ -1,4 +1,4 @@
-import { createSubscriptionRegistry } from './subscriptionRegistry'
+import { createSubscriptionRegistry } from '../subscriptionRegistry'
 
 /** Keeps renderer message IPC subscriptions isolated from history state. */
 export const createMessageSubscriptionController = ({

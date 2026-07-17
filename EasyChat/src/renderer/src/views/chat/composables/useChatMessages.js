@@ -1,9 +1,9 @@
 import { ref } from 'vue'
 import { useChatMessageSender } from './useChatMessageSender'
 import { useMessageScroll } from './useMessageScroll'
-import { createMessageCollection } from './messageCollection'
-import { createMessageHistoryController } from './messageHistoryController'
-import { createMessageSubscriptionController } from './messageSubscriptionController'
+import { createMessageCollection } from './message/messageCollection'
+import { createMessageHistoryController } from './message/messageHistoryController'
+import { createMessageSubscriptionController } from './message/messageSubscriptionController'
 
 /**
  * 当前聊天窗口的消息列表总控。

@@ -110,7 +110,8 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
     userDetailVisible.value = false
     pageSubscriptions.clear()
     sessions.removeSessionListener()
-    files.closeVideoPreviewDialog()
+    if (typeof files.cleanupFileTransfer === 'function') files.cleanupFileTransfer()
+    else files.closeVideoPreviewDialog()
     messages.cleanupChatMessages()
   }
 

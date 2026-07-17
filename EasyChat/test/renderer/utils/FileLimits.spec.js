@@ -111,7 +111,7 @@ describe('isVideoFile', () => {
   })
 
   it('returns false for non-video files', () => {
-    // image MIME overrides fileType=1 in getMediaKind (first if branch)
     expect(isVideoFile({ type: 'image/png' })).toBe(false)
+    expect(isVideoFile({ name: 'document.pdf', type: 'application/pdf' })).toBe(false)
   })
 })

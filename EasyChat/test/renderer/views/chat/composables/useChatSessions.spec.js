@@ -12,7 +12,7 @@ vi.mock('@imengyu/vue3-context-menu', () => ({
 
 let useChatSessions
 
-const createHarness = () => {
+const createHarness = ({ route = { query: {} } } = {}) => {
   const handlers = {}
   const sent = []
   const unsubscribeLoadSessionData = vi.fn(() => delete handlers.loadSessionDataCallback)
@@ -66,9 +66,7 @@ const createHarness = () => {
   }
   const sessions = useChatSessions({
     proxy,
-    route: {
-      query: {}
-    }
+    route
   })
 
   sessions.chatSessionList.value = [
@@ -244,6 +242,27 @@ describe('useChatSessions', () => {
     expect(api.unsubscribeDeleteChatSession).toHaveBeenCalled()
     expect(sessions.chatSessionList.value.find((item) => item.contactId === 'c1').topType).toBe(1)
     expect(proxy.Message.error).not.toHaveBeenCalled()
+  })
+
+  it('creates and selects a route-only group session after profile resolution', async () => {
+    const route = { query: { chatId: 'g1', type: 'GROUP' } }
+    const { proxy, sessions } = createHarness({ route })
+    const selectSession = vi.fn()
+    sessions.setSessionSelector(selectSession)
+    proxy.Request.mockResolvedValueOnce({
+      data: { groupInfo: { groupName: '项目群', memberCount: 8 } }
+    })
+
+    await sessions.openChatFromRoute()
+
+    expect(sessions.chatSessionList.value[0]).toMatchObject({
+      contactId: 'g1',
+      contactType: 1,
+      contactName: '项目群',
+      memberCount: 8,
+      noReadCount: 0
+    })
+    expect(selectSession).toHaveBeenCalledWith(sessions.chatSessionList.value[0])
   })
 
   describe('patchChatSessions unread count', () => {

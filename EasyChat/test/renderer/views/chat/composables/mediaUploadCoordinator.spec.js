@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createMediaUploadCoordinator } from '@/views/chat/composables/mediaUploadCoordinator'
+import { createMediaUploadCoordinator } from '@/views/chat/composables/outbound/mediaUploadCoordinator'
 
 describe('createMediaUploadCoordinator', () => {
   it('runs uploads within the configured concurrency bound', async () => {

@@ -1,5 +1,5 @@
 /**
- * In-memory integrity and object-URL lifecycle for the active message list.
+ * Internal in-memory integrity and object-URL lifecycle for the active message list.
  * It deliberately has no knowledge of IPC, pagination, scrolling, or sending.
  */
 export const createMessageCollection = (messageList) => {

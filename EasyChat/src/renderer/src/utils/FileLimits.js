@@ -46,5 +46,5 @@ export const validateFileSize = (file, fileType) => {
 }
 
 export const isVideoFile = (file) => {
-  return getMediaKind(file, 1) === 'video'
+  return getMediaKind(file) === 'video'
 }

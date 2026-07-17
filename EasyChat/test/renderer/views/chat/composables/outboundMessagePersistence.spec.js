@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
-import { createOutboundMessagePersistence } from '@/views/chat/composables/outboundMessagePersistence'
+import { createOutboundMessagePersistence } from '@/views/chat/composables/outbound/outboundMessagePersistence'
 
 describe('createOutboundMessagePersistence', () => {
   it('persists a pending message without renderer-only fields and patches only the active session', async () => {

@@ -1,4 +1,4 @@
-import { createSubscriptionRegistry } from './subscriptionRegistry'
+import { createSubscriptionRegistry } from '../subscriptionRegistry'
 
 /** Binds named session IPC callbacks without giving subscription ownership to session state. */
 export const createSessionSubscriptionController = () => {
