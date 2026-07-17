@@ -160,53 +160,39 @@ import MessageSend from '@/components/chat/MessageSend.vue';
 import UserChatDrawer from '@/components/chat/UserChatDrawer.vue';
 import VideoPreviewDialog from '@/components/chat/VideoPreviewDialog.vue';
 import { useUserInfoStore } from '@/stores/UserInfoStore';
-import { useChatMessages } from './composables/useChatMessages';
-import { useChatSessions } from './composables/useChatSessions';
-import { useFileTransfer } from './composables/useFileTransfer';
+import { useChatPageController } from './composables/useChatPageController';
 
 const { proxy } = getCurrentInstance();
 const route = useRoute();
 const userInfoStore = useUserInfoStore();
-const groupDetailVisible = ref(false);
-const userDetailVisible = ref(false);
 const showGroupMemberNick = ref(true);
 const messageListRef = ref(null);
-const wsStatusText = ref('');
-let clearChatMessageHandler = null;
-let unsubscribeClearChatMessage = null;
-let unsubscribeWsStatus = null;
 
 const currentUserId = computed(() => {
     return userInfoStore.getInfo()?.userId;
 });
 
-// 会话链路负责：加载/排序会话、响应路由打开聊天、处理置顶/删除/已读等主进程 IPC。
 const {
     chatSessionList,
     currentChatSession,
     currentChatSessionTitle,
     hasCurrentChat,
-    loadChatSession,
-    markSessionRead,
+    chatSessionClickHandler,
     onContextmenu,
     openChatFromRoute,
-    patchChatSessions,
-    registerSessionListener,
-    removeSessionListener,
-    setChatSessionTop,
-    setSessionSelector,
-    updateCurrentChatSession,
-    welcomeText
-} = useChatSessions({ proxy, route });
-
-// 消息链路负责：切换会话后分页拉取历史消息，监听主进程推送，并把发送事件交给发送 composable。
-const {
-    chatSessionClickHandler,
-    cleanupChatMessages,
-    clearCurrentMessages,
+    welcomeText,
+    groupDetailVisible,
+    userDetailVisible,
+    wsStatusText,
+    totalUnreadCount,
+    mount,
+    unmount,
+    showChatDetail,
+    handleToggleTop,
+    handleGroupUpdated,
+    handleClearMessages,
     clearInitialBottomLock,
     locateChatMessage,
-    loadChatMessage,
     loadMoreChatMessage,
     messageList,
     messageLoadingMore,
@@ -217,21 +203,8 @@ const {
     onSendFileMessage,
     onSendImageMessage,
     onSendVideoMessage,
-    registerMessageListeners,
     retryFailedMessage,
-    settleScrollToBottom
-} = useChatMessages({
-    currentChatSession,
-    currentUserId,
-    loadChatSession,
-    markSessionRead,
-    messageListRef,
-    patchChatSessions,
-    proxy
-});
-
-// 文件链路负责：文件接收下载、视频预览下载、本地视频回退和对象 URL 生命周期。
-const {
+    settleScrollToBottom,
     closeFilePreviewDialog,
     closeVideoPreviewDialog,
     downloadSelectedVideoMessage,
@@ -253,110 +226,11 @@ const {
     videoDownloadProgress,
     videoPlaybackError,
     videoPreviewUrl
-} = useFileTransfer({ proxy });
-
-const totalUnreadCount = computed(() => {
-    return chatSessionList.value.reduce((total, item) => {
-        return total + Number(item.noReadCount || 0);
-    }, 0);
-});
-
-const wsStatusHandler = (payload = {}) => {
-    if (payload.status === 'connected') {
-        wsStatusText.value = '';
-        loadChatSession();
-        loadChatMessage({ refreshTail: true });
-        return;
-    }
-    if (payload.status === 'closed') {
-        wsStatusText.value = '';
-        return;
-    }
-    if (payload.status === 'reconnecting') {
-        wsStatusText.value = `Reconnecting ${payload.retryLeft ?? ''}`.trim();
-        return;
-    }
-    if (payload.status === 'failed') {
-        wsStatusText.value = 'Connection failed';
-        return;
-    }
-    if (payload.status === 'connecting') {
-        wsStatusText.value = 'Connecting';
-    }
-};
-
-const showChatDetail = () => {
-    // 单聊和群聊使用不同详情抽屉；每次只允许打开一个，避免右侧面板状态串线。
-    if (currentChatSession.value.contactType == 1) {
-        userDetailVisible.value = false;
-        groupDetailVisible.value = !groupDetailVisible.value;
-        return;
-    }
-
-    if (currentChatSession.value.contactType == 0) {
-        groupDetailVisible.value = false;
-        userDetailVisible.value = !userDetailVisible.value;
-        return;
-    }
-
-    groupDetailVisible.value = false;
-    userDetailVisible.value = false;
-};
-
-const handleToggleTop = (isTop) => {
-    if (!currentChatSession.value.contactId) {
-        return;
-    }
-    setChatSessionTop(currentChatSession.value.contactId, isTop ? 1 : 0);
-};
-
-const handleGroupUpdated = (sessionInfo) => {
-    updateCurrentChatSession(sessionInfo);
-};
-
-const handleClearMessages = () => {
-    if (!currentChatSession.value.sessionId) {
-        clearCurrentMessages();
-        return;
-    }
-
-    // 清空聊天记录由主进程落库，renderer 只在确认同一 session 成功后清空当前内存列表。
-    proxy.Confirm({
-        message: '确认清空聊天记录吗？',
-        okfun: () => {
-            const sessionId = currentChatSession.value.sessionId;
-            clearChatMessageHandler = (data) => {
-                unsubscribeClearChatMessage?.()
-                unsubscribeClearChatMessage = null
-                clearChatMessageHandler = null
-                if (data?.success && data.sessionId === sessionId) {
-                    clearCurrentMessages();
-                    if (data.session) {
-                        patchChatSessions([data.session]);
-                    }
-                    proxy.Message.success('聊天记录已清空');
-                    return;
-                }
-                if (data?.sessionId === sessionId) {
-                    proxy.Message.error('清空聊天记录失败');
-                }
-            };
-            unsubscribeClearChatMessage = window.api.onClearChatMessageCallback(clearChatMessageHandler);
-            window.api.sendClearChatMessage({ sessionId });
-        }
-    });
-};
-
-setSessionSelector(chatSessionClickHandler);
+} = useChatPageController({ currentUserId, messageListRef, proxy, route });
 
 
 onMounted(() => {
-    // 挂载时先注册 IPC 监听，再触发会话加载和路由打开，避免回调早于监听导致首屏丢消息。
-    registerMessageListeners();//消息监听
-    registerSessionListener();//会话监听
-    unsubscribeWsStatus = window.api.onWsStatusChange(wsStatusHandler);
-    loadChatSession();//会话加载
-    openChatFromRoute();//路由跳转
+    mount();
 });
 
 //处理其它页面跳转聊天
@@ -395,18 +269,7 @@ watch(
 );
 
 onUnmounted(() => {
-    groupDetailVisible.value = false;
-    userDetailVisible.value = false;
-    removeSessionListener();
-    unsubscribeWsStatus?.();
-    unsubscribeWsStatus = null;
-    if (clearChatMessageHandler) {
-        unsubscribeClearChatMessage?.();
-        unsubscribeClearChatMessage = null;
-        clearChatMessageHandler = null;
-    }
-    closeVideoPreviewDialog();
-    cleanupChatMessages();
+    unmount();
 });
 </script>
 

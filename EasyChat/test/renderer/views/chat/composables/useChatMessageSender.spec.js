@@ -39,6 +39,7 @@ const createServerMediaMessage = (messageId, fileName) => ({
 })
 
 const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
+  let uploadTaskProgressListener
   const messageList = ref([])
   const currentChatSession = ref({
     contactId: 'u2',
@@ -91,7 +92,11 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
         arrayBuffer: new ArrayBuffer(end - start)
       })),
       invokeReleaseUploadSource: vi.fn(async () => ({ success: true })),
-      invokeGenerateUploadSourceThumbnail: vi.fn(async () => ({ success: false }))
+      invokeGenerateUploadSourceThumbnail: vi.fn(async () => ({ success: false })),
+      onUploadTaskProgress: vi.fn((listener) => {
+        uploadTaskProgressListener = listener
+        return vi.fn()
+      })
     }
   }
   global.URL.createObjectURL = vi.fn(() => 'blob://preview')
@@ -141,7 +146,8 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
     patchChatSessions,
     proxy,
     request,
-    sender
+    sender,
+    emitUploadTaskProgress: (payload) => uploadTaskProgressListener?.(payload)
   }
 }
 
@@ -1179,5 +1185,58 @@ describe('useChatMessageSender', () => {
     expect(initConfig).toBeTruthy()
     expect(initConfig.showError).toBe(false)
     expect(configs.find((config) => config.url === '/chat/uploadFile')).toBeUndefined()
+  })
+
+  it('persists a cover and hands its reference to the main-process upload task', async () => {
+    const { request, sender } = createHarness({
+      requestResults: [{ data: createServerMediaMessage(701, 'video.mp4') }]
+    })
+    const cover = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' })
+    window.api.registerUploadCover = vi.fn(async () => ({
+      success: true,
+      coverSourceId: 'cover-701'
+    }))
+    window.api.invokeEnqueueUploadTask = vi.fn(async () => ({ success: true, taskId: 'task-701' }))
+    window.api.invokeReleaseUploadCover = vi.fn(async () => ({ success: true }))
+
+    sender.onSendVideoMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'video.mp4', size: 12, type: 'video/mp4', path: 'D:/tmp/video.mp4' },
+      cover
+    })
+
+    await vi.waitFor(() => expect(window.api.invokeEnqueueUploadTask).toHaveBeenCalledOnce())
+    expect(window.api.registerUploadCover).toHaveBeenCalledWith(cover)
+    expect(window.api.invokeEnqueueUploadTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 701,
+        uploadSourceId: 'source-video.mp4',
+        coverSourceId: 'cover-701'
+      })
+    )
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it('marks the local message successful after the task manager reconciles a delayed ACK', async () => {
+    const { emitUploadTaskProgress, messageList, sender } = createHarness()
+    messageList.value.push({
+      messageId: 702,
+      status: 2,
+      uploading: true,
+      uploadProgress: 99,
+      sessionId: 's1'
+    })
+
+    emitUploadTaskProgress({ messageId: 702, state: 'succeeded', progress: 100 })
+    await flush()
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 1,
+      uploading: false,
+      uploadProgress: 100,
+      uploadPaused: false
+    })
+    sender.cleanupUploadControllers()
   })
 })

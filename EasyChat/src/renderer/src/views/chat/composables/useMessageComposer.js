@@ -135,16 +135,12 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
 
   const createVideoCoverWithFfmpeg = async (uploadSourceId) => {
     // Electron 环境下优先用 ffmpeg 提取封面，绕过浏览器 HEVC 解码限制。
-    if (!uploadSourceId || !window.api) {
-      return null
-    }
-    const result = await window.api.invokeGenerateUploadSourceThumbnail({
-      uploadSourceId
-    })
-    if (!result?.success || !result?.arrayBuffer) {
-      return null
-    }
-    return new Blob([result.arrayBuffer], { type: 'image/jpeg' })
+    if (!uploadSourceId) return null
+    const request = window.api?.invokeGenerateUploadSourceThumbnail?.({ uploadSourceId })
+    const result = await request?.catch(() => null)
+    return result?.success && result.arrayBuffer
+      ? new Blob([result.arrayBuffer], { type: 'image/jpeg' })
+      : null
   }
 
   const createVideoCover = async (file, uploadSourceId) => {
@@ -271,8 +267,9 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
     const order = nextPendingMediaOrder()
     let uploadSourceId = ''
     if (fileType === 1) {
-      const sourceResult = await window.api.registerUploadSource(file).catch(() => null)
-      uploadSourceId = sourceResult?.uploadSourceId || ''
+      const request = window.api?.registerUploadSource?.(file)
+      const result = await request?.catch(() => null)
+      uploadSourceId = result?.uploadSourceId || ''
     }
     const pendingFile = {
       id: `${Date.now()}_${Math.random()}`,
@@ -324,7 +321,10 @@ export const useMessageComposer = ({ currentChatSession, emit }) => {
 
   const releasePendingUploadSource = (item) => {
     if (!item?.uploadSourceId) return
-    window.api.invokeReleaseUploadSource({ uploadSourceId: item.uploadSourceId }).catch(() => {})
+    const request = window.api?.invokeReleaseUploadSource?.({
+      uploadSourceId: item.uploadSourceId
+    })
+    request?.catch(() => {})
   }
 
   const removePendingFile = (id) => {

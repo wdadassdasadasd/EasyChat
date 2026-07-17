@@ -1,5 +1,3 @@
-import { toRaw } from 'vue'
-
 import { CHAT_CONSTANTS } from '@/utils/ChatConstants'
 import { validateFileSize } from '@/utils/FileLimits'
 import {
@@ -8,6 +6,8 @@ import {
   isRequestFailure
 } from '@/utils/RequestFailure'
 import { cancelMediaUpload, uploadMediaFile } from '@/utils/MediaUploadTransport'
+import { createMediaUploadCoordinator } from './mediaUploadCoordinator'
+import { createOutboundMessagePersistence } from './outboundMessagePersistence'
 
 /**
  * 出站消息发送链路的执行入口。
@@ -28,39 +28,33 @@ export const useChatMessageSender = ({
   updateMessageById,
   scrollMessageToBottom
 }) => {
-  // 串行化发送任务，保证本地消息顺序和服务端回包顺序对齐。
-  let sendTaskQueue = Promise.resolve()
-  let queuedSendTaskCount = 0
-
-  const maxUploadConcurrency = 3
   let localMessageSeq = -Date.now()
   const blobUrlsToRevoke = new Set()
-  const uploadTaskQueue = []
-  let activeUploadCount = 0
-  const uploadControllers = new Map()
-  const uploadSourceReleaseRetryTimers = []
   let unsubscribeUploadTaskProgress = null
+  let sendTaskChain = Promise.resolve()
+  let pendingSendTaskCount = 0
+  const mediaUploadCoordinator = createMediaUploadCoordinator({
+    maxConcurrency: 3,
+    onTaskError: (error) => console.error('upload message file failed', error)
+  })
+  const enqueueUploadTask = mediaUploadCoordinator.enqueue
 
-  const runNextUploadTask = () => {
-    if (activeUploadCount >= maxUploadConcurrency || uploadTaskQueue.length === 0) {
-      return
+  const enqueueSendTask = (task, { onRejected } = {}) => {
+    if (pendingSendTaskCount >= CHAT_CONSTANTS.MAX_SEND_TASK_QUEUE) {
+      onRejected?.()
+      proxy.Message.warning('发送任务过多，请等待当前消息处理完成后再试。')
+      return false
     }
 
-    const task = uploadTaskQueue.shift()
-    activeUploadCount += 1
-    task()
-      .catch((error) => {
-        console.error('upload message file failed', error)
-      })
+    pendingSendTaskCount += 1
+    sendTaskChain = sendTaskChain
+      .catch((error) => console.error('send queue: previous task failed, continuing', error))
+      .then(task)
+      .catch((error) => console.error('send message failed', error))
       .finally(() => {
-        activeUploadCount -= 1
-        runNextUploadTask()
+        pendingSendTaskCount = Math.max(0, pendingSendTaskCount - 1)
       })
-  }
-
-  const enqueueUploadTask = (task) => {
-    uploadTaskQueue.push(task)
-    runNextUploadTask()
+    return sendTaskChain
   }
 
   const saveSendMessageToLocal = async (payload) => {
@@ -72,116 +66,15 @@ export const useChatMessageSender = ({
     return localMessageSeq
   }
 
-  const getCurrentSessionSnapshot = () => {
-    return { ...toRaw(currentChatSession.value) }
-  }
-
-  const sessionMatchesCurrent = (sessionInfo) => {
-    if (!sessionInfo?.contactId) {
-      return true
-    }
-    const current = currentChatSession.value
-    return String(sessionInfo.contactId) === String(current?.contactId)
-  }
-
   const getLocalSessionId = (contactId, contactType) => {
     return currentChatSession.value.sessionId || `${contactType}_${contactId}`
   }
-
-  const stripTransientMessageFields = (message = {}) => {
-    const dbMessage = { ...message }
-    delete dbMessage.localPreviewUrl
-    delete dbMessage.localCoverUrl
-    delete dbMessage.retryFile
-    delete dbMessage.retryCover
-    delete dbMessage.uploading
-    delete dbMessage.uploadProgress
-    delete dbMessage.uploadError
-    delete dbMessage.uploadCanceled
-    delete dbMessage.downloadStatus
-    delete dbMessage.downloadProgress
-    delete dbMessage.downloadPath
-    delete dbMessage.downloadError
-    delete dbMessage.uploadAcked
-    delete dbMessage.uploadAckReceived
-    delete dbMessage.uploadAckRevision
-    delete dbMessage.uploadAckStatus
-    delete dbMessage.uploadSourceReleased
-    delete dbMessage.forceGet
-    return dbMessage
-  }
-
-  const patchSessionFromSaveResult = (saveResult) => {
-    // 仅当落库返回的 session 仍属于当前活跃会话时才更新 UI，防止跨会话污染
-    if (saveResult?.session && sessionMatchesCurrent(saveResult.session)) {
-      patchChatSessions?.([saveResult.session])
-    }
-  }
-
-  const assertLocalSaveSuccess = (saveResult, fallbackError) => {
-    if (!saveResult || saveResult.success === false) {
-      throw new Error(saveResult?.error || fallbackError || 'Save message failed')
-    }
-    return saveResult
-  }
-
-  const persistPendingMessage = async (message) => {
-    const saveResult = await saveSendMessageToLocal({
-      mode: 'pending',
-      message: stripTransientMessageFields(message),
-      chatSession: getCurrentSessionSnapshot()
+  const { persistMessageStatus, persistPendingMessage, persistServerMessage } =
+    createOutboundMessagePersistence({
+      currentChatSession,
+      patchChatSessions,
+      saveSendMessageToLocal
     })
-    assertLocalSaveSuccess(saveResult, 'Save pending message failed')
-    patchSessionFromSaveResult(saveResult)
-    return saveResult
-  }
-
-  const persistMessageStatus = async (message) => {
-    const saveResult = await saveSendMessageToLocal({
-      mode: 'status',
-      message: stripTransientMessageFields(message),
-      status: message.status,
-      chatSession: getCurrentSessionSnapshot()
-    })
-    assertLocalSaveSuccess(saveResult, 'Save message status failed')
-    patchSessionFromSaveResult(saveResult)
-    return saveResult
-  }
-
-  const persistServerMessage = async (localMessageId, message) => {
-    const saveResult = await saveSendMessageToLocal({
-      mode: 'replace',
-      localMessageId,
-      message: stripTransientMessageFields(message),
-      chatSession: getCurrentSessionSnapshot()
-    })
-    assertLocalSaveSuccess(saveResult, 'Save server message failed')
-    patchSessionFromSaveResult(saveResult)
-    return saveResult
-  }
-
-  const enqueueSendTask = (task, { onRejected } = {}) => {
-    if (queuedSendTaskCount >= CHAT_CONSTANTS.MAX_SEND_TASK_QUEUE) {
-      onRejected?.()
-      proxy.Message.warning('发送任务过多，请等待当前消息处理完成后再试。')
-      return false
-    }
-
-    queuedSendTaskCount += 1
-    sendTaskQueue = sendTaskQueue
-      .catch((err) => {
-        console.error('send queue: previous task failed, continuing', err)
-      })
-      .then(task)
-      .catch((error) => {
-        console.error('send message failed', error)
-      })
-      .finally(() => {
-        queuedSendTaskCount = Math.max(0, queuedSendTaskCount - 1)
-      })
-
-    return sendTaskQueue
-  }
 
   const appendSentMessageIfMissing = (message) => {
     const shouldStickToBottom = isNearMessageBottom()
@@ -518,8 +411,8 @@ export const useChatMessageSender = ({
 
     const controller = new AbortController()
     const uploadKey = String(message.messageId)
-    uploadControllers.set(uploadKey, controller)
-    const isCurrentUpload = () => uploadControllers.get(uploadKey) === controller
+    mediaUploadCoordinator.setController(uploadKey, controller)
+    const isCurrentUpload = () => mediaUploadCoordinator.isCurrentController(uploadKey, controller)
     const getLatestMessage = () => {
       return messageList.value.find((item) => item.messageId == message.messageId)
     }
@@ -567,7 +460,7 @@ export const useChatMessageSender = ({
     if (!isCurrentUpload()) {
       return
     }
-    uploadControllers.delete(uploadKey)
+    mediaUploadCoordinator.deleteController(uploadKey)
 
     const latestMessage = getLatestMessage()
     if (latestMessage?.uploadAckReceived) {
@@ -840,17 +733,10 @@ export const useChatMessageSender = ({
     if (attempt >= 2) {
       return
     }
-    const timer = setTimeout(
-      () => {
-        const index = uploadSourceReleaseRetryTimers.indexOf(timer)
-        if (index >= 0) {
-          uploadSourceReleaseRetryTimers.splice(index, 1)
-        }
-        releaseUploadSourceAfterAck(targetMessage, ackRevision, attempt + 1)
-      },
+    mediaUploadCoordinator.scheduleRetry(
+      () => releaseUploadSourceAfterAck(targetMessage, ackRevision, attempt + 1),
       1000 * (attempt + 1)
     )
-    uploadSourceReleaseRetryTimers.push(timer)
   }
 
   const handleFileUploadDone = async (message) => {
@@ -880,8 +766,8 @@ export const useChatMessageSender = ({
       uploadAckStatus: ackStatus
     })
 
-    const activeController = uploadControllers.get(String(targetMessage.messageId))
-    uploadControllers.delete(String(targetMessage.messageId))
+    const activeController = mediaUploadCoordinator.getController(targetMessage.messageId)
+    mediaUploadCoordinator.deleteController(targetMessage.messageId)
     activeController?.abort()
 
     if (ackSucceeded) {
@@ -984,7 +870,7 @@ export const useChatMessageSender = ({
     if (!message.messageId || (!message.uploading && !message.uploadPaused)) {
       return
     }
-    const controller = uploadControllers.get(String(message.messageId))
+    const controller = mediaUploadCoordinator.getController(message.messageId)
     controller?.abort()
     Object.assign(message, {
       uploadCanceled: true,
@@ -1091,14 +977,7 @@ export const useChatMessageSender = ({
   }
 
   const cleanupUploadControllers = () => {
-    uploadControllers.forEach((controller) => {
-      try {
-        controller.abort()
-      } catch (e) {
-        /* ignore */
-      }
-    })
-    uploadControllers.clear()
+    mediaUploadCoordinator.cleanup()
     unsubscribeUploadTaskProgress?.()
     unsubscribeUploadTaskProgress = null
     // 清理所有本地预览 blob URL，防止长时间聊天后内存泄漏。
@@ -1119,10 +998,6 @@ export const useChatMessageSender = ({
       }
     })
     localSyncRetryTimers.length = 0
-    uploadSourceReleaseRetryTimers.forEach((timer) => {
-      clearTimeout(timer)
-    })
-    uploadSourceReleaseRetryTimers.length = 0
   }
 
   return {

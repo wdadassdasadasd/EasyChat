@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import ContextMenu from '@imengyu/vue3-context-menu'
+import { createSessionSubscriptionController } from './sessionSubscriptionController'
 
 /**
  * 聊天会话列表和当前会话壳状态的管理入口。
@@ -16,10 +17,7 @@ export const useChatSessions = ({ proxy, route }) => {
   let deleteChatSessionHandler = null
   let markSessionReadHandler = null
   let topChatSessionHandler = null
-  let unsubscribeLoadSessionData = null
-  let unsubscribeDeleteChatSession = null
-  let unsubscribeMarkSessionRead = null
-  let unsubscribeTopChatSession = null
+  const sessionSubscriptions = createSessionSubscriptionController()
   // 标记已读的待确认操作映射：contactId → { previousNoReadCount, timeoutTimer }
   const pendingReadMap = new Map()
   const pendingTopMap = new Map()
@@ -60,12 +58,12 @@ export const useChatSessions = ({ proxy, route }) => {
 
   const sortChatSessionList = (dataList) => {
     dataList.sort((a, b) => {
-      const topTypeResult = b.topType - a.topType
-      if (topTypeResult == 0) {
-        return b.lastReceiveTime - a.lastReceiveTime
-      }
-      return topTypeResult
+      const topTypeResult = Number(b.topType || 0) - Number(a.topType || 0)
+      return topTypeResult === 0
+        ? Number(b.lastReceiveTime || 0) - Number(a.lastReceiveTime || 0)
+        : topTypeResult
     })
+    return dataList
   }
 
   const delChatSessionList = (contactId) => {
@@ -240,8 +238,6 @@ export const useChatSessions = ({ proxy, route }) => {
       chatSessionList.value = mergedList
       openChatFromRoute()
     }
-    unsubscribeLoadSessionData = window.api.onLoadSessionDataCallback(loadSessionDataHandler)
-
     deleteChatSessionHandler = (data = {}) => {
       const contactId = String(data?.contactId || '')
       if (!contactId) return
@@ -255,8 +251,6 @@ export const useChatSessions = ({ proxy, route }) => {
         entry.rollback()
       }
     }
-    unsubscribeDeleteChatSession = window.api.onDelChatSessionCallback(deleteChatSessionHandler)
-
     // 单一定时监听器：用 pendingReadMap 匹配 contactId，避免 O(n²) 链式重注册。
     markSessionReadHandler = (data = {}) => {
       const contactId = String(data?.contactId || '')
@@ -271,8 +265,6 @@ export const useChatSessions = ({ proxy, route }) => {
       }
       pendingReadMap.delete(contactId)
     }
-    unsubscribeMarkSessionRead = window.api.onMarkSessionReadCallback(markSessionReadHandler)
-
     topChatSessionHandler = (data = {}) => {
       const contactId = data?.contactId
       if (!contactId) return
@@ -289,30 +281,20 @@ export const useChatSessions = ({ proxy, route }) => {
         entry.rollback()
       }
     }
-    unsubscribeTopChatSession = window.api.onTopChatSessionCallback(topChatSessionHandler)
+    sessionSubscriptions.register({
+      onDelete: deleteChatSessionHandler,
+      onLoad: loadSessionDataHandler,
+      onMarkRead: markSessionReadHandler,
+      onTop: topChatSessionHandler
+    })
   }
 
   const removeSessionListener = () => {
-    if (loadSessionDataHandler) {
-      unsubscribeLoadSessionData?.()
-      unsubscribeLoadSessionData = null
-      loadSessionDataHandler = null
-    }
-    if (markSessionReadHandler) {
-      unsubscribeMarkSessionRead?.()
-      unsubscribeMarkSessionRead = null
-      markSessionReadHandler = null
-    }
-    if (deleteChatSessionHandler) {
-      unsubscribeDeleteChatSession?.()
-      unsubscribeDeleteChatSession = null
-      deleteChatSessionHandler = null
-    }
-    if (topChatSessionHandler) {
-      unsubscribeTopChatSession?.()
-      unsubscribeTopChatSession = null
-      topChatSessionHandler = null
-    }
+    sessionSubscriptions.remove()
+    loadSessionDataHandler = null
+    markSessionReadHandler = null
+    deleteChatSessionHandler = null
+    topChatSessionHandler = null
     // 清理所有未完成的标记操作。
     pendingReadMap.forEach((entry) => {
       clearTimeout(entry.timeoutTimer)
