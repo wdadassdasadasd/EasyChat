@@ -60,7 +60,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, getCurrentInstance, onMounted, onBeforeUnmount } from 'vue';
+import { ref, nextTick, getCurrentInstance, onBeforeUnmount } from 'vue';
 import { Key, Lock, Message, User } from '@element-plus/icons-vue';
 import md5 from 'js-md5';
 import {useUserInfoStore} from '@/stores/UserInfoStore.js';
@@ -210,25 +210,11 @@ const submit=async()=>{
       screenHeight:screenHeight
     });
 
-    window.api.sendSetLocalStore({key:'devWsDomain',value:proxy.Api.devWsDomain});
   } else {
     proxy.Message.success('注册成功，请登录');
     changeOpType();
   }
 }
-
-const init=()=>{
-  window.api.sendSetLocalStore({key:'prodDomain',value:proxy.Api.prodDomain});
-  window.api.sendSetLocalStore({key:'devDomain',value:proxy.Api.devDomain});
-  window.api.sendSetLocalStore({key:'prodWsDomain',value:proxy.Api.prodWsDomain});
-  window.api.sendSetLocalStore({key:'devWsDomain',value:proxy.Api.devWsDomain})
-
-
-}
-
-onMounted(()=>{
-  init();
-})
 
 onBeforeUnmount(() => {
   if (checkCodeTimer) {

@@ -1,9 +1,9 @@
 import { add_tables, optional_tables, add_index, alter_tables } from './Tables'
 import fs from 'fs'
 import sqlite3 from 'sqlite3'
-import os from 'os'
 import { AsyncLocalStorage } from 'async_hooks'
 import { MAX_SQL_IN_PARAMS } from '../constants'
+import { getEasyChatPaths } from '../appPaths.js'
 
 const globalColumnMap = {
   chat_message: {
@@ -61,16 +61,13 @@ const globalColumnMap = {
   }
 }
 
-const NODE_ENV = process.env.NODE_ENV
+const appPaths = getEasyChatPaths()
 
-const userDir = os.homedir()
-const flieFolder = userDir + (NODE_ENV === 'development' ? '/.weChattest/' : '/.weChat/')
-
-if (!fs.existsSync(flieFolder)) {
-  fs.mkdirSync(flieFolder)
+if (!fs.existsSync(appPaths.rootDir)) {
+  fs.mkdirSync(appPaths.rootDir, { recursive: true })
 }
 
-const db = new sqlite3.Database(flieFolder + 'local.db')
+const db = new sqlite3.Database(appPaths.databasePath)
 if (typeof db.configure === 'function') {
   db.configure('busyTimeout', 5000)
 }

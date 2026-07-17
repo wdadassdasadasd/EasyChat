@@ -1,12 +1,11 @@
 import store from '../store'
-import { insertOrIgnore, queryOne, run, runInTransaction, update } from './ADB'
-import os from 'os'
+import { insertOrIgnore, queryOne, runInTransaction, runStrict, update } from './ADB'
 import fs from 'fs'
 import path from 'path'
-const userDir = os.homedir()
+import { getEasyChatPaths } from '../appPaths.js'
 
 const defaultLocalFileFolder = () => {
-  return path.join(userDir, '.weChat', 'fileStorge')
+  return getEasyChatPaths().localFilesDir
 }
 
 const ensureFolder = async (folder) => {
@@ -76,18 +75,19 @@ const getFolderStats = async (folder) => {
   return stats
 }
 
-const updateNoReadCount = async (userId, noReadCount) => {
-  let sql = null
-  if (noReadCount === 0) {
-    return
+const normalizeContactApplyNoReadCount = (value) => {
+  const count = Number(value)
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0
+}
+
+const setContactApplyNoReadCount = async (userId, noReadCount) => {
+  if (!userId) {
+    return 0
   }
-  if (noReadCount) {
-    sql = 'update user_setting set contact_no_read=contact_no_read+? where user_id=?'
-  } else {
-    noReadCount = 0
-    sql = 'update user_setting set contact_no_read=? where user_id=?'
-  }
-  await run(sql, [noReadCount, userId])
+  return await runStrict('update user_setting set contact_no_read=? where user_id=?', [
+    normalizeContactApplyNoReadCount(noReadCount),
+    userId
+  ])
 }
 
 const addUserSetting = async (userId, email) => {
@@ -176,7 +176,8 @@ const resetLocalFileFolder = async () => {
 }
 
 export {
-  updateNoReadCount,
+  normalizeContactApplyNoReadCount,
+  setContactApplyNoReadCount,
   addUserSetting,
   getLocalFileFolder,
   updateLocalFileFolder,

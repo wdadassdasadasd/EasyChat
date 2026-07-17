@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto'
 import axios from 'axios'
-import store from './store.js'
+import { runtimeConfig } from '../shared/runtimeConfig.js'
 import { MAX_CHUNK_SIZE, getUploadSource, readUploadSourceChunk, setUploadSourcePinned } from './uploadSourceRegistry.js'
 import {
   getUploadTaskByMessageId,
@@ -18,10 +18,7 @@ const RETRY_DELAYS = [0, 1000, 3000]
 const activeControllers = new Map()
 let runtime = { generation: 0, userId: null, token: '', apiBaseUrl: '', eventTarget: null }
 
-const getApiBaseUrl = () => {
-  const key = process.env.NODE_ENV === 'development' ? 'devDomain' : 'prodDomain'
-  return `${String(store.getData(key) || 'http://localhost:5050').replace(/\/$/, '')}/api`
-}
+const getApiBaseUrl = () => runtimeConfig.apiBaseUrl
 const isActive = (context) => context && runtime.generation === context.generation && runtime.userId === context.userId
 const getActiveContext = () => (runtime.userId && isActive(runtime) ? runtime : null)
 const getTaskKey = (context, taskId) => `${context.userId}:${taskId}`

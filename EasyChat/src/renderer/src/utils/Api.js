@@ -1,8 +1,10 @@
+import { runtimeConfig } from '../../../shared/runtimeConfig.js'
+
 const api = {
-  prodDomain: 'http://localhost:5050',
-  devDomain: 'http://localhost:5050',
-  prodWsDomain: 'ws://localhost:5051/ws',
-  devWsDomain: 'ws://localhost:5051/ws',
+  prodDomain: runtimeConfig.apiOrigin,
+  devDomain: runtimeConfig.apiOrigin,
+  prodWsDomain: runtimeConfig.wsOrigin,
+  devWsDomain: runtimeConfig.wsOrigin,
   checkCode: '/account/checkCode',
   Login: '/account/login',
   Register: '/account/register',

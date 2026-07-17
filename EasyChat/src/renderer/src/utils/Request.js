@@ -3,6 +3,7 @@ import { ElLoading } from 'element-plus'
 import Message from '../utils/Message'
 import router from '@/router'
 import { useUserInfoStore } from '@/stores/UserInfoStore'
+import { runtimeConfig } from '../../../shared/runtimeConfig.js'
 const contentTypeForm = 'application/x-www-form-urlencoded;charset=UTF-8'
 const contentTypeJson = 'application/json'
 const responseTypeJson = 'json'
@@ -63,9 +64,7 @@ const hideLoadingIfDone = () => {
     loadingCount = 0
   }
 }
-const envDomain = import.meta.env.VITE_DOMAIN
-const prodDomain = import.meta.env.VITE_PROD_DOMAIN || 'http://localhost:5050'
-const baseDomain = import.meta.env.PROD ? envDomain || prodDomain : ''
+const baseDomain = import.meta.env.DEV ? '' : runtimeConfig.apiOrigin
 const instance = axios.create({
   withCredentials: true, //携带cookie
   baseURL: `${baseDomain}/api`, //统一前缀
@@ -86,7 +85,7 @@ export const getApiUrl = (url = '') => {
     }
   }
   // 确保始终返回绝对 URL：优先使用环境变量域名，其次从页面 origin 推导
-  const base = baseDomain || (typeof window !== 'undefined' ? window.location.origin : '')
+  const base = runtimeConfig.apiOrigin
   const full = `${base}/api${url}`
   try {
     return new URL(full).toString()

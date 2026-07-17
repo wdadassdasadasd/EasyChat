@@ -54,7 +54,7 @@ vi.mock('../../src/main/db/ChatMessageModel', () => ({
 }))
 
 vi.mock('../../src/main/db/UserSettingModel', () => ({
-  updateNoReadCount: vi.fn()
+  setContactApplyNoReadCount: vi.fn()
 }))
 
 vi.mock('../../src/main/receiveRecoveryStore', () => ({
@@ -77,7 +77,7 @@ describe('wsClient message normalization', () => {
     const sessionModel = await import('../../src/main/db/ChatSessionUserModel')
     sessionModel.saveOrUpdateChatSessionBatch4Init.mockResolvedValue(undefined)
     const userSettingModel = await import('../../src/main/db/UserSettingModel')
-    userSettingModel.updateNoReadCount.mockResolvedValue(undefined)
+    userSettingModel.setContactApplyNoReadCount.mockResolvedValue(undefined)
   })
 
   it('flattens raw arrays and nested batch payloads', async () => {
@@ -173,6 +173,7 @@ describe('wsClient message normalization', () => {
       data: JSON.stringify({
         messageType: 0,
         extendData: {
+          contact: { applyCount: 3 },
           chatSessionList: [{ contactId: 'u2', noReadCount: 3 }],
           chatMessageList: [
             {
@@ -190,6 +191,27 @@ describe('wsClient message normalization', () => {
 
     await vi.waitFor(() => {
       expect(saveMessageBatch).toHaveBeenCalledWith(expect.any(Array), { incrementUnread: false })
+    })
+    const { setContactApplyNoReadCount } = await import('../../src/main/db/UserSettingModel')
+    expect(setContactApplyNoReadCount).toHaveBeenCalledWith('u1', 3)
+    await closeWs()
+  })
+
+  it('passes invalid INIT contact apply counts to the snapshot normalizer', async () => {
+    const { initWs, closeWs } = await import('../../src/main/wsClient')
+    const { setContactApplyNoReadCount } = await import('../../src/main/db/UserSettingModel')
+    const sender = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+    wsInstances.at(-1).onmessage({
+      data: JSON.stringify({
+        messageType: 0,
+        extendData: { contact: { applyCount: -1 }, chatSessionList: [], chatMessageList: [] }
+      })
+    })
+
+    await vi.waitFor(() => {
+      expect(setContactApplyNoReadCount).toHaveBeenCalledWith('u1', -1)
     })
     await closeWs()
   })
@@ -409,7 +431,7 @@ describe('wsClient message normalization', () => {
     vi.useRealTimers()
   })
 
-  it('publishes failed config_missing when WebSocket domain is not configured', async () => {
+  it('uses the build-time WebSocket origin when legacy store configuration is empty', async () => {
     const store = (await import('../../src/main/store')).default
     store.getData.mockImplementationOnce(() => '')
     const { initWs } = await import('../../src/main/wsClient')
@@ -420,19 +442,9 @@ describe('wsClient message normalization', () => {
 
     await initWs({ token: 'secret-token', userId: 'u1' }, sender)
 
-    expect(wsInstances).toHaveLength(0)
-    expect(sender.send).toHaveBeenCalledWith(
-      'wsStatusChange',
-      expect.objectContaining({
-        status: 'failed',
-        kind: 'config_missing',
-        diagnostics: expect.objectContaining({
-          retryLeft: 0,
-          lastError: expect.stringContaining('missing')
-        })
-      })
-    )
+    expect(wsInstances.at(-1).url).toContain('ws://localhost:5051/ws')
     expect(JSON.stringify(sender.send.mock.calls)).not.toContain('secret-token')
+    await (await import('../../src/main/wsClient')).closeWs()
   })
 
   it('publishes closed diagnostics with no reconnect attempts left', async () => {

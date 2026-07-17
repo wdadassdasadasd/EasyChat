@@ -2,7 +2,8 @@ import { WebSocket } from 'ws'
 import { saveOrUpdateChatSessionBatch4Init } from './db/ChatSessionUserModel'
 import store from './store.js'
 import { saveMessageBatch, updateMessageStatus } from './db/ChatMessageModel'
-import { updateNoReadCount } from './db/UserSettingModel'
+import { setContactApplyNoReadCount } from './db/UserSettingModel'
+import { runtimeConfig } from '../shared/runtimeConfig.js'
 import {
   WS_SYSTEM_CONTACT_FILTER,
   HEARTBEAT_INTERVAL,
@@ -20,8 +21,6 @@ import {
   readReceiveRecoveryMessages
 } from './receiveRecoveryStore.js'
 import logger from './logger.js'
-
-const NODE_ENV = process.env.NODE_ENV
 
 let ws = null
 let maxReConnectTimes = 0
@@ -586,24 +585,9 @@ const buildWsUrl = (domain, token) => {
 
 const initWs = async (config, sender) => {
   resetWsDiagnostics()
-  const domainKey = NODE_ENV !== 'development' ? 'prodWsDomain' : 'devWsDomain'
-  const wsDomain = store.getData(domainKey)
   webContentsSender = sender
-  if (!wsDomain) {
-    maxReConnectTimes = 0
-    const error = `missing ${domainKey}, skip WebSocket connect`
-    logger.warn(error)
-    recordWsError(new Error(error))
-    publishWsStatus({
-      status: 'failed',
-      kind: 'config_missing',
-      retryLeft: 0,
-      error
-    })
-    return
-  }
   await resetWsRuntime()
-  wsUrl = buildWsUrl(wsDomain, config.token)
+  wsUrl = buildWsUrl(runtimeConfig.wsOrigin, config.token)
   needReconnect = true
   maxReConnectTimes = WS_MAX_RECONNECT_TIMES
   await replayReceiveRecovery().catch((error) => {
@@ -688,7 +672,7 @@ const handleSingleWsMessage = async (message, expectedGeneration) => {
         incrementUnread: !serverHasNoReadCount ? false : true
       })
       if (!isCurrentRuntimeGeneration(expectedGeneration)) return
-      await updateNoReadCount(store.getUserId(), message.extendData?.contact?.applyCount || 0)
+      await setContactApplyNoReadCount(store.getUserId(), message.extendData?.contact?.applyCount)
       if (!isCurrentRuntimeGeneration(expectedGeneration)) return
 
       sendToRenderer('receiveMessage', {

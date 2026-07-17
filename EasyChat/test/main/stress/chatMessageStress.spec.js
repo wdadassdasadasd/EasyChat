@@ -193,7 +193,7 @@ vi.mock('ws', () => ({
 
 vi.mock('../../../src/main/db/UserSettingModel', () => ({
   addUserSetting: vi.fn(),
-  updateNoReadCount: vi.fn(),
+  setContactApplyNoReadCount: vi.fn(),
   getLocalFileFolder: vi.fn(async () => ({ localFileFolder: '/tmp/easychat-downloads' })),
   updateLocalFileFolder: vi.fn(),
   resetLocalFileFolder: vi.fn()

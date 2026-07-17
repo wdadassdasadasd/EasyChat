@@ -1,6 +1,8 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { resolveRuntimeConfig } from './src/shared/runtimeConfig.js'
 
 const createRendererChunks = (id) => {
   const normalizedId = id.replace(/\\/g, '/')
@@ -30,41 +32,65 @@ const createRendererChunks = (id) => {
   return 'vendor'
 }
 
-export default defineConfig({
-  main: {
-    plugins: [externalizeDepsPlugin()]
-  },
-  preload: {
-    plugins: [externalizeDepsPlugin()]
-  },
-  renderer: {
-    build: {
-      rollupOptions: {
-        output: {
-          manualChunks: createRendererChunks
+const createCspTransformPlugin = (runtimeConfig) => ({
+  name: 'easychat-runtime-csp',
+  transformIndexHtml(html) {
+    return html
+      .replaceAll('__EASYCHAT_API_ORIGIN__', runtimeConfig.apiOrigin)
+      .replaceAll('__EASYCHAT_WS_ORIGIN__', runtimeConfig.wsCspOrigin)
+  }
+})
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const runtimeConfig = resolveRuntimeConfig({
+    apiOrigin: env.VITE_API_ORIGIN || env.VITE_PROD_DOMAIN,
+    wsOrigin: env.VITE_WS_ORIGIN || env.VITE_PROD_WS_ORIGIN
+  })
+  const runtimeDefines = {
+    __EASYCHAT_API_ORIGIN__: JSON.stringify(runtimeConfig.apiOrigin),
+    __EASYCHAT_WS_ORIGIN__: JSON.stringify(runtimeConfig.wsOrigin)
+  }
+
+  return {
+    main: {
+      define: runtimeDefines,
+      plugins: [externalizeDepsPlugin()]
+    },
+    preload: {
+      define: runtimeDefines,
+      plugins: [externalizeDepsPlugin()]
+    },
+    renderer: {
+      define: runtimeDefines,
+      build: {
+        rollupOptions: {
+          output: {
+            manualChunks: createRendererChunks
+          }
         }
-      }
-    },
-    css: {
-      preprocessorOptions: {
-        scss: {
-          silenceDeprecations: ['legacy-js-api']
+      },
+      css: {
+        preprocessorOptions: {
+          scss: {
+            silenceDeprecations: ['legacy-js-api']
+          }
         }
-      }
-    },
-    resolve: {
-      alias: {
-        '@': resolve('src/renderer/src')
-      }
-    },
-    plugins: [vue()],
-    server: {
-      hmr: true,
-      port: 5173,
-      proxy: {
-        '/api': {
-          target: 'http://localhost:5050',
-          changeOrigin: true
+      },
+      resolve: {
+        alias: {
+          '@': resolve('src/renderer/src')
+        }
+      },
+      plugins: [vue(), createCspTransformPlugin(runtimeConfig)],
+      server: {
+        hmr: true,
+        port: 5173,
+        proxy: {
+          '/api': {
+            target: runtimeConfig.apiOrigin,
+            changeOrigin: true
+          }
         }
       }
     }

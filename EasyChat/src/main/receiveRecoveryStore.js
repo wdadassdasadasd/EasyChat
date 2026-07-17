@@ -1,13 +1,8 @@
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
+import { getEasyChatPaths } from './appPaths.js'
 
-const NODE_ENV = process.env.NODE_ENV
-const recoveryFolder = path.join(
-  os.homedir(),
-  NODE_ENV === 'development' ? '.weChattest' : '.weChat',
-  'receive-recovery'
-)
+const recoveryFolder = getEasyChatPaths().receiveRecoveryDir
 const operationChains = new Map()
 
 const withRecoveryLock = async (userId, task) => {
