@@ -37,6 +37,7 @@ import {
   registerUploadSource,
   releaseUploadSource
 } from './uploadSourceRegistry.js'
+import { registerUploadCover, releaseUploadCover } from './uploadCoverRegistry.js'
 import {
   acknowledgeUploadTask,
   cancelUploadTask,
@@ -66,6 +67,8 @@ import {
   validateTempVideo,
   validateTopChatSession,
   validateUploadSourceChunk,
+  validateUploadCoverId,
+  validateUploadCoverRegistration,
   validateUploadSourceId,
   validateUploadTaskMessageId,
   validateEnqueueUploadTask,
@@ -448,6 +451,14 @@ const onUploadSources = () => {
   registerSafeIpcHandle('releaseUploadSource', async (_e, data = {}) => {
     validateUploadSourceId(data)
     return releaseUploadSource(data)
+  })
+  registerSafeIpcHandle('registerUploadCover', async (_e, data = {}) => {
+    validateUploadCoverRegistration(data)
+    return await registerUploadCover(data)
+  })
+  registerSafeIpcHandle('releaseUploadCover', async (_e, data = {}) => {
+    validateUploadCoverId(data)
+    return await releaseUploadCover(data)
   })
   registerSafeIpcHandle('generateUploadSourceThumbnail', async (_e, data = {}) => {
     validateUploadSourceId(data)

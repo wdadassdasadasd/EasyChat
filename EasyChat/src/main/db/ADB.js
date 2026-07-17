@@ -28,6 +28,7 @@ const globalColumnMap = {
     taskId: 'task_id',
     messageId: 'message_id',
     uploadSourceId: 'upload_source_id',
+    coverSourceId: 'cover_source_id',
     state: 'state',
     uploadId: 'upload_id',
     fileName: 'file_name',

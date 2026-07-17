@@ -462,6 +462,28 @@ export const useChatMessageSender = ({
 
     // 文件路径和网络传输由主进程托管；渲染进程只保留展示状态，窗口卸载不会中断上传。
     if (message.uploadSourceId && typeof window.api?.invokeEnqueueUploadTask === 'function') {
+      let coverSourceId = message.coverSourceId
+      let registeredCoverSourceId = ''
+      if (cover && !coverSourceId && typeof window.api?.registerUploadCover !== 'function') {
+        await markMessageFailed(message, '当前客户端不支持持久化上传封面，请更新后重试。')
+        return
+      }
+      if (cover && !coverSourceId && typeof window.api?.registerUploadCover === 'function') {
+        try {
+          const coverResult = await window.api.registerUploadCover(cover)
+          if (!coverResult?.success || !coverResult.coverSourceId) {
+            await markMessageFailed(message, coverResult?.error || '无法保存上传封面。')
+            return
+          }
+          coverSourceId = coverResult.coverSourceId
+          registeredCoverSourceId = coverSourceId
+          message.coverSourceId = coverSourceId
+        } catch (error) {
+          console.error('register upload cover failed', error)
+          await markMessageFailed(message, '无法保存上传封面。')
+          return
+        }
+      }
       updateMessageById?.(message.messageId, {
         status: 2,
         uploading: true,
@@ -469,14 +491,26 @@ export const useChatMessageSender = ({
         uploadError: '',
         uploadCanceled: false
       })
-      const taskResult = await window.api.invokeEnqueueUploadTask({
-        messageId: Number(message.messageId),
-        uploadSourceId: message.uploadSourceId,
-        fileName: message.fileName || file?.name || message.messageContent,
-        fileSize: Number(message.fileSize || file?.size || 0),
-        fileType: Number(message.fileType)
-      })
+      let taskResult
+      try {
+        taskResult = await window.api.invokeEnqueueUploadTask({
+          messageId: Number(message.messageId),
+          uploadSourceId: message.uploadSourceId,
+          coverSourceId,
+          fileName: message.fileName || file?.name || message.messageContent,
+          fileSize: Number(message.fileSize || file?.size || 0),
+          fileType: Number(message.fileType)
+        })
+      } catch (error) {
+        taskResult = { success: false, error: error?.message || '无法创建文件上传任务。' }
+      }
       if (!taskResult?.success) {
+        if (registeredCoverSourceId) {
+          window.api
+            .invokeReleaseUploadCover?.({ coverSourceId: registeredCoverSourceId })
+            .catch((error) => console.error('release rejected upload cover failed', error))
+          delete message.coverSourceId
+        }
         await markMessageFailed(message, taskResult?.error || '无法创建文件上传任务。')
       }
       return
@@ -999,9 +1033,37 @@ export const useChatMessageSender = ({
     if (!message || message.uploadAckReceived) return
     const state = payload.state
     const progress = Math.min(99, Math.max(0, Number(payload.progress) || 0))
+    if (state === 'succeeded') {
+      Object.assign(message, {
+        status: 1,
+        uploading: false,
+        uploadProgress: 100,
+        uploadError: '',
+        uploadCanceled: false,
+        uploadPaused: false
+      })
+      updateMessageById?.(message.messageId, {
+        status: 1,
+        uploading: false,
+        uploadProgress: 100,
+        uploadError: '',
+        uploadCanceled: false,
+        uploadPaused: false
+      })
+      persistMessageStatus(message).catch((error) => {
+        console.error('save completed upload task status failed', error)
+      })
+      return
+    }
     if (state === 'failed') {
       markMessageFailed(message, payload.error || '文件上传失败，请重试。').catch((error) => {
         console.error('save failed upload task status failed', error)
+      })
+      return
+    }
+    if (state === 'canceled') {
+      markMessageFailed(message, '文件上传已取消。').catch((error) => {
+        console.error('save canceled upload task status failed', error)
       })
       return
     }

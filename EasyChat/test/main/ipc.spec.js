@@ -52,6 +52,11 @@ vi.mock('../../src/main/uploadSourceRegistry', () => ({
   releaseUploadSource: vi.fn(() => ({ success: true, released: true }))
 }))
 
+vi.mock('../../src/main/uploadCoverRegistry', () => ({
+  registerUploadCover: vi.fn(async () => ({ success: true, coverSourceId: 'cover-1' })),
+  releaseUploadCover: vi.fn(async () => ({ success: true, released: true }))
+}))
+
 vi.mock('../../src/main/uploadTaskManager', () => ({
   acknowledgeUploadTask: vi.fn(async () => ({ success: true })),
   activateUploadTasks: vi.fn(),
@@ -638,6 +643,8 @@ describe('IPC: upload sources', () => {
     expect(mockIpcHandle['registerUploadSource']).toBeDefined()
     expect(mockIpcHandle['readUploadSourceChunk']).toBeDefined()
     expect(mockIpcHandle['releaseUploadSource']).toBeDefined()
+    expect(mockIpcHandle['registerUploadCover']).toBeDefined()
+    expect(mockIpcHandle['releaseUploadCover']).toBeDefined()
     expect(mockIpcHandle['generateUploadSourceThumbnail']).toBeDefined()
   })
 
@@ -652,6 +659,19 @@ describe('IPC: upload sources', () => {
 
     expect(result).toMatchObject({ success: false, kind: 'validation_error' })
     expect(readUploadSourceChunk).not.toHaveBeenCalled()
+  })
+
+  it('registers only bounded cover payloads', async () => {
+    const { registerUploadCover } = await import('../../src/main/uploadCoverRegistry')
+    ipcExports.onUploadSources()
+
+    const result = await mockIpcHandle.registerUploadCover(ipcEvent(), {
+      arrayBuffer: new Uint8Array([1, 2, 3]).buffer,
+      type: 'image/jpeg'
+    })
+
+    expect(result).toMatchObject({ success: true, coverSourceId: 'cover-1' })
+    expect(registerUploadCover).toHaveBeenCalledOnce()
   })
 })
 

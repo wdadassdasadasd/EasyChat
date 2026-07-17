@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
+import { MAX_UPLOAD_COVER_BYTES } from '../shared/uploadConstants.js'
 
 // 预加载层只暴露业务白名单 API，不再暴露完整 ipcRenderer。
 // 所有 IPC 调用通过命名方法转发，renderer 无法访问任意 channel。
@@ -32,8 +33,10 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   'readLocalVideoFile',
   'openLocalVideoFile',
   'registerUploadSource',
+  'registerUploadCover',
   'readUploadSourceChunk',
   'releaseUploadSource',
+  'releaseUploadCover',
   'generateUploadSourceThumbnail',
   'enqueueUploadTask',
   'pauseUploadTask',
@@ -172,11 +175,26 @@ const api = {
       lastModified: file.lastModified
     })
   },
+  async registerUploadCover(cover) {
+    if (typeof Blob === 'undefined' || !(cover instanceof Blob)) {
+      throw new TypeError('registerUploadCover only accepts Blob objects')
+    }
+    if (!Number.isSafeInteger(cover.size) || cover.size <= 0 || cover.size > MAX_UPLOAD_COVER_BYTES) {
+      throw new RangeError('Upload cover exceeds the supported size')
+    }
+    return electronAPI.ipcInvoke('registerUploadCover', {
+      arrayBuffer: await cover.arrayBuffer(),
+      type: cover.type
+    })
+  },
   invokeReadUploadSourceChunk(data) {
     return electronAPI.ipcInvoke('readUploadSourceChunk', data)
   },
   invokeReleaseUploadSource(data) {
     return electronAPI.ipcInvoke('releaseUploadSource', data)
+  },
+  invokeReleaseUploadCover(data) {
+    return electronAPI.ipcInvoke('releaseUploadCover', data)
   },
   invokeGenerateUploadSourceThumbnail(data) {
     return electronAPI.ipcInvoke('generateUploadSourceThumbnail', data)

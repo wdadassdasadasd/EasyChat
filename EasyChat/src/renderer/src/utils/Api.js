@@ -35,6 +35,7 @@ const api = {
   uploadFileChunk: '/chat/uploadFile/chunk',
   uploadFileComplete: '/chat/uploadFile/complete',
   uploadFileCancel: '/chat/uploadFile/cancel',
+  uploadFileStatus: '/chat/uploadFile/status',
   downloadFile: '/chat/downloadFile',
   createDownloadToken: '/chat/createDownloadToken',
   streamFile: '/chat/streamFile',

@@ -96,4 +96,17 @@ describe('ffmpeg thumbnail extraction', () => {
     })
     expect(processState.process.kill).toHaveBeenCalledOnce()
   })
+
+  it('stops ffmpeg before accumulating an oversized thumbnail output', async () => {
+    const { generateThumbnailFromPath } = await import('../../src/main/uploadSourceRegistry')
+    const resultPromise = generateThumbnailFromPath('D:/video.mp4', { maxOutputBytes: 2 })
+
+    processState.process.stdout.emit('data', Buffer.from([1, 2, 3]))
+
+    await expect(resultPromise).resolves.toMatchObject({
+      success: false,
+      kind: 'output_too_large'
+    })
+    expect(processState.process.kill).toHaveBeenCalledOnce()
+  })
 })

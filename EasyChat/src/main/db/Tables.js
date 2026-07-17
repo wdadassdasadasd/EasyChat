@@ -53,6 +53,7 @@ const add_tables = [
     'task_id varchar not null,' +
     'message_id bigint not null,' +
     'upload_source_id varchar not null,' +
+    'cover_source_id varchar,' +
     'state varchar not null,' +
     'upload_id varchar,' +
     'file_name varchar not null,' +
@@ -93,6 +94,11 @@ const alter_tables = [
     tableName: 'chat_message',
     field: 'upload_source_id',
     sql: 'alter table chat_message add column upload_source_id varchar'
+  },
+  {
+    tableName: 'upload_task',
+    field: 'cover_source_id',
+    sql: 'alter table upload_task add column cover_source_id varchar'
   }
 ]
 

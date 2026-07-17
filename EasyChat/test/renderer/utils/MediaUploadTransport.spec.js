@@ -62,4 +62,29 @@ describe('mediaUploadTransport total timeout', () => {
     await expect(uploadPromise).resolves.toMatchObject({ success: false, kind: 'timeout' })
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ url: '/cancel' }))
   })
+
+  it('rejects an init response whose uploaded chunks are outside the configured range', async () => {
+    const request = vi.fn(async () => ({
+      data: { uploadId: 'upload-1', uploadedChunks: [2] }
+    }))
+
+    const result = await uploadMediaFile({
+      file: new Blob([new Uint8Array(8 * 1024 * 1024)]),
+      fileType: 2,
+      message: { messageId: 3 },
+      proxy: {
+        Api: {
+          uploadFile: '/upload',
+          uploadFileInit: '/init',
+          uploadFileChunk: '/chunk',
+          uploadFileComplete: '/complete',
+          uploadFileCancel: '/cancel'
+        },
+        Request: request
+      }
+    })
+
+    expect(result).toMatchObject({ success: false, kind: 'protocol_error' })
+    expect(request).toHaveBeenCalledTimes(1)
+  })
 })

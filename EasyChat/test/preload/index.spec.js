@@ -106,4 +106,21 @@ describe('preload API bridge', () => {
       'only accepts File'
     )
   })
+
+  it('copies a bounded Blob through the named upload cover channel', async () => {
+    electronMocks.ipcRenderer.invoke.mockResolvedValueOnce({
+      success: true,
+      coverSourceId: 'cover-1'
+    })
+    const cover = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' })
+
+    await expect(api.registerUploadCover(cover)).resolves.toMatchObject({
+      coverSourceId: 'cover-1'
+    })
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenCalledWith(
+      'registerUploadCover',
+      expect.objectContaining({ type: 'image/jpeg', arrayBuffer: expect.any(ArrayBuffer) })
+    )
+    await expect(api.registerUploadCover({ size: 1 })).rejects.toThrow('only accepts Blob')
+  })
 })

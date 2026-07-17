@@ -1,4 +1,5 @@
 import path from 'path'
+import { MAX_UPLOAD_COVER_BYTES } from '../shared/uploadConstants.js'
 
 const MAX_ID_LENGTH = 128
 const MAX_PATH_LENGTH = 4096
@@ -298,6 +299,22 @@ const validateUploadSourceId = (value) => {
   requireString(payload.uploadSourceId, 'uploadSourceId', { maxLength: 128 })
 }
 
+const validateUploadCoverRegistration = (value) => {
+  const payload = requireObject(value)
+  const byteLength = payload.arrayBuffer?.byteLength
+  if (!Number.isSafeInteger(byteLength) || byteLength <= 0 || byteLength > MAX_UPLOAD_COVER_BYTES) {
+    fail('arrayBuffer must contain a supported upload cover payload')
+  }
+  if (payload.type != null) {
+    requireString(payload.type, 'type', { maxLength: 255, allowEmpty: true })
+  }
+}
+
+const validateUploadCoverId = (value) => {
+  const payload = requireObject(value)
+  requireString(payload.coverSourceId, 'coverSourceId', { maxLength: 128 })
+}
+
 const validateUploadTaskMessageId = (value) => {
   const payload = requireObject(value)
   if (!Number.isSafeInteger(Number(payload.messageId)) || Number(payload.messageId) <= 0) {
@@ -309,6 +326,9 @@ const validateEnqueueUploadTask = (value) => {
   validateUploadTaskMessageId(value)
   const payload = requireObject(value)
   requireString(payload.uploadSourceId, 'uploadSourceId', { maxLength: 128 })
+  if (payload.coverSourceId != null) {
+    requireString(payload.coverSourceId, 'coverSourceId', { maxLength: 128 })
+  }
   requireString(payload.fileName, 'fileName', { maxLength: 512 })
   if (!Number.isSafeInteger(Number(payload.fileSize)) || Number(payload.fileSize) <= 0) {
     fail('fileSize must be a positive safe integer')
@@ -385,6 +405,8 @@ export {
   validateTempVideo,
   validateTopChatSession,
   validateUploadSourceChunk,
+  validateUploadCoverId,
+  validateUploadCoverRegistration,
   validateUploadTaskMessageId,
   validateEnqueueUploadTask,
   validateUploadSourceId,

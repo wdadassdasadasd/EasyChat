@@ -10,9 +10,30 @@ const chunkUploadTimeout = Math.max(
 )
 const CHUNK_RETRY_DELAYS = [0, 1000, 3000]
 
-const normalizeUploadedChunks = (value) => {
-  if (!Array.isArray(value)) return new Set()
-  return new Set(value.map(Number).filter(Number.isFinite))
+const createProtocolError = (message) => {
+  const error = new Error(message)
+  error.kind = 'protocol_error'
+  return error
+}
+
+const normalizeUploadedChunks = (value, totalChunks) => {
+  if (value == null) return new Set()
+  if (!Array.isArray(value)) {
+    throw createProtocolError('Upload server returned invalid uploadedChunks')
+  }
+  const uploaded = new Set()
+  for (const chunkIndex of value) {
+    if (
+      !Number.isSafeInteger(chunkIndex) ||
+      chunkIndex < 0 ||
+      chunkIndex >= totalChunks ||
+      uploaded.has(chunkIndex)
+    ) {
+      throw createProtocolError('Upload server returned invalid uploadedChunks')
+    }
+    uploaded.add(chunkIndex)
+  }
+  return uploaded
 }
 
 const reportProgress = (callback, percent) => {
@@ -165,7 +186,7 @@ export const uploadMediaFile = async ({
           uploadId = initResult.data?.uploadId
           const chunkSize = Number(initResult.data?.chunkSize || configuredChunkSize)
           const totalChunks = Math.max(1, Math.ceil(fileSize / chunkSize))
-          const uploadedChunks = normalizeUploadedChunks(initResult.data?.uploadedChunks)
+          const uploadedChunks = normalizeUploadedChunks(initResult.data?.uploadedChunks, totalChunks)
           if (!uploadId) return null
           if (initResult.data?.completed) {
             reportProgress(onProgress, 100)
@@ -249,7 +270,11 @@ export const uploadMediaFile = async ({
       if (controller.signal.aborted) {
         return { success: false, kind: 'canceled', msg: 'File upload canceled' }
       }
-      return { success: false, kind: 'upload_source_error', msg: error?.message || String(error) }
+      return {
+        success: false,
+        kind: error?.kind || 'upload_source_error',
+        msg: error?.message || String(error)
+      }
     }
   }
 

@@ -8,6 +8,7 @@ const REGISTRY_KEY = 'uploadSourceRegistry'
 const MAX_REGISTRY_ITEMS = 100
 const MAX_CHUNK_SIZE = 4 * 1024 * 1024
 const FFMPEG_THUMBNAIL_TIMEOUT_MS = 10000
+const MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024
 
 const getRegistry = (userId = store.getUserId()) => {
   const value = store.getUserDataForUser(userId, REGISTRY_KEY)
@@ -125,9 +126,13 @@ const releaseUploadSource = ({ uploadSourceId, userId } = {}) => {
   return { success: true, released: true }
 }
 
-const generateThumbnailFromPath = (filePath, { timeoutMs = FFMPEG_THUMBNAIL_TIMEOUT_MS } = {}) => {
+const generateThumbnailFromPath = (
+  filePath,
+  { timeoutMs = FFMPEG_THUMBNAIL_TIMEOUT_MS, maxOutputBytes = MAX_THUMBNAIL_BYTES } = {}
+) => {
   return new Promise((resolve) => {
     const chunks = []
+    let outputBytes = 0
     let settled = false
     let timeout = null
     const finish = (result) => {
@@ -144,6 +149,8 @@ const generateThumbnailFromPath = (filePath, { timeoutMs = FFMPEG_THUMBNAIL_TIME
       filePath,
       '-ss',
       '00:00:01',
+      '-vf',
+      'scale=min(1280\\,iw):-2',
       '-vframes',
       '1',
       '-f',
@@ -153,22 +160,40 @@ const generateThumbnailFromPath = (filePath, { timeoutMs = FFMPEG_THUMBNAIL_TIME
       '-'
     ])
 
+    const stopFfmpeg = () => {
+      try {
+        ffmpeg.kill()
+      } catch (error) {
+        console.error('终止 ffmpeg 进程失败:', error)
+      }
+    }
+
     timeout = setTimeout(() => {
       finish({
         success: false,
         kind: 'timeout',
         error: `ffmpeg thumbnail extraction timed out after ${timeoutMs}ms`
       })
-      try {
-        ffmpeg.kill()
-      } catch (error) {
-        console.error('终止 ffmpeg 进程失败:', error)
-      }
+      stopFfmpeg()
     }, timeoutMs)
 
-    ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk))
+    ffmpeg.stdout.on('data', (chunk) => {
+      if (settled) return
+      outputBytes += chunk.byteLength
+      if (outputBytes > maxOutputBytes) {
+        finish({
+          success: false,
+          kind: 'output_too_large',
+          error: `ffmpeg thumbnail output exceeds ${maxOutputBytes} bytes`
+        })
+        stopFfmpeg()
+        return
+      }
+      chunks.push(chunk)
+    })
     ffmpeg.on('error', (error) => finish({ success: false, error: error.message }))
     ffmpeg.on('close', (code) => {
+      if (settled) return
       const buffer = Buffer.concat(chunks)
       if (code === 0 && buffer.length > 0) {
         finish({
@@ -201,6 +226,7 @@ const generateUploadSourceThumbnail = async ({ uploadSourceId, userId } = {}) =>
 export {
   FFMPEG_THUMBNAIL_TIMEOUT_MS,
   MAX_CHUNK_SIZE,
+  MAX_THUMBNAIL_BYTES,
   generateThumbnailFromPath,
   generateUploadSourceThumbnail,
   getUploadSource,
