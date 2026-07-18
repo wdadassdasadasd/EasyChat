@@ -16,13 +16,15 @@ import Request from '@/utils/Request.js'
 import WinOp from './components/WinOp.vue'
 import { Confirm } from './utils/Confirm.js'
 import { initializeRendererLogger } from './utils/Logger.js'
+import { useUserInfoStore } from '@/stores/UserInfoStore'
 
 initializeRendererLogger()
 const app = createApp(App)
 
 installElementPlus(app)
+const pinia = Pinia.createPinia()
+app.use(pinia)
 app.use(router)
-app.use(Pinia.createPinia())
 app.component('Layout', defineAsyncComponent(() => import('./components/Layout.vue')))
 app.component('WinOp', WinOp)
 app.component('ContactPanel', defineAsyncComponent(() => import('./components/ContactPanel.vue')))
@@ -54,4 +56,27 @@ router.beforeEach(async (to) => {
   }
 })
 
-app.mount('#app')
+const bootstrap = async () => {
+  const userInfoStore = useUserInfoStore(pinia)
+  try {
+    window.localStorage.removeItem('userInfo')
+  } catch {
+    // Storage may be disabled; the in-memory store never consumes this legacy value.
+  }
+
+  try {
+    const result = await window.api?.invokeRestoreAuthenticatedSession?.()
+    if (result?.success && result.userInfo?.token) {
+      userInfoStore.setUserInfo(result.userInfo)
+      await router.replace('/chat')
+    } else {
+      userInfoStore.clearUserInfo()
+    }
+  } catch (error) {
+    console.warn('Failed to restore secure session', error)
+    userInfoStore.clearUserInfo()
+  }
+  app.mount('#app')
+}
+
+void bootstrap()

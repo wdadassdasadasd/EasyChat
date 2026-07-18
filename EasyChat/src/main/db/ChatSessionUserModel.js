@@ -1,4 +1,5 @@
 import store from '../store'
+import { randomUUID } from 'crypto'
 import { insertOrReplaceStrict, queryAll, queryOne, runStrict, runInTransaction } from './ADB'
 
 const selectUserSessionByContactId = (contactId) => {
@@ -58,8 +59,28 @@ const updateNoReadCount = ({ contactId, noReadCount }) => {
 }
 
 const markSessionRead = (contactId) => {
-  return updateNoReadCount({ contactId, noReadCount: 0 })
+  if (!contactId) return Promise.resolve(0)
+  return runInTransaction(async () => {
+    const changed = await updateNoReadCount({ contactId, noReadCount: 0 })
+    const now = Date.now()
+    await runStrict(
+      'insert into read_receipt_outbox(user_id,contact_id,request_id,created_at,updated_at) values(?,?,?,?,?) on conflict(user_id,contact_id) do update set request_id=excluded.request_id,updated_at=excluded.updated_at',
+      [store.getUserId(), contactId, randomUUID(), now, now]
+    )
+    return changed
+  })
 }
+
+const getPendingReadReceipts = () =>
+  queryAll('select contact_id,request_id from read_receipt_outbox where user_id=? order by updated_at asc', [
+    store.getUserId()
+  ])
+
+const acknowledgeReadReceipt = (contactId, requestId) =>
+  runStrict(
+    'delete from read_receipt_outbox where user_id=? and contact_id=? and request_id=?',
+    [store.getUserId(), contactId, requestId]
+  )
 
 //查询用户会话列表
 const selectUserSessionList = () => {
@@ -125,6 +146,8 @@ export {
   saveOrUpdateChatSessionBatch4Init,
   updateNoReadCount,
   markSessionRead,
+  getPendingReadReceipts,
+  acknowledgeReadReceipt,
   selectUserSessionList,
   selectUserSessionBySessionId,
   clearChatSessionSummaryBySessionId,

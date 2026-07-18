@@ -2,7 +2,7 @@ import os from 'os'
 import path from 'path'
 
 const getEasyChatPaths = ({ homeDir = os.homedir(), nodeEnv = process.env.NODE_ENV } = {}) => {
-  const rootDir = path.join(homeDir, nodeEnv === 'development' ? '.weChattest' : '.weChat')
+  const rootDir = process.env.EASYCHAT_DATA_ROOT || path.join(homeDir, nodeEnv === 'development' ? '.weChattest' : '.weChat')
   return Object.freeze({
     rootDir,
     databasePath: path.join(rootDir, 'local.db'),

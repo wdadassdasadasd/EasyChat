@@ -23,6 +23,14 @@ const setData = (key, value) => {
 const getData = (key) => {
   return store.get(key)
 }
+const deleteData = (key) => {
+  store.delete(key)
+}
+
+const clearLegacyTokenData = () => {
+  const keys = Object.keys(store.store || {})
+  keys.filter((key) => /token$/i.test(key)).forEach((key) => store.delete(key))
+}
 
 const setUserData = (key, value) => {
   if (!userId) {
@@ -66,6 +74,8 @@ export default {
   getUserId,
   setData,
   getData,
+  deleteData,
+  clearLegacyTokenData,
   setUserData,
   getUserData,
   deleteUserData,

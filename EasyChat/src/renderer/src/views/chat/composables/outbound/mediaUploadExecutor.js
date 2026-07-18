@@ -17,11 +17,6 @@ export const createMediaUploadExecutor = ({
   const uploadMessageFile = async (message, file, cover) => {
     const sizeResult = validateFileSize(file, message.fileType)
     if (!sizeResult.valid) return lifecycle.markMessageFailed(message, sizeResult.message)
-    const activeSessionId = currentChatSession.value?.sessionId
-    if (activeSessionId && message.sessionId && activeSessionId !== message.sessionId) {
-      return lifecycle.markMessageFailed(message, 'Session changed during upload. Please retry.')
-    }
-
     if (message.uploadSourceId && typeof window.api?.invokeEnqueueUploadTask === 'function') {
       let coverSourceId = message.coverSourceId
       let registeredCoverSourceId = ''
@@ -66,15 +61,26 @@ export const createMediaUploadExecutor = ({
         taskResult = { success: false, error: error?.message || '无法创建文件上传任务。' }
       }
       if (!taskResult?.success) {
+        const failedUploadSourceId = message.uploadSourceId
         if (registeredCoverSourceId) {
           window.api
             .invokeReleaseUploadCover?.({ coverSourceId: registeredCoverSourceId })
             .catch(() => {})
           delete message.coverSourceId
         }
+        window.api
+          .invokeReleaseUploadSource?.({ uploadSourceId: failedUploadSourceId })
+          .catch(() => {})
+        delete message.uploadSourceId
         await lifecycle.markMessageFailed(message, taskResult?.error || '无法创建文件上传任务。')
       }
       return
+    }
+
+    // Legacy renderer-managed uploads still depend on the selected session.
+    const activeSessionId = currentChatSession.value?.sessionId
+    if (activeSessionId && message.sessionId && activeSessionId !== message.sessionId) {
+      return lifecycle.markMessageFailed(message, 'Session changed during upload. Please retry.')
     }
 
     const controller = new AbortController()

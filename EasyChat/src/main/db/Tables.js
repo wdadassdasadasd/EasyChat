@@ -1,8 +1,14 @@
 const add_tables = [
+  'create table if not exists schema_migrations(' +
+    'version integer primary key,' +
+    'name varchar not null,' +
+    'applied_at bigint not null' +
+    ');',
   // 聊天链路核心表：chat_message 存消息明细，chat_session_user 存会话摘要，chat_session_clear 存清空游标。
   'create table if not exists chat_message(' +
     '  user_id varchar not null,' +
     '  message_id bigint not null,' +
+    '  client_message_id varchar,' +
     '  session_id varchar,' +
     '  message_type integer,' +
     '  message_content varchar,' +
@@ -14,9 +20,49 @@ const add_tables = [
     '  file_size bigint,' +
     '  file_name varchar,' +
     '  file_path varchar,' +
-    '  upload_source_id varchar,' +
     '  file_type integer,' +
     '  primary key(user_id, message_id)' +
+    ');',
+  'create table if not exists sync_cursor(' +
+    '  user_id varchar primary key,' +
+    '  server_sequence bigint not null default 0,' +
+    '  updated_at bigint not null' +
+    ');',
+  'create table if not exists processed_event(' +
+    '  user_id varchar not null,' +
+    '  event_id varchar not null,' +
+    '  server_sequence bigint not null,' +
+    '  processed_at bigint not null,' +
+    '  primary key (user_id, event_id)' +
+    ');',
+  'create table if not exists read_receipt_outbox(' +
+    '  user_id varchar not null,' +
+    '  contact_id varchar not null,' +
+    '  request_id varchar not null,' +
+    '  created_at bigint not null,' +
+    '  updated_at bigint not null,' +
+    '  primary key (user_id, contact_id)' +
+    ');',
+  'create table if not exists snapshot_progress(' +
+    '  user_id varchar primary key,' +
+    '  snapshot_id varchar not null,' +
+    '  snapshot_cursor bigint not null,' +
+    '  next_session_cursor varchar,' +
+    '  updated_at bigint not null' +
+    ');',
+  'create table if not exists snapshot_stage_session(' +
+    '  user_id varchar not null,' +
+    '  snapshot_id varchar not null,' +
+    '  contact_id varchar not null,' +
+    '  payload varchar not null,' +
+    '  primary key (user_id, snapshot_id, contact_id)' +
+    ');',
+  'create table if not exists snapshot_stage_message(' +
+    '  user_id varchar not null,' +
+    '  snapshot_id varchar not null,' +
+    '  message_id bigint not null,' +
+    '  payload varchar not null,' +
+    '  primary key (user_id, snapshot_id, message_id)' +
     ');',
   'create table if not exists chat_session_user(' +
     'user_id varchar not null default 0,' +
@@ -53,7 +99,6 @@ const add_tables = [
     'task_id varchar not null,' +
     'message_id bigint not null,' +
     'upload_source_id varchar not null,' +
-    'cover_source_id varchar,' +
     'state varchar not null,' +
     'upload_id varchar,' +
     'file_name varchar not null,' +
@@ -89,7 +134,12 @@ const optional_tables = [
 //   field: 'extra_info',
 //   sql: 'alter table chat_message add column extra_info varchar'
 // },
-const alter_tables = [
+const upload_recovery_columns = [
+  {
+    tableName: 'chat_message',
+    field: 'client_message_id',
+    sql: 'alter table chat_message add column client_message_id varchar'
+  },
   {
     tableName: 'chat_message',
     field: 'upload_source_id',
@@ -110,6 +160,9 @@ const add_index = [
     ' session_id asc,' +
     ' message_id desc' +
     ');',
+  'create unique index if not exists idx_chat_message_user_client_message on chat_message(user_id asc, client_message_id asc) where client_message_id is not null;',
+  'create index if not exists idx_processed_event_user_sequence on processed_event(user_id asc, server_sequence asc);',
+  'create index if not exists idx_snapshot_stage_session_user_snapshot on snapshot_stage_session(user_id asc, snapshot_id asc);',
   'create index if not exists idx_chat_session_user_sort' +
     ' on chat_session_user(' +
     ' user_id asc,' +
@@ -120,4 +173,4 @@ const add_index = [
   'create index if not exists idx_upload_task_user_state on upload_task(user_id asc, state asc, updated_at asc);'
 ]
 
-export { add_tables, optional_tables, add_index, alter_tables }
+export { add_tables, optional_tables, add_index, upload_recovery_columns }

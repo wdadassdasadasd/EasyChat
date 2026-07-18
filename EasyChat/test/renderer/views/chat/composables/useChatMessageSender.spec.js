@@ -1218,6 +1218,46 @@ describe('useChatMessageSender', () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps a persisted media task running after the user switches sessions', async () => {
+    let currentChatSession
+    const harness = createHarness({
+      requestResults: [() => {
+        currentChatSession.value = { contactId: 'u3', contactType: 0, sessionId: 's2' }
+        return { data: createServerMediaMessage(711, 'switch-safe.txt') }
+      }]
+    })
+    currentChatSession = harness.currentChatSession
+    window.api.invokeEnqueueUploadTask = vi.fn(async () => ({ success: true, taskId: 'task-711' }))
+
+    harness.sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'switch-safe.txt', size: 12, type: 'text/plain', path: 'D:/tmp/switch-safe.txt' }
+    })
+
+    await vi.waitFor(() => expect(window.api.invokeEnqueueUploadTask).toHaveBeenCalledOnce())
+    expect(window.api.invokeEnqueueUploadTask).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 711, uploadSourceId: 'source-switch-safe.txt' })
+    )
+  })
+
+  it('releases the registered source when persistent task creation fails', async () => {
+    const { sender } = createHarness({
+      requestResults: [{ data: createServerMediaMessage(712, 'enqueue-failed.txt') }]
+    })
+    window.api.invokeEnqueueUploadTask = vi.fn(async () => ({ success: false, error: 'database unavailable' }))
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: { name: 'enqueue-failed.txt', size: 12, type: 'text/plain', path: 'D:/tmp/enqueue-failed.txt' }
+    })
+
+    await vi.waitFor(() => expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledWith({
+      uploadSourceId: 'source-enqueue-failed.txt'
+    }))
+  })
+
   it('marks the local message successful after the task manager reconciles a delayed ACK', async () => {
     const { emitUploadTaskProgress, messageList, sender } = createHarness()
     messageList.value.push({

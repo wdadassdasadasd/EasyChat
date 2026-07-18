@@ -23,7 +23,7 @@ vi.mock('fs', () => ({
 vi.mock('../../../src/main/db/Tables', () => ({
   add_index: [],
   add_tables: [],
-  alter_tables: [],
+  upload_recovery_columns: [],
   optional_tables: []
 }))
 
@@ -106,8 +106,11 @@ describe('ADB readiness and batch writes', () => {
     }))
 
     await expect(adb.insertOrReplaceManyStrict('chat_message', rows)).resolves.toBe(100)
-    expect(dbState.prepareCalls.length).toBeGreaterThan(1)
-    dbState.prepareCalls.forEach((call) => {
+    const insertCalls = dbState.prepareCalls.filter((call) =>
+      call.sql.includes('insert or replace into chat_message')
+    )
+    expect(insertCalls.length).toBeGreaterThan(1)
+    insertCalls.forEach((call) => {
       expect(call.params.length).toBeLessThanOrEqual(500)
       expect(call.sql).toContain('insert or replace into chat_message')
     })
@@ -131,7 +134,7 @@ describe('ADB readiness and batch writes', () => {
       })
     ).rejects.toThrow('statement failed')
 
-    expect(dbState.prepareCalls.map((call) => call.sql)).toEqual([
+    expect(dbState.prepareCalls.map((call) => call.sql).slice(-3)).toEqual([
       'begin immediate transaction',
       'insert or replace into chat_message (user_id,message_id,session_id) values (?,?,?)',
       'rollback'

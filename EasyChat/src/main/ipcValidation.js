@@ -385,6 +385,39 @@ const validateDownloadId = (value) => {
   requireIdentifier(payload.messageId, 'messageId', { allowNegative: true })
 }
 
+const validateSyncEventsPage = (value) => {
+  const payload = requireObject(value)
+  if (!Array.isArray(payload.events) || payload.events.length > 200) {
+    fail('events must be an array with at most 200 items')
+  }
+  if (!Number.isSafeInteger(Number(payload.nextCursor)) || Number(payload.nextCursor) < 0) {
+    fail('nextCursor must be a non-negative safe integer')
+  }
+  if (payload.unreadSnapshot != null && (typeof payload.unreadSnapshot !== 'object' || Array.isArray(payload.unreadSnapshot))) {
+    fail('unreadSnapshot must be an object')
+  }
+}
+
+const validateSyncSnapshot = (value) => {
+  const payload = requireObject(value)
+  if (!Array.isArray(payload.sessions) || !Array.isArray(payload.messages)) {
+    fail('sessions and messages must be arrays')
+  }
+  if (payload.messages.length > 20000 || payload.sessions.length > 5000) {
+    fail('snapshot is too large')
+  }
+  const cursor = payload.snapshotCursor ?? payload.cursor
+  if (!Number.isSafeInteger(Number(cursor)) || Number(cursor) < 0) {
+    fail('snapshot cursor must be a non-negative safe integer')
+  }
+  if (payload.snapshotId != null) {
+    requireString(payload.snapshotId, 'snapshotId', { maxLength: 128 })
+  }
+  if (payload.hasMore != null && typeof payload.hasMore !== 'boolean') {
+    fail('hasMore must be a boolean')
+  }
+}
+
 export {
   IpcValidationError,
   MAX_MESSAGE_LENGTH,
@@ -400,6 +433,8 @@ export {
   validateOpenChat,
   validateSaveSendMessage,
   validateSearchChatMessage,
+  validateSyncEventsPage,
+  validateSyncSnapshot,
   validateStoreRead,
   validateStoreWrite,
   validateTempVideo,

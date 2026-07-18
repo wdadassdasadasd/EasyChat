@@ -1,4 +1,4 @@
-import { add_tables, optional_tables, add_index, alter_tables } from './Tables'
+import { add_tables, optional_tables, add_index, upload_recovery_columns } from './Tables'
 import fs from 'fs'
 import sqlite3 from 'sqlite3'
 import { AsyncLocalStorage } from 'async_hooks'
@@ -9,6 +9,7 @@ const globalColumnMap = {
   chat_message: {
     userId: 'user_id',
     messageId: 'message_id',
+    clientMessageId: 'client_message_id',
     sessionId: 'session_id',
     messageType: 'message_type',
     messageContent: 'message_content',
@@ -83,6 +84,15 @@ let dbInitError = null
 let dbReadyPromise = null
 let successfulWriteCount = 0
 let checkpointInFlight = false
+let schemaVersion = 0
+
+const getDbDiagnostics = () => ({
+  ready: dbInitialized,
+  initializationFailed: Boolean(dbInitError),
+  writeQueueSize,
+  checkpointInFlight,
+  schemaVersion
+})
 
 const ensureDbReady = async () => {
   if (dbInitialized) {
@@ -114,6 +124,19 @@ const runWalCheckpointNow = (mode = 'PASSIVE') => {
 const checkpointWal = async (mode = 'PASSIVE') => {
   await ensureDbReady()
   return runWalCheckpointNow(mode)
+}
+
+const closeDatabase = async () => {
+  await writeQueue.catch(() => {})
+  return await new Promise((resolve, reject) => {
+    db.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
 }
 
 const scheduleWalCheckpoint = () => {
@@ -432,25 +455,93 @@ const update = async (tableName, data, paramData) => {
   return run(sql, params)
 }
 
-const createTable = async () => {
+const applyBaselineSchema = async () => {
   for (const item of add_tables) {
     await runRawSql(item)
-  }
-  for (const item of optional_tables || []) {
-    await runRawSql(item).catch((error) => {
-      console.error(`optional database feature failed:${item}`, error)
-    })
   }
   for (const item of add_index) {
     await runRawSql(item)
   }
-  for (const item of alter_tables) {
+}
+
+const applyUploadRecoveryColumns = async () => {
+  for (const item of upload_recovery_columns) {
     const tableName = item.tableName || item.table_Name
     const fieldList = await queryAllNow(`PRAGMA table_info(${tableName})`, [])
     const field = fieldList.some((row) => row.name === item.field)
     if (!field && item.sql) {
       await runRawSql(item.sql)
     }
+  }
+}
+
+const applyReliableEventSchema = async () => {
+  await applyUploadRecoveryColumns()
+  await runRawSql(
+    'create table if not exists sync_cursor(user_id varchar primary key, server_sequence bigint not null default 0, updated_at bigint not null);'
+  )
+  await runRawSql(
+    'create table if not exists processed_event(user_id varchar not null, event_id varchar not null, server_sequence bigint not null, processed_at bigint not null, primary key (user_id, event_id));'
+  )
+  await runRawSql(
+    'create unique index if not exists idx_chat_message_user_client_message on chat_message(user_id asc, client_message_id asc) where client_message_id is not null;'
+  )
+  await runRawSql(
+    'create index if not exists idx_processed_event_user_sequence on processed_event(user_id asc, server_sequence asc);'
+  )
+}
+
+const applySnapshotRecoverySchema = async () => {
+  await runRawSql('create table if not exists read_receipt_outbox(user_id varchar not null,contact_id varchar not null,request_id varchar not null,created_at bigint not null,updated_at bigint not null,primary key(user_id,contact_id));')
+  await runRawSql('create table if not exists snapshot_progress(user_id varchar primary key,snapshot_id varchar not null,snapshot_cursor bigint not null,next_session_cursor varchar,updated_at bigint not null);')
+  await runRawSql('create table if not exists snapshot_stage_session(user_id varchar not null,snapshot_id varchar not null,contact_id varchar not null,payload varchar not null,primary key(user_id,snapshot_id,contact_id));')
+  await runRawSql('create table if not exists snapshot_stage_message(user_id varchar not null,snapshot_id varchar not null,message_id bigint not null,payload varchar not null,primary key(user_id,snapshot_id,message_id));')
+  await runRawSql('create index if not exists idx_snapshot_stage_session_user_snapshot on snapshot_stage_session(user_id asc,snapshot_id asc);')
+}
+
+const REQUIRED_SCHEMA_MIGRATIONS = [
+  { version: 1, name: 'baseline_schema', apply: applyBaselineSchema },
+  { version: 2, name: 'upload_recovery_columns', apply: applyUploadRecoveryColumns },
+  { version: 3, name: 'reliable_event_schema', apply: applyReliableEventSchema },
+  { version: 4, name: 'snapshot_recovery_schema', apply: applySnapshotRecoverySchema }
+]
+
+const getAppliedSchemaVersion = async () => {
+  const rows = await queryAllNow('select version from schema_migrations order by version desc limit 1', [])
+  return Number(rows[0]?.version || 0)
+}
+
+const applyRequiredSchemaMigrations = async () => {
+  // The ledger exists before migration execution so legacy installations can be safely baselined.
+  await runRawSql(add_tables[0])
+  let appliedVersion = await getAppliedSchemaVersion()
+  schemaVersion = appliedVersion
+  for (const migration of REQUIRED_SCHEMA_MIGRATIONS) {
+    if (migration.version <= appliedVersion) continue
+    await runRawSql('begin immediate transaction')
+    try {
+      await migration.apply()
+      await runStrictNow('insert into schema_migrations(version, name, applied_at) values (?, ?, ?)', [
+        migration.version,
+        migration.name,
+        Date.now()
+      ])
+      await runRawSql('commit')
+      appliedVersion = migration.version
+      schemaVersion = appliedVersion
+    } catch (error) {
+      await runRawSql('rollback').catch(() => {})
+      throw error
+    }
+  }
+}
+
+const createTable = async () => {
+  await applyRequiredSchemaMigrations()
+  for (const item of optional_tables || []) {
+    await runRawSql(item).catch((error) => {
+      console.error(`optional database feature failed:${item}`, error)
+    })
   }
 }
 
@@ -476,8 +567,10 @@ const dbReady = dbReadyPromise.catch((err) => {
 
 export {
   dbReady,
+  getDbDiagnostics,
   ensureDbReady,
   checkpointWal,
+  closeDatabase,
   insertOrReplace,
   insertOrReplaceStrict,
   insertOrReplaceManyStrict,

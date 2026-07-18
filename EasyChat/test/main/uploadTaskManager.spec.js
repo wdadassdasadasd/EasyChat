@@ -34,6 +34,17 @@ vi.mock('../../src/main/db/UploadTaskModel', () => ({
     else state.tasks.push(saved)
     state.saved.push(saved)
     return saved
+  }),
+  transitionUploadTask: vi.fn(async ({ taskId, allowedStates, patch }, userId) => {
+    const index = state.tasks.findIndex((task) => task.taskId === taskId && task.userId === userId)
+    const previous = index >= 0 ? state.tasks[index] : null
+    if (!previous || !allowedStates.includes(previous.state)) {
+      return { transitioned: false, task: previous }
+    }
+    const next = { ...previous, ...patch, taskId: previous.taskId, userId, updatedAt: Date.now() }
+    state.tasks[index] = next
+    state.saved.push(next)
+    return { transitioned: true, task: next }
   })
 }))
 
@@ -76,6 +87,34 @@ describe('uploadTaskManager', () => {
     expect(recovery.protectedMessageIds).toEqual([13])
     expect(state.tasks).toHaveLength(0)
     expect(onTerminalStatus).toHaveBeenCalledWith(expect.objectContaining({ messageId: 13, succeeded: true }))
+  })
+
+  it('reconciles a persisted canceling task after a runtime restart', async () => {
+    const manager = await import('../../src/main/uploadTaskManager')
+    const axios = (await import('axios')).default
+    const sourceRegistry = await import('../../src/main/uploadSourceRegistry')
+    state.tasks = [{
+      taskId: 'cancel-restart', userId: 'alice', messageId: 1313,
+      uploadSourceId: 's-cancel-restart', state: 'canceling', fileSize: 8
+    }]
+    axios.post.mockImplementation(async (url) => {
+      if (url.endsWith('/status')) {
+        return { data: { code: 200, data: { terminal: true, messageStatus: 2, failed: true } } }
+      }
+      return { data: { code: 200, data: {} } }
+    })
+    const onTerminalStatus = vi.fn()
+    manager.activateUploadTasks({ userId: 'alice', token: 'alice-token' })
+
+    await manager.resumePersistedUploadTasks({ onTerminalStatus })
+
+    expect(axios.post.mock.calls.some(([url]) => url.endsWith('/cancel'))).toBe(true)
+    expect(axios.post.mock.calls.some(([url]) => url.endsWith('/status'))).toBe(true)
+    expect(state.tasks).toHaveLength(0)
+    expect(sourceRegistry.releaseUploadSource).toHaveBeenCalledWith({
+      uploadSourceId: 's-cancel-restart', userId: 'alice'
+    })
+    expect(onTerminalStatus).toHaveBeenCalledWith(expect.objectContaining({ messageId: 1313, succeeded: false }))
   })
 
   it('requeues only the deactivated user tasks during an account switch', async () => {
@@ -135,13 +174,46 @@ describe('uploadTaskManager', () => {
 
   it('allows a paused task to be canceled', async () => {
     const manager = await import('../../src/main/uploadTaskManager')
+    const axios = (await import('axios')).default
     state.tasks = [{ taskId: 'paused', userId: 'alice', messageId: 17, uploadSourceId: 's-17', state: 'paused' }]
+    axios.post.mockImplementation(async (url) => {
+      if (url.endsWith('/status')) {
+        return { data: { code: 200, data: { terminal: true, messageStatus: 2, failed: true } } }
+      }
+      return { data: { code: 200, data: {} } }
+    })
     manager.activateUploadTasks({ userId: 'alice', token: 'alice-token' })
 
     const result = await manager.cancelUploadTask({ messageId: 17 })
 
     expect(result).toMatchObject({ success: true, state: 'canceled' })
     expect(state.tasks).toHaveLength(0)
+  })
+
+  it('does not let a delayed cancel reconciliation overwrite a terminal ACK', async () => {
+    const manager = await import('../../src/main/uploadTaskManager')
+    const axios = (await import('axios')).default
+    const sourceRegistry = await import('../../src/main/uploadSourceRegistry')
+    let resolveStatus
+    state.tasks = [{
+      taskId: 'ack-race', userId: 'alice', messageId: 1717,
+      uploadSourceId: 's-ack-race', state: 'awaiting_ack'
+    }]
+    axios.post.mockImplementation((url) => {
+      if (url.endsWith('/status')) return new Promise((resolve) => { resolveStatus = resolve })
+      return Promise.resolve({ data: { code: 200, data: {} } })
+    })
+    manager.activateUploadTasks({ userId: 'alice', token: 'alice-token' })
+
+    const cancel = manager.cancelUploadTask({ messageId: 1717 })
+    await vi.waitFor(() => expect(state.tasks[0]?.state).toBe('canceling'))
+    const acknowledged = await manager.acknowledgeUploadTask({ messageId: 1717, succeeded: true })
+    resolveStatus({ data: { code: 200, data: { terminal: true, messageStatus: 1, failed: false } } })
+    await cancel
+
+    expect(acknowledged).toMatchObject({ success: true, acknowledged: true, state: 'succeeded' })
+    expect(state.tasks).toHaveLength(0)
+    expect(sourceRegistry.releaseUploadSource).toHaveBeenCalledTimes(1)
   })
 
   it('cleans expired failed tasks and their retained source metadata on login recovery', async () => {

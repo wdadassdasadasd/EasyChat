@@ -11,6 +11,12 @@ let loading = null
 let loadingCount = 0
 // 相同 url+params 的并发请求复用同一个 pending Promise，避免重复请求。
 const inFlightCache = new Map()
+let requestScopeEpoch = 0
+
+export const invalidateRequestScope = () => {
+  requestScopeEpoch += 1
+  inFlightCache.clear()
+}
 
 export const stableStringify = (value) => {
   const seen = new WeakSet()
@@ -100,6 +106,7 @@ export const getApiUrl = (url = '') => {
 }
 
 const resetLoginState = async () => {
+  invalidateRequestScope()
   try {
     useUserInfoStore().clearUserInfo()
   } catch (e) {
@@ -259,16 +266,8 @@ const request = (config) => {
   if (dataType != null && dataType == 'json') {
     contentType = contentTypeJson
   }
-  let userInfoJson = localStorage.getItem('userInfo')
-  let token = ''
-  if (userInfoJson) {
-    try {
-      token = JSON.parse(userInfoJson).token || ''
-    } catch (e) {
-      console.error('Failed to parse userInfo from localStorage, clearing corrupted data', e)
-      localStorage.removeItem('userInfo')
-    }
-  }
+  let token = useUserInfoStore()?.getInfo?.()?.token || ''
+  const userId = useUserInfoStore()?.getInfo?.()?.userId || ''
   // 登录/注册/验证码接口不需要鉴权，避免携带脏 token 触发后端异常
   if (url && url.startsWith('/account/')) {
     token = ''
@@ -278,8 +277,6 @@ const request = (config) => {
   }
   if (token) {
     headers.Authorization = `Bearer ${token}`
-    // Keep compatibility with the current EasyChat backend, which reads the raw token header.
-    headers.token = token
   }
   if (!shouldUseFormData) {
     headers['Content-Type'] = contentType
@@ -289,7 +286,7 @@ const request = (config) => {
   let dedupKey = null
   if (!shouldUseFormData && !signal) {
     try {
-      dedupKey = `${url}::${stableStringify(params || {})}`
+      dedupKey = `${requestScopeEpoch}:${userId}:${token}::${url}::${stableStringify(params || {})}`
     } catch (e) {
       // 参数中包含不可序列化的值（循环引用等），跳过缓存
       dedupKey = null

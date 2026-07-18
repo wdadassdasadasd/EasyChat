@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { postMock } = vi.hoisted(() => ({
-  postMock: vi.fn()
+const { postMock, userInfo } = vi.hoisted(() => ({
+  postMock: vi.fn(),
+  userInfo: { value: null }
 }))
 
 vi.mock('axios', () => ({
@@ -39,7 +40,8 @@ vi.mock('@/router', () => ({
 
 vi.mock('@/stores/UserInfoStore', () => ({
   useUserInfoStore: () => ({
-    clearUserInfo: vi.fn()
+    clearUserInfo: vi.fn(),
+    getInfo: () => userInfo.value
   })
 }))
 
@@ -62,6 +64,7 @@ describe('Request returnError', () => {
   beforeEach(() => {
     vi.resetModules()
     postMock.mockReset()
+    userInfo.value = null
     global.localStorage = createStorage()
   })
 
@@ -160,8 +163,8 @@ describe('Request returnError', () => {
     })
   })
 
-  it('sends bearer and backend-compatible token headers', async () => {
-    localStorage.setItem('userInfo', JSON.stringify({ token: 'token-1' }))
+  it('sends only the bearer authorization header', async () => {
+    userInfo.value = { token: 'token-1' }
     postMock.mockResolvedValueOnce({ data: { code: 200 } })
     const request = (await import('@/utils/Request')).default
 
@@ -173,11 +176,11 @@ describe('Request returnError', () => {
 
     const requestConfig = postMock.mock.calls[0][2]
     expect(requestConfig.headers.Authorization).toBe('Bearer token-1')
-    expect(requestConfig.headers.token).toBe('token-1')
+    expect(requestConfig.headers).not.toHaveProperty('token')
   })
 
   it('does not send authorization to account endpoints', async () => {
-    localStorage.setItem('userInfo', JSON.stringify({ token: 'stale-token' }))
+    userInfo.value = { token: 'stale-token' }
     postMock.mockResolvedValueOnce({ data: { code: 200 } })
     const request = (await import('@/utils/Request')).default
 
@@ -217,6 +220,32 @@ describe('Request returnError', () => {
     expect(postMock).toHaveBeenCalledTimes(1)
     resolvePost({ data: { code: 200 } })
     await first
+  })
+
+  it('does not reuse an in-flight request after the authenticated identity changes', async () => {
+    const resolvers = []
+    userInfo.value = { userId: 'alice', token: 'alice-token' }
+    postMock.mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve))
+    )
+    const request = (await import('@/utils/Request')).default
+
+    const first = request({
+      url: '/contact/loadContact',
+      params: { pageNo: 1 },
+      showLoading: false
+    })
+    userInfo.value = { userId: 'bob', token: 'bob-token' }
+    const second = request({
+      url: '/contact/loadContact',
+      params: { pageNo: 1 },
+      showLoading: false
+    })
+
+    expect(second).not.toBe(first)
+    expect(postMock).toHaveBeenCalledTimes(2)
+    resolvers.forEach((resolve) => resolve({ data: { code: 200 } }))
+    await Promise.all([first, second])
   })
 
   it('keeps array order significant for request deduplication', async () => {

@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { useUserInfoStore } from '@/stores/UserInfoStore'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -90,21 +91,12 @@ const router = createRouter({
   ]
 })
 
-// 导航守卫：访问需要登录的页面时检查本地 token。
+// 导航守卫只信任启动期已由主进程恢复的内存会话。
 router.beforeEach((to) => {
   if (to.path === '/login' || to.path === '/') {
     return true
   }
-  try {
-    const stored = localStorage.getItem('userInfo')
-    if (!stored) {
-      return { path: '/login' }
-    }
-    const userInfo = JSON.parse(stored)
-    if (!userInfo?.token) {
-      return { path: '/login' }
-    }
-  } catch {
+  if (!useUserInfoStore().getInfo()?.token) {
     return { path: '/login' }
   }
   return true

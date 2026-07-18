@@ -24,6 +24,18 @@ vi.mock('electron', () => ({
   }
 }))
 
+vi.mock('../../src/main/ipcSecurity', () => ({
+  buildUntrustedSenderResult: (channel) => ({ success: false, channel, kind: 'untrusted_sender' }),
+  isTrustedIpcEvent: () => true
+}))
+
+vi.mock('../../src/main/secureSessionStore', () => ({
+  clearSecureSession: vi.fn(),
+  getSecureStorageStatus: vi.fn(() => ({ available: true, kind: 'secure_storage_available' })),
+  restoreSecureSession: vi.fn(() => ({ success: false, kind: 'not_authenticated' })),
+  saveSecureSession: vi.fn(() => ({ success: true, persistent: true }))
+}))
+
 // ── helper: wrap sender as Electron-style IPC event object ──
 const ipcEvent = (overrides = {}) => ({ sender: mockSender, ...overrides })
 
@@ -33,6 +45,8 @@ vi.mock('../../src/main/store', () => ({
     getUserId: () => 'u1',
     getData: vi.fn(() => 'test-value'),
     setData: vi.fn(),
+    deleteData: vi.fn(),
+    clearLegacyTokenData: vi.fn(),
     setUserData: vi.fn(),
     getUserData: vi.fn(),
     deleteUserData: vi.fn()
@@ -255,14 +269,14 @@ describe('IPC: GetLocalStore', () => {
 // ═══════════════════════════════════════════════
 // Session channels (registerSafeIpcOn)
 // ═══════════════════════════════════════════════
-describe('IPC: openChat', () => {
+describe('IPC: startAuthenticatedSession', () => {
   it('recovers stale pending messages before starting WebSocket', async () => {
     const { recoverStalePendingMessages } = await import('../../src/main/db/ChatMessageModel')
     const { initWs } = await import('../../src/main/wsClient')
     const callback = vi.fn()
 
     ipcExports.onLoginSuccess({}, callback)
-    const handler = mockIpcOn['openChat']
+    const handler = mockIpcHandle.startAuthenticatedSession
     expect(handler).toBeDefined()
 
     await handler(ipcEvent(), {
@@ -291,7 +305,7 @@ describe('IPC: openChat', () => {
     const callback = vi.fn()
 
     ipcExports.onLoginSuccess({}, callback)
-    const openChatPromise = mockIpcOn.openChat(ipcEvent(), {
+    const openChatPromise = mockIpcHandle.startAuthenticatedSession(ipcEvent(), {
       userId: 'u1',
       token: 'token-1',
       email: 'u1@example.com'
@@ -321,7 +335,7 @@ describe('IPC: openChat', () => {
     const callback = vi.fn()
 
     ipcExports.onLoginSuccess({}, callback)
-    await mockIpcOn.openChat(ipcEvent(), {
+    await mockIpcHandle.startAuthenticatedSession(ipcEvent(), {
       userId: 'u1',
       token: 'token-1',
       email: 'u1@example.com'
@@ -959,8 +973,27 @@ describe('IPC: logout', () => {
     expect(handler).toBeDefined()
 
     const { closeWs } = await import('../../src/main/wsClient')
+    const store = (await import('../../src/main/store')).default
     await handler()
     expect(closeWs).toHaveBeenCalled()
+    expect(store.initUserId).toHaveBeenCalledWith(null)
+  })
+})
+
+describe('IPC: authenticated data boundary', () => {
+  it('rejects session reads after the active user has been cleared', async () => {
+    const store = (await import('../../src/main/store')).default
+    const originalGetUserId = store.getUserId
+    store.getUserId = () => null
+    ipcExports.onLoadSessionData()
+
+    await mockIpcOn.loadSessionData(ipcEvent())
+
+    expect(mockSender.send).toHaveBeenCalledWith(
+      'loadSessionDataCallback',
+      expect.objectContaining({ success: false, kind: 'not_authenticated' })
+    )
+    store.getUserId = originalGetUserId
   })
 })
 

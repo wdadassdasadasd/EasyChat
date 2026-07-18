@@ -106,6 +106,9 @@ export const createMediaMessageTransferController = ({
     Object.assign(localMessage, { uploadSourceId, retryFile: sourceFile, retryCover: cover })
     createLocalPreview(localMessage, file, cover, fileType)
     if (retryMessage) {
+      if (!localMessage.clientMessageId) {
+        localMessage.clientMessageId = lifecycle.createClientMessageId()
+      }
       try {
         await lifecycle.markMessageSending(localMessage, {
           uploading: false,
@@ -144,7 +147,8 @@ export const createMediaMessageTransferController = ({
         messageContent: file.name,
         fileSize: file.size,
         fileName: file.name,
-        fileType
+        fileType,
+        clientMessageId: localMessage.clientMessageId
       },
       showLoading: false,
       returnError: true

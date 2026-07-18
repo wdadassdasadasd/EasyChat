@@ -138,9 +138,9 @@
 <script setup>
 import { getCurrentInstance, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import md5 from 'js-md5';
 import AreaSelect from '../../components/AreaSelect.vue';
 import { useUserInfoStore } from '../../stores/UserInfoStore';
+import { invalidateRequestScope } from '../../utils/Request';
 
 const { proxy } = getCurrentInstance();
 const router = useRouter();
@@ -245,6 +245,7 @@ const saveCover = ({ avatarFile, avatarCover }) => {
 };
 
 const resetToLogin = async () => {
+    invalidateRequestScope();
     userInfoStore.clearUserInfo();
     if (window.api) {
         await window.api.invokeLogout().catch(() => false);
@@ -321,7 +322,8 @@ const savePassword = async () => {
                 const result = await proxy.Request({
                     url: proxy.Api.updatePassword,
                     params: {
-                        password: md5(passwordForm.value.password)
+                        password: passwordForm.value.password,
+                        credentialVersion: 2
                     }
                 });
                 if (!result) {

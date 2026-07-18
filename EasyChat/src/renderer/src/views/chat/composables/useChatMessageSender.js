@@ -38,6 +38,9 @@ export const useChatMessageSender = (dependencies) => {
         messageContent
       })
     if (retryMessage) {
+      if (!localMessage.clientMessageId) {
+        localMessage.clientMessageId = lifecycle.createClientMessageId()
+      }
       try {
         await lifecycle.markMessageSending(localMessage)
       } catch (error) {
@@ -63,7 +66,13 @@ export const useChatMessageSender = (dependencies) => {
     }
     const result = await proxy.Request({
       url: proxy.Api.sendMessage,
-      params: { contactId, contactType, messageType: 2, messageContent },
+      params: {
+        contactId,
+        contactType,
+        messageType: 2,
+        messageContent,
+        clientMessageId: localMessage.clientMessageId
+      },
       showLoading: false,
       returnError: true
     })

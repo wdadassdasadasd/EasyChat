@@ -15,9 +15,11 @@
 
 <script setup>
 import { ref, getCurrentInstance } from 'vue';
-import md5 from 'js-md5';
+import { useRouter } from 'vue-router';
+import { invalidateRequestScope } from '@/utils/Request';
 
 const { proxy } = getCurrentInstance();
+const router = useRouter();
 
 const formDataRef = ref();
 const formData = ref({
@@ -56,12 +58,15 @@ const savePassword = () => {
                 let result = await proxy.Request({
                     url: proxy.Api.updatePassword,
                     params: {
-                        password: md5(formData.value.password)
+                        password: formData.value.password,
+                        credentialVersion: 2
                     }
                 });
                 if (!result) return;
-                proxy.Message.success('修改成功，请重新登录', () => {
-                    window.api.sendReLogin();
+                proxy.Message.success('修改成功，请重新登录', async () => {
+                    invalidateRequestScope();
+                    await window.api.invokeLogout().catch(() => false);
+                    router.push('/login');
                 });
             }
         });

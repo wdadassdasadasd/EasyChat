@@ -1,4 +1,4 @@
-import { insertOrReplaceStrict, queryAll, queryOne, runStrict } from './ADB.js'
+import { insertOrReplaceStrict, queryAll, queryOne, runInTransaction, runStrict } from './ADB.js'
 
 const getCurrentUserId = (explicitUserId) => {
   const userId = explicitUserId
@@ -23,6 +23,38 @@ const saveUploadTask = async (task = {}, userId) => {
   }
   await insertOrReplaceStrict('upload_task', next)
   return next
+}
+
+/**
+ * Applies a task patch only when its persisted state is one of the expected
+ * states. Keeping the read/merge/write sequence in a single DB transaction
+ * prevents a late ACK or an aborted upload attempt from restoring stale state.
+ */
+const transitionUploadTask = async ({ taskId, allowedStates = [], patch = {} } = {}, userId) => {
+  const ownerUserId = getCurrentUserId(userId || patch.userId)
+  if (!taskId || !Array.isArray(allowedStates) || allowedStates.length === 0) {
+    throw new Error('Upload task transition requires taskId and allowedStates')
+  }
+
+  return await runInTransaction(async () => {
+    const previous = await queryOne('select * from upload_task where user_id=? and task_id=?', [
+      ownerUserId,
+      taskId
+    ])
+    if (!previous || !allowedStates.includes(previous.state)) {
+      return { transitioned: false, task: previous || null }
+    }
+    const next = {
+      ...previous,
+      ...patch,
+      taskId: previous.taskId,
+      userId: ownerUserId,
+      createdAt: previous.createdAt,
+      updatedAt: Date.now()
+    }
+    await insertOrReplaceStrict('upload_task', next)
+    return { transitioned: true, task: next }
+  })
 }
 
 const getUploadTaskByMessageId = async (messageId, userId) => {
@@ -57,5 +89,6 @@ export {
   getUploadTaskByMessageId,
   getUploadTaskByTaskId,
   listUploadTasksByStates,
-  saveUploadTask
+  saveUploadTask,
+  transitionUploadTask
 }

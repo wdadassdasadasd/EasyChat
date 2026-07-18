@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, shell } from 'electron'
+import { app, dialog, shell } from 'electron'
 import fs from 'fs'
 import http from 'http'
 import https from 'https'
@@ -7,6 +7,13 @@ import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
 import { initWs, closeWs } from './wsClient.js'
 import logger from './logger.js'
 import store from './store.js'
+import { registerTrustedIpcHandle, registerTrustedIpcOn } from './ipcRegistry.js'
+import {
+  clearSecureSession,
+  getSecureStorageStatus,
+  restoreSecureSession,
+  saveSecureSession
+} from './secureSessionStore.js'
 import {
   addUserSetting,
   getLocalFileFolder,
@@ -17,10 +24,17 @@ import {
   selectUserSessionList,
   delChatSession,
   markSessionRead,
+  getPendingReadReceipts,
+  acknowledgeReadReceipt,
   topChatSession
 } from './db/ChatSessionUserModel.js'
 import {
   clearMessageAndSessionSummaryBySessionId,
+  applyV2Snapshot,
+  applyV2SnapshotPage,
+  applyV2SyncPage,
+  getSyncCursor,
+  getSnapshotProgress,
   isCurrentUserMessageFilePath,
   replacePendingMessage,
   recoverStalePendingMessages,
@@ -47,7 +61,7 @@ import {
   resumeUploadTask,
   setUploadTaskEventTarget,
   activateUploadTasks,
-  deactivateUploadTasks
+  deactivateUploadTasks,
 } from './uploadTaskManager.js'
 import {
   validateClearChatMessage,
@@ -62,6 +76,8 @@ import {
   validateOpenChat,
   validateSaveSendMessage,
   validateSearchChatMessage,
+  validateSyncEventsPage,
+  validateSyncSnapshot,
   validateStoreRead,
   validateStoreWrite,
   validateTempVideo,
@@ -153,7 +169,7 @@ const recoverLocalReplaceQueue = async () => {
 }
 //通知主进程切换登录/注册窗口
 const onLoginOnRegister = (mainWindow, callback) => {
-  ipcMain.on('loginOrRegister', (e, isLogin) => {
+  registerTrustedIpcOn('loginOrRegister', (e, isLogin) => {
     try {
       validateLoginOrRegister(isLogin)
     } catch (error) {
@@ -165,45 +181,65 @@ const onLoginOnRegister = (mainWindow, callback) => {
 }
 
 //初始化用户数据，并启动ws
-const onLoginSuccess = (mainWindow, callback) => {
-  ipcMain.on('openChat', async (e, config) => {
-    try {
-      validateOpenChat(config)
-      await deactivateUploadTasks()
-      store.initUserId(config.userId)
-      store.setUserData('token', config.token)
-      await addUserSetting(config.userId, config.email)
-      try {
-        activateUploadTasks({ userId: config.userId, token: config.token, eventTarget: e.sender })
-        const replaceRecovery = await recoverLocalReplaceQueue()
-        if (replaceRecovery.recoveredCount) {
-          logger.info(`Recovered local message replacements: ${replaceRecovery.recoveredCount}`)
-        }
-        const uploadRecovery = await resumePersistedUploadTasks({
-          onTerminalStatus: async ({ messageId, succeeded }) => {
-            await updateLocalMessageStatus({ messageId, status: succeeded ? 1 : 0 })
-          }
-        })
-        const result = await recoverStalePendingMessages({
-          excludeMessageIds: uploadRecovery?.protectedMessageIds || []
-        })
-        if (result?.recoveredCount) {
-          logger.info(`Recovered stale pending messages: ${result.recoveredCount}`)
-        }
-      } catch (error) {
-        console.error('Failed to recover stale pending messages', error)
+const startAuthenticatedRuntime = async (config, sender, callback, { persistSession } = {}) => {
+  validateOpenChat(config)
+  const persistence = persistSession ? saveSecureSession(config) : { success: true, persistent: true }
+  if (!persistence.success) return persistence
+
+  await deactivateUploadTasks()
+  store.initUserId(config.userId)
+  // Token no longer enters electron-store; remove the legacy user-scoped key after a successful login.
+  store.deleteUserData('token')
+  await addUserSetting(config.userId, config.email)
+  try {
+    activateUploadTasks({
+      userId: config.userId,
+      token: config.token,
+      eventTarget: sender,
+      onTerminalStatus: async ({ messageId, succeeded }) => {
+        await updateLocalMessageStatus({ messageId, status: succeeded ? 1 : 0 })
       }
-      await initWs(config, e.sender)
-      setUploadTaskEventTarget(e.sender)
-      callback(config)
-    } catch (error) {
-      console.error('IPC openChat failed', error)
+    })
+    const replaceRecovery = await recoverLocalReplaceQueue()
+    if (replaceRecovery.recoveredCount) {
+      logger.info(`Recovered local message replacements: ${replaceRecovery.recoveredCount}`)
     }
+    const uploadRecovery = await resumePersistedUploadTasks()
+    const result = await recoverStalePendingMessages({
+      excludeMessageIds: uploadRecovery?.protectedMessageIds || []
+    })
+    if (result?.recoveredCount) {
+      logger.info(`Recovered stale pending messages: ${result.recoveredCount}`)
+    }
+  } catch (error) {
+    console.error('Failed to recover authenticated runtime state', error)
+  }
+  await initWs(config, sender)
+  setUploadTaskEventTarget(sender)
+  callback(config)
+  return {
+    success: true,
+    persistent: persistence.persistent !== false,
+    kind: persistence.kind
+  }
+}
+
+const onLoginSuccess = (_mainWindow, callback) => {
+  registerSafeIpcHandle('startAuthenticatedSession', async (e, config) => {
+    return await startAuthenticatedRuntime(config, e.sender, callback, { persistSession: true })
+  })
+
+  registerSafeIpcHandle('restoreAuthenticatedSession', async (e) => {
+    const restored = restoreSecureSession()
+    if (!restored.success) return restored
+    const result = await startAuthenticatedRuntime(restored.session, e.sender, callback)
+    if (!result.success) return result
+    return { ...result, userInfo: restored.session }
   })
 }
 
 const winTitleOp = (callback) => {
-  ipcMain.on('winTitleOp', (e, data) => {
+  registerTrustedIpcOn('winTitleOp', (e, data) => {
     try {
       validateWindowOperation(data)
     } catch (error) {
@@ -255,9 +291,24 @@ const sendIpcError = (sender, callbackChannel, error, payload = {}) => {
   sender.send(callbackChannel, buildIpcErrorPayload(callbackChannel, error, payload))
 }
 
+const ANONYMOUS_SAFE_IPC_CHANNELS = new Set([
+  'startAuthenticatedSession',
+  'restoreAuthenticatedSession',
+  'logout',
+  'getRuntimeDiagnostics'
+])
+
+const requireAuthenticatedUser = () => {
+  if (store.getUserId()) return
+  const error = new Error('An authenticated user is required')
+  error.kind = 'not_authenticated'
+  throw error
+}
+
 const registerSafeIpcOn = (channel, callbackChannel, handler) => {
-  ipcMain.on(channel, async (e, data) => {
+  registerTrustedIpcOn(channel, async (e, data) => {
     try {
+      if (!ANONYMOUS_SAFE_IPC_CHANNELS.has(channel)) requireAuthenticatedUser()
       await handler(e, data)
     } catch (error) {
       console.error(`IPC ${channel} failed`, error)
@@ -269,8 +320,9 @@ const registerSafeIpcOn = (channel, callbackChannel, handler) => {
 }
 
 const registerSafeIpcHandle = (channel, handler) => {
-  ipcMain.handle(channel, async (e, data) => {
+  registerTrustedIpcHandle(channel, async (e, data) => {
     try {
+      if (!ANONYMOUS_SAFE_IPC_CHANNELS.has(channel)) requireAuthenticatedUser()
       return await handler(e, data)
     } catch (error) {
       console.error(`IPC ${channel} failed`, error)
@@ -281,8 +333,9 @@ const registerSafeIpcHandle = (channel, handler) => {
 
 //存数据到主进程store
 const onSetLocalStore = () => {
-  ipcMain.on('SetLocalStore', (e, payload) => {
+  registerTrustedIpcOn('SetLocalStore', (e, payload) => {
     try {
+      requireAuthenticatedUser()
       validateStoreWrite(payload)
     } catch (error) {
       console.error('IPC SetLocalStore rejected', error)
@@ -294,8 +347,9 @@ const onSetLocalStore = () => {
 }
 
 const onGetLocalStore = () => {
-  ipcMain.on('GetLocalStore', (e, payload) => {
+  registerTrustedIpcOn('GetLocalStore', (e, payload) => {
     try {
+      requireAuthenticatedUser()
       validateStoreRead(payload)
     } catch (error) {
       console.error('IPC GetLocalStore rejected', error)
@@ -422,20 +476,15 @@ const onResetToLogin = (_mainWindow, callback) => {
   const reset = async () => {
     await deactivateUploadTasks()
     await closeWs()
+    clearSecureSession()
+    store.clearLegacyTokenData()
+    store.initUserId(null)
     callback()
     return true
   }
 
-  ipcMain.handle('logout', async () => {
+  registerSafeIpcHandle('logout', async () => {
     return await reset()
-  })
-
-  ipcMain.on('reLogin', async () => {
-    try {
-      await reset()
-    } catch (error) {
-      console.error('reLogin reset failed', error)
-    }
   })
 }
 
@@ -525,7 +574,7 @@ const saveSendMessageToLocal = async ({
 }
 
 const onSaveSendMessage = () => {
-  ipcMain.handle('saveSendMessage', async (_e, payload) => {
+  registerSafeIpcHandle('saveSendMessage', async (_e, payload) => {
     try {
       validateSaveSendMessage(payload)
       const result = await saveSendMessageToLocal(payload)
@@ -602,11 +651,11 @@ const onSearchChatMessage = () => {
 }
 
 const onLocalFileFolder = () => {
-  ipcMain.handle('getLocalFileFolder', async () => {
+  registerSafeIpcHandle('getLocalFileFolder', async () => {
     return await getLocalFileFolder()
   })
 
-  ipcMain.handle('changeLocalFileFolder', async () => {
+  registerSafeIpcHandle('changeLocalFileFolder', async () => {
     const result = await dialog.showOpenDialog({
       title: '选择文件保存位置',
       properties: ['openDirectory', 'createDirectory']
@@ -619,11 +668,11 @@ const onLocalFileFolder = () => {
     return await updateLocalFileFolder(result.filePaths[0])
   })
 
-  ipcMain.handle('resetLocalFileFolder', async () => {
+  registerSafeIpcHandle('resetLocalFileFolder', async () => {
     return await resetLocalFileFolder()
   })
 
-  ipcMain.handle('openLocalFileFolder', async () => {
+  registerSafeIpcHandle('openLocalFileFolder', async () => {
     const folderInfo = await getLocalFileFolder()
     const error = await shell.openPath(folderInfo.localFileFolder)
     return {
@@ -1046,6 +1095,78 @@ const onChatFileDownload = () => {
     return { success: true }
   })
 }
+
+const onRuntimeDiagnostics = () => {
+  registerSafeIpcHandle('getRuntimeDiagnostics', async () => {
+    const [{ getDbDiagnostics }, { getWsDiagnostics }, { getUploadTaskDiagnostics }] =
+      await Promise.all([
+        import('./db/ADB.js'),
+        import('./wsClient.js'),
+        import('./uploadTaskManager.js')
+      ])
+    const ws = getWsDiagnostics()
+    const storage = getSecureStorageStatus()
+    return {
+      success: true,
+      appVersion: app.getVersion(),
+      database: getDbDiagnostics(),
+      websocket: {
+        status: ws.status,
+        retryLeft: ws.retryLeft,
+        reconnectCount: ws.reconnectCount,
+        queueSize: ws.queueSize,
+        parseErrorCount: ws.parseErrorCount,
+        invalidMessageCount: ws.invalidMessageCount,
+        dbErrorCount: ws.dbErrorCount,
+        hasError: Boolean(ws.lastError)
+      },
+      uploads: getUploadTaskDiagnostics(),
+      secureSession: {
+        available: storage.available,
+        kind: storage.kind
+      }
+    }
+  })
+}
+
+const onEventSync = () => {
+  registerSafeIpcHandle('getSyncCursor', async () => {
+    requireAuthenticatedUser()
+    return { success: true, cursor: await getSyncCursor() }
+  })
+  registerSafeIpcHandle('applySyncEventsPage', async (_e, payload = {}) => {
+    requireAuthenticatedUser()
+    validateSyncEventsPage(payload)
+    return await applyV2SyncPage(payload)
+  })
+  registerSafeIpcHandle('applySyncSnapshot', async (_e, payload = {}) => {
+    requireAuthenticatedUser()
+    validateSyncSnapshot(payload)
+    return await applyV2Snapshot(payload)
+  })
+  registerSafeIpcHandle('getSnapshotProgress', async () => {
+    requireAuthenticatedUser()
+    return { success: true, progress: await getSnapshotProgress() }
+  })
+  registerSafeIpcHandle('applySyncSnapshotPage', async (_e, payload = {}) => {
+    requireAuthenticatedUser()
+    validateSyncSnapshot(payload)
+    return await applyV2SnapshotPage(payload)
+  })
+  registerSafeIpcHandle('getPendingReadReceipts', async () => {
+    requireAuthenticatedUser()
+    return { success: true, receipts: await getPendingReadReceipts() }
+  })
+  registerSafeIpcHandle('acknowledgeReadReceipt', async (_e, payload = {}) => {
+    requireAuthenticatedUser()
+    validateMarkSessionRead(payload)
+    if (typeof payload.requestId !== 'string' || payload.requestId.length > 64) {
+      throw new Error('requestId is invalid')
+    }
+    await acknowledgeReadReceipt(payload.contactId, payload.requestId)
+    return { success: true }
+  })
+}
 export {
   onLoginOnRegister,
   onLoginSuccess,
@@ -1065,5 +1186,7 @@ export {
   onUploadTasks,
   onLocalFileFolder,
   onOpenTempVideoFile,
-  onChatFileDownload
+  onChatFileDownload,
+  onRuntimeDiagnostics,
+  onEventSync
 }

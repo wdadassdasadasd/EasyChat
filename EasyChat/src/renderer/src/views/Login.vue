@@ -62,7 +62,6 @@
 <script setup>
 import { ref, nextTick, getCurrentInstance, onBeforeUnmount } from 'vue';
 import { Key, Lock, Message, User } from '@element-plus/icons-vue';
-import md5 from 'js-md5';
 import {useUserInfoStore} from '@/stores/UserInfoStore.js';
 import { useRouter } from 'vue-router';
 
@@ -176,7 +175,9 @@ const submit=async()=>{
   showLoading:isLogin.value?false:true,
   params:{
     email:formData.value.email,
-    password:isLogin.value?md5(formData.value.password):formData.value.password,
+    // 口令只通过 TLS 的受控传输链路发送；后端按版本执行 PBKDF2 校验。
+    password:formData.value.password,
+    credentialVersion:2,
     checkCode:formData.value.checkCode,
     checkCodeKey:localStorage.getItem('checkCodeKey'),
     nickName:formData.value.nickName,
@@ -194,13 +195,10 @@ const submit=async()=>{
     return
   }
   if(isLogin.value){
-    userInfoStore.setUserInfo(result.data);
-    router.push('/main');
-
     const screenWidth=window.screen.width;
     const screenHeight=window.screen.height;
 
-    window.api.sendOpenChat({
+    const runtimeResult = await window.api.invokeStartAuthenticatedSession({
       email:formData.value.email,
       token:result.data.token,
       userId:result.data.userId,
@@ -209,6 +207,16 @@ const submit=async()=>{
       screenWidth:screenWidth,
       screenHeight:screenHeight
     });
+    if (!runtimeResult?.success) {
+      showLoading.value = false;
+      errorMsg.value = runtimeResult?.error || '本地登录状态初始化失败，请重试';
+      return;
+    }
+    userInfoStore.setUserInfo(result.data);
+    router.push('/main');
+    if (runtimeResult.persistent === false) {
+      proxy.Message.warning('当前系统安全存储不可用，本次关闭应用后需要重新登录');
+    }
 
   } else {
     proxy.Message.success('注册成功，请登录');

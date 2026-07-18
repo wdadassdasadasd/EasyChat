@@ -23,6 +23,12 @@ export const RECEIVE_FLUSH_DELAY = 50
 // 单次刷盘最大消息数
 export const RECEIVE_FLUSH_MAX = 100
 
+// Per-user durable fallback for messages that could not be committed to SQLite.
+// Reaching either limit is a hard stop: existing recovery data is preserved and
+// the WebSocket waits for a local-database repair and application restart.
+export const RECEIVE_RECOVERY_MAX_RECORDS = 10000
+export const RECEIVE_RECOVERY_MAX_BYTES = 64 * 1024 * 1024
+
 // WebSocket 重连延迟（ms）
 export const WS_RECONNECT_DELAY = 5000
 

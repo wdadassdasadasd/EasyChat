@@ -16,12 +16,12 @@ vi.mock('../../src/main/store', () => ({
   default: {
     getUserId: vi.fn(() => 'u1'),
     getUserData: vi.fn(() => state.registry),
-    getUserDataForUser: vi.fn((_userId, _key) => state.registry),
+    getUserDataForUser: vi.fn(() => state.registry),
     setUserData: vi.fn((_key, value) => {
       state.registry = value
     }),
-    setUserDataForUser: vi.fn((_userId, _key, value) => {
-      state.registry = value
+    setUserDataForUser: vi.fn((...args) => {
+      state.registry = args[2]
     })
   }
 }))
