@@ -141,7 +141,7 @@ describe('wsClient V2 contract', () => {
     await initWs({ token: 'token-1', userId: 'u1' }, firstSender)
     const oldSocket = wsInstances.at(-1)
     const oldMessageHandler = oldSocket.onmessage
-    await initWs({ token: 'token-2', userId: 'u1' }, secondSender)
+    await initWs({ token: 'token-2', userId: 'u2' }, secondSender)
     oldMessageHandler({ data: JSON.stringify(v2('MESSAGE_UPSERT', { messageId: 201 }, 201)) })
     await vi.advanceTimersByTimeAsync(51)
 
@@ -170,6 +170,45 @@ describe('wsClient V2 contract', () => {
       )
     )
     await closeWs()
+  })
+
+  it('marks the runtime stale and reconnects when a heartbeat pong times out', async () => {
+    vi.useFakeTimers()
+    const { HEARTBEAT_PONG_TIMEOUT } = await import('../../src/main/constants')
+    const { closeWs, initWs } = await import('../../src/main/wsClient')
+    const sender = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+    const socket = wsInstances.at(-1)
+    socket.onopen()
+
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_PONG_TIMEOUT)
+
+    expect(socket.ping).toHaveBeenCalled()
+    expect(sender.send).toHaveBeenCalledWith('wsStatusChange', expect.objectContaining({ status: 'stale' }))
+    await closeWs()
+    vi.useRealTimers()
+  })
+
+  it('reports failed after all reconnect attempts are exhausted', async () => {
+    vi.useFakeTimers()
+    const { WS_RECONNECT_DELAY, WS_MAX_RECONNECT_TIMES } = await import('../../src/main/constants')
+    const { closeWs, initWs } = await import('../../src/main/wsClient')
+    const sender = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+    wsInstances.at(-1).onopen()
+
+    for (let attempt = 0; attempt < WS_MAX_RECONNECT_TIMES; attempt += 1) {
+      wsInstances.at(-1).onclose()
+      await vi.advanceTimersByTimeAsync(WS_RECONNECT_DELAY)
+    }
+    wsInstances.at(-1).onclose()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(sender.send).toHaveBeenCalledWith('wsStatusChange', expect.objectContaining({
+      status: 'failed', retryLeft: 0
+    }))
+    await closeWs()
+    vi.useRealTimers()
   })
 
   it('publishes media changes as V2 typed updates rather than legacy ACKs', async () => {

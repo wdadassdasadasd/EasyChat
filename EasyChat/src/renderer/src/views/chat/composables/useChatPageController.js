@@ -14,6 +14,9 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
   const wsStatusText = ref('')
   const pageSubscriptions = createSubscriptionRegistry()
   let syncPromise = null
+  let readReceiptPromise = null
+  let eventSyncFailureCount = 0
+  let readReceiptFailureCount = 0
   let syncEventsHandler = () => Promise.resolve()
 
   const sessions = useChatSessions({ proxy, route })
@@ -43,8 +46,21 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
     if (!result.stateChanged) sessions.loadChatSession()
   }
 
-  const flushReadReceipts = async () => {
-    const pending = await window.api.invokeGetPendingReadReceipts()
+  const getDiagnosticErrorKind = (error) => {
+    const value = String(error?.kind || error?.code || error?.message || '').toLowerCase()
+    if (value.includes('timeout')) return 'timeout'
+    if (value.includes('network') || value.includes('offline') || value.includes('disconnect')) return 'network'
+    if (value.includes('ipc') || value.includes('acknowledgement')) return 'ipc'
+    if (value.includes('api') || value.includes('receipt failed')) return 'api'
+    return 'unknown'
+  }
+
+  const reportSyncDiagnostic = (payload) => {
+    window.api?.invokeReportSyncRuntimeDiagnostics?.(payload)?.catch(() => {})
+  }
+
+  const flushReadReceipts = async (pendingResult) => {
+    const pending = pendingResult || (await window.api.invokeGetPendingReadReceipts())
     if (!pending?.success) throw new Error(pending?.error || 'Unable to read pending receipts')
     for (const receipt of pending.receipts || []) {
       const response = await proxy.Request({
@@ -58,6 +74,49 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
       const acknowledged = await window.api.invokeAcknowledgeReadReceipt(receipt)
       if (!acknowledged?.success) throw new Error(acknowledged?.error || 'Read receipt acknowledgement failed')
     }
+  }
+
+  const scheduleReadReceiptFlush = () => {
+    if (readReceiptPromise) return readReceiptPromise
+    readReceiptPromise = (async () => {
+      let pendingCount = 0
+      try {
+        const pending = await window.api.invokeGetPendingReadReceipts()
+        if (!pending?.success) throw new Error(pending?.error || 'Unable to read pending receipts')
+        pendingCount = Array.isArray(pending.receipts) ? pending.receipts.length : 0
+        reportSyncDiagnostic({
+          scope: 'readReceipt',
+          state: 'running',
+          pendingCount,
+          failureCount: readReceiptFailureCount,
+          lastSuccessAt: 0,
+          lastErrorKind: 'unknown'
+        })
+        await flushReadReceipts(pending)
+        reportSyncDiagnostic({
+          scope: 'readReceipt',
+          state: 'succeeded',
+          pendingCount: 0,
+          failureCount: readReceiptFailureCount,
+          lastSuccessAt: Date.now(),
+          lastErrorKind: 'unknown'
+        })
+      } catch (error) {
+        readReceiptFailureCount += 1
+        console.warn('read receipt flush failed; it will retry after the next sync trigger', error)
+        reportSyncDiagnostic({
+          scope: 'readReceipt',
+          state: 'failed',
+          pendingCount,
+          failureCount: readReceiptFailureCount,
+          lastSuccessAt: 0,
+          lastErrorKind: getDiagnosticErrorKind(error)
+        })
+      }
+    })().finally(() => {
+      readReceiptPromise = null
+    })
+    return readReceiptPromise
   }
 
   const syncSnapshotPages = async () => {
@@ -93,8 +152,16 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
 
   const syncEventPages = async () => {
     if (syncPromise) return syncPromise
+    void scheduleReadReceiptFlush()
     syncPromise = (async () => {
-      await flushReadReceipts()
+      reportSyncDiagnostic({
+        scope: 'eventSync',
+        state: 'running',
+        pendingCount: 0,
+        failureCount: eventSyncFailureCount,
+        lastSuccessAt: 0,
+        lastErrorKind: 'unknown'
+      })
       const cursorResult = await window.api.invokeGetSyncCursor()
       if (!cursorResult?.success) throw new Error(cursorResult?.error || 'Unable to read sync cursor')
       let cursor = Number(cursorResult.cursor || 0)
@@ -110,6 +177,14 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
         const data = response.data || {}
         if (data.cursorExpired) {
           await syncSnapshotPages()
+          reportSyncDiagnostic({
+            scope: 'eventSync',
+            state: 'succeeded',
+            pendingCount: 0,
+            failureCount: eventSyncFailureCount,
+            lastSuccessAt: Date.now(),
+            lastErrorKind: 'unknown'
+          })
           return
         }
         const applied = await window.api.invokeApplySyncEventsPage({
@@ -120,11 +195,34 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
         if (!applied?.success) throw new Error(applied?.error || 'Event persistence failed')
         applySyncResult(applied)
         cursor = Number(applied.nextCursor)
-        if (!data.hasMore) return
+        if (!data.hasMore) {
+          reportSyncDiagnostic({
+            scope: 'eventSync',
+            state: 'succeeded',
+            pendingCount: 0,
+            failureCount: eventSyncFailureCount,
+            lastSuccessAt: Date.now(),
+            lastErrorKind: 'unknown'
+          })
+          return
+        }
       }
-    })().finally(() => {
-      syncPromise = null
-    })
+    })()
+      .catch((error) => {
+        eventSyncFailureCount += 1
+        reportSyncDiagnostic({
+          scope: 'eventSync',
+          state: 'failed',
+          pendingCount: 0,
+          failureCount: eventSyncFailureCount,
+          lastSuccessAt: 0,
+          lastErrorKind: getDiagnosticErrorKind(error)
+        })
+        throw error
+      })
+      .finally(() => {
+        syncPromise = null
+      })
     return syncPromise
   }
   syncEventsHandler = syncEventPages

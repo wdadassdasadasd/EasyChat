@@ -152,6 +152,20 @@ describe('useChatMessages receive flow', () => {
     expect(chat.messageList.value).toEqual([])
   })
 
+  it('ignores stale page failures without showing an error for the active session', async () => {
+    const { currentChatSession, handlers, proxy } = createHarness()
+    currentChatSession.value = { contactId: 'u2', sessionId: 's1', contactType: 0 }
+
+    await handlers.loadChatMessageCallback({
+      success: false,
+      error: 'previous session unavailable',
+      sessionId: 's2',
+      loadSeq: 1
+    })
+
+    expect(proxy.Message.error).not.toHaveBeenCalled()
+  })
+
   it('surfaces batch receive failures without mutating the message list', () => {
     const { chat, handlers, proxy } = createHarness()
 

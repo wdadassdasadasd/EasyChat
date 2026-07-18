@@ -7,7 +7,7 @@ const { mockIpcOn, mockIpcHandle, mockSender } = vi.hoisted(() => {
 })
 
 vi.mock('electron', () => ({
-  app: {},
+  app: { getPath: vi.fn(() => '/tmp') },
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true })) },
   shell: {
     openPath: vi.fn(async () => null),
@@ -83,6 +83,11 @@ vi.mock('../../src/main/uploadTaskManager', () => ({
   setUploadTaskEventTarget: vi.fn()
 }))
 
+vi.mock('../../src/main/tempVideoFiles', () => ({
+  cleanupExpiredTempVideos: vi.fn(async () => ({ canAllocate: true })),
+  getTempVideoFolder: vi.fn(() => '/tmp/EasyChat/video-preview')
+}))
+
 vi.mock('../../src/main/db/ChatSessionUserModel', () => ({
   selectUserSessionList: vi.fn(async () => [
     { contactId: 'c1', sessionId: 's1', contactType: 0, contactName: 'Test User' }
@@ -148,9 +153,11 @@ vi.mock('fs', () => ({
       readFile: vi.fn(async () => Buffer.from([1, 2, 3])),
       realpath: vi.fn(async (filePath) => filePath),
       stat: vi.fn(async () => ({ isFile: () => true, size: 3 })),
-      writeFile: vi.fn(async () => {})
+      writeFile: vi.fn(async () => {}),
+      unlink: vi.fn(async () => {})
     },
     createWriteStream: vi.fn(() => ({ on: vi.fn(), close: vi.fn((cb) => cb && cb()) })),
+    mkdirSync: vi.fn(),
     renameSync: vi.fn(),
     unlinkSync: vi.fn(),
     readdirSync: vi.fn(() => [])
@@ -217,6 +224,36 @@ beforeEach(async () => {
   const store = (await import('../../src/main/store')).default
   store.getUserData.mockReset()
   store.getUserData.mockReturnValue(undefined)
+})
+
+describe('IPC: synchronization diagnostics', () => {
+  it('accepts only authenticated, fixed-shape synchronization diagnostics', async () => {
+    ipcExports.onRuntimeDiagnostics()
+    const diagnostics = await import('../../src/main/syncRuntimeDiagnostics')
+    const payload = {
+      scope: 'eventSync',
+      state: 'failed',
+      pendingCount: 0,
+      failureCount: 2,
+      lastSuccessAt: 0,
+      lastErrorKind: 'timeout'
+    }
+
+    await expect(mockIpcHandle.reportSyncRuntimeDiagnostics(ipcEvent(), payload)).resolves.toEqual({
+      success: true
+    })
+    expect(diagnostics.getSyncRuntimeDiagnostics().eventSync).toMatchObject({
+      state: 'failed',
+      pendingCount: 0,
+      failureCount: 2,
+      lastSuccessAt: 0,
+      lastErrorKind: 'timeout'
+    })
+
+    await expect(
+      mockIpcHandle.reportSyncRuntimeDiagnostics(ipcEvent(), { ...payload, error: 'secret' })
+    ).resolves.toMatchObject({ success: false, kind: 'validation_error' })
+  })
 })
 
 // ═══════════════════════════════════════════════
@@ -690,6 +727,40 @@ describe('IPC: upload sources', () => {
 })
 
 describe('IPC: local video access', () => {
+  it('uses unique temporary paths for concurrent video previews in the same millisecond', async () => {
+    const fs = (await import('fs')).default
+    vi.spyOn(Date, 'now').mockReturnValue(123456)
+    ipcExports.onOpenTempVideoFile()
+
+    const [first, second] = await Promise.all([
+      mockIpcHandle.openTempVideoFile(ipcEvent(), {
+        fileName: 'remote.mp4', buffer: new Uint8Array([1]).buffer
+      }),
+      mockIpcHandle.openTempVideoFile(ipcEvent(), {
+        fileName: 'remote.mp4', buffer: new Uint8Array([2]).buffer
+      })
+    ])
+
+    expect(first).toMatchObject({ success: true })
+    expect(second).toMatchObject({ success: true })
+    expect(first.filePath).not.toBe(second.filePath)
+    expect(fs.promises.writeFile).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses a remote video write when temporary storage cannot reserve capacity', async () => {
+    const fs = (await import('fs')).default
+    const tempVideoFiles = await import('../../src/main/tempVideoFiles')
+    tempVideoFiles.cleanupExpiredTempVideos.mockResolvedValueOnce({ canAllocate: false })
+    ipcExports.onOpenTempVideoFile()
+
+    const result = await mockIpcHandle.openTempVideoFile(ipcEvent(), {
+      fileName: 'remote.mp4', buffer: new Uint8Array([1]).buffer
+    })
+
+    expect(result).toMatchObject({ success: false, kind: 'temp_storage_full' })
+    expect(fs.promises.writeFile).not.toHaveBeenCalled()
+  })
+
   it('rejects files that do not belong to the current user message history', async () => {
     const { isCurrentUserMessageFilePath } = await import('../../src/main/db/ChatMessageModel')
     isCurrentUserMessageFilePath.mockResolvedValueOnce(false)

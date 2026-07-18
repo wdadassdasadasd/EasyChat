@@ -134,4 +134,68 @@ describe('useChatPageController', () => {
     )
     expect(messages.loadChatMessage).toHaveBeenCalledWith({ refreshTail: true })
   })
+
+  it('continues event synchronization when a read receipt delivery fails', async () => {
+    const stops = { ws: vi.fn() }
+    const report = vi.fn().mockResolvedValue({ success: true })
+    global.window = {
+      api: {
+        onWsStatusChange: vi.fn(() => stops.ws),
+        invokeGetRuntimeDiagnostics: vi.fn().mockResolvedValue({
+          success: true,
+          websocket: { status: 'connected', retryLeft: 5 }
+        }),
+        invokeGetPendingReadReceipts: vi.fn().mockResolvedValue({
+          success: true,
+          receipts: [{ contactId: 'u2', requestId: 'read-1' }]
+        }),
+        invokeAcknowledgeReadReceipt: vi.fn(),
+        invokeGetSyncCursor: vi.fn().mockResolvedValue({ success: true, cursor: 7 }),
+        invokeApplySyncEventsPage: vi.fn().mockResolvedValue({
+          success: true,
+          nextCursor: 8,
+          stateChanged: false
+        }),
+        invokeReportSyncRuntimeDiagnostics: report
+      }
+    }
+    const sessions = {
+      chatSessionList: ref([]),
+      currentChatSession: ref({ contactId: 'u2', sessionId: 's1' }),
+      loadChatSession: vi.fn(), markSessionRead: vi.fn(), openChatFromRoute: vi.fn(),
+      patchChatSessions: vi.fn(), registerSessionListener: vi.fn(), removeSessionListener: vi.fn(),
+      setSessionSelector: vi.fn(), setChatSessionTop: vi.fn(), updateCurrentChatSession: vi.fn()
+    }
+    const messages = {
+      applyPersistedV2Result: vi.fn(), chatSessionClickHandler: vi.fn(), clearCurrentMessages: vi.fn(),
+      cleanupChatMessages: vi.fn(), loadChatMessage: vi.fn(), registerMessageListeners: vi.fn()
+    }
+    useChatSessions.mockReturnValue(sessions)
+    useChatMessages.mockReturnValue(messages)
+    useFileTransfer.mockReturnValue({ closeVideoPreviewDialog: vi.fn() })
+    const request = vi.fn((config) => {
+      if (config.url === '/chat/markRead') return Promise.resolve({ success: false, msg: 'timeout' })
+      return Promise.resolve({ data: { events: [], nextCursor: 8, hasMore: false } })
+    })
+
+    const controller = useChatPageController({
+      currentUserId: ref('u1'),
+      messageListRef: ref(null),
+      proxy: {
+        Api: { markRead: '/chat/markRead', syncEvents: '/chat/syncEvents' },
+        Confirm: vi.fn(), Message: { error: vi.fn(), success: vi.fn() }, Request: request
+      },
+      route: { query: {} }
+    })
+    controller.mount()
+    await vi.waitFor(() => expect(window.api.invokeApplySyncEventsPage).toHaveBeenCalledTimes(1))
+
+    expect(window.api.invokeGetSyncCursor).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ url: '/chat/syncEvents' }))
+    expect(window.api.invokeAcknowledgeReadReceipt).not.toHaveBeenCalled()
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({
+      scope: 'readReceipt', state: 'failed', lastErrorKind: 'timeout', pendingCount: 1
+    }))
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ scope: 'eventSync', state: 'succeeded' }))
+  })
 })

@@ -1,3 +1,5 @@
+import { CHUNK_UPLOAD_THRESHOLD, UPLOAD_CHUNK_SIZE } from '../../../shared/uploadConstants.js'
+
 /**
  * 聊天模块公共常量。
  * 集中管理分页、滚动、消息长度等阈值，避免散落在组件中的 magic number。
@@ -23,8 +25,8 @@ export const CHAT_CONSTANTS = {
   },
 
   // 大文件分片上传配置。小文件仍可走旧接口作为兼容 fallback。
-  UPLOAD_CHUNK_SIZE: 4 * 1024 * 1024,
-  CHUNK_UPLOAD_THRESHOLD: 8 * 1024 * 1024,
+  UPLOAD_CHUNK_SIZE,
+  CHUNK_UPLOAD_THRESHOLD,
   MAX_DOWNLOAD_SIZE: 2 * 1024 * 1024 * 1024,
 
   // 相邻消息展示时间分割线的最小间隔（ms）

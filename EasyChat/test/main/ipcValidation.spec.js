@@ -5,6 +5,7 @@ import {
   validateLoadChatMessage,
   validateOpenChat,
   validateSaveSendMessage,
+  validateSyncRuntimeDiagnostics,
   validateStoreWrite,
   validateUploadSourceChunk,
   validateWindowOperation
@@ -64,6 +65,18 @@ describe('IPC validation', () => {
     )
   })
 
+  it('rejects dot-segment download filenames before they can escape the download folder', () => {
+    for (const fileName of ['.', '..', ' .. ']) {
+      expectValidationError(() =>
+        validateDownload({
+          url: 'https://files.example.com/download',
+          messageId: 1,
+          fileName
+        })
+      )
+    }
+  })
+
   it('requires bounded numeric upload chunk ranges', () => {
     expect(() =>
       validateUploadSourceChunk({ uploadSourceId: 'source-1', start: 0, end: 1024 }, 4096)
@@ -73,6 +86,27 @@ describe('IPC validation', () => {
     )
     expectValidationError(() =>
       validateUploadSourceChunk({ uploadSourceId: 'source-1', start: 0, end: 4097 }, 4096)
+    )
+  })
+
+  it('accepts only fixed, non-sensitive synchronization diagnostic fields', () => {
+    const payload = {
+      scope: 'readReceipt',
+      state: 'failed',
+      pendingCount: 2,
+      failureCount: 1,
+      lastSuccessAt: 0,
+      lastErrorKind: 'timeout'
+    }
+    expect(() => validateSyncRuntimeDiagnostics(payload)).not.toThrow()
+    expectValidationError(() =>
+      validateSyncRuntimeDiagnostics({ ...payload, token: 'secret-token' })
+    )
+    expectValidationError(() =>
+      validateSyncRuntimeDiagnostics({ ...payload, scope: 'messageContent' })
+    )
+    expectValidationError(() =>
+      validateSyncRuntimeDiagnostics({ ...payload, failureCount: -1 })
     )
   })
 

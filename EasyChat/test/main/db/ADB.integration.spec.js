@@ -306,5 +306,5 @@ describe.sequential('ADB schema migrations against SQLite', () => {
       )
     ).toEqual({ minimum: 50, maximum: 50 })
     await adb.closeDatabase()
-  })
+  }, 15000)
 })

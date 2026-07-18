@@ -107,19 +107,20 @@ export const createMessageHistoryController = ({
 
   const onLoadChatMessageCallback = async (payload = {}) => {
     const { dataList, hasMore, loadMode, sessionId, loadSeq, targetMessageId } = payload
+    // A request from the previous session may fail after a fast switch. Its
+    // result must not clear the active session's loading state or surface an
+    // error for the wrong conversation.
+    if (
+      (loadSeq != null && loadSeq !== scroll.getActiveMessageLoadSeq()) ||
+      (sessionId != null && sessionId !== currentChatSession.value.sessionId)
+    ) {
+      return
+    }
     if (payload.success === false) {
       messageLoadingMore.value = false
       scrollAnchor.clear()
       proxy.Message.error(payload.error || '加载消息失败')
       scroll.markMessagePanelReady()
-      return
-    }
-    if (
-      (loadSeq != null && loadSeq !== scroll.getActiveMessageLoadSeq()) ||
-      (sessionId != null && sessionId !== currentChatSession.value.sessionId)
-    ) {
-      messageLoadingMore.value = false
-      scrollAnchor.clear()
       return
     }
     const loadedMessages = Array.isArray(dataList) ? dataList : []

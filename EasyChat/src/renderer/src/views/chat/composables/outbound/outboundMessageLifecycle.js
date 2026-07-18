@@ -38,7 +38,7 @@ export const createOutboundMessageLifecycle = ({
   }
 
   const saveSendMessageToLocal = async (payload) => window.api.invokeSaveSendMessage(payload)
-  const { persistMessageStatus, persistPendingMessage, persistServerMessage } =
+  const { cleanup: cleanupPersistence, persistMessageStatus, persistPendingMessage, persistServerMessage } =
     createOutboundMessagePersistence({
       currentChatSession,
       patchChatSessions,
@@ -213,6 +213,7 @@ export const createOutboundMessageLifecycle = ({
   const cleanup = () => {
     localSyncRetryTimers.forEach((timer) => clearTimeout(timer))
     localSyncRetryTimers.length = 0
+    cleanupPersistence()
   }
 
   return {

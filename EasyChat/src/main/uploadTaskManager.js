@@ -2,13 +2,19 @@ import { createHash, randomUUID } from 'crypto'
 import axios from 'axios'
 import { runtimeConfig } from '../shared/runtimeConfig.js'
 import {
+  UPLOAD_CONTROL_REQUEST_TIMEOUT_MS,
+  UPLOAD_RETRY_DELAYS,
+  getUploadChunkTimeout,
+  getUploadCompleteTimeout
+} from '../shared/uploadConstants.js'
+import {
   MAX_CHUNK_SIZE,
   getUploadSource,
   readUploadSourceChunk,
   releaseUploadSource,
   setUploadSourcePinned
 } from './uploadSourceRegistry.js'
-import { readUploadCover, releaseUploadCover } from './uploadCoverRegistry.js'
+import { cleanupUploadCovers, readUploadCover, releaseUploadCover } from './uploadCoverRegistry.js'
 import {
   deleteUploadTask,
   getUploadTaskByMessageId,
@@ -23,7 +29,7 @@ const TASK_STATES = Object.freeze({
   CANCELED: 'canceled', CANCELING: 'canceling', AWAITING_ACK: 'awaiting_ack', SUCCEEDED: 'succeeded'
 })
 const MAX_CONCURRENT_UPLOADS = 2
-const RETRY_DELAYS = [0, 1000, 3000]
+const RETRY_DELAYS = UPLOAD_RETRY_DELAYS
 const ACK_RECONCILE_DELAYS = [0, 1000, 3000, 10000, 30000, 60000]
 const FAILED_TASK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 const activeControllers = new Map()
@@ -66,10 +72,15 @@ const getUploadedBytes = (uploaded, fileSize) => {
     return sum + Math.max(0, Math.min(MAX_CHUNK_SIZE, fileSize - start))
   }, 0)
 }
-const request = async (context, path, data, { signal, multipart = false } = {}) => {
+const request = async (
+  context,
+  path,
+  data,
+  { signal, multipart = false, timeout = UPLOAD_CONTROL_REQUEST_TIMEOUT_MS } = {}
+) => {
   const headers = { 'X-Requested-With': 'XMLHttpRequest' }
   if (context.token) headers.Authorization = `Bearer ${context.token}`
-  const response = await axios.post(`${context.apiBaseUrl}${path}`, multipart ? data : new URLSearchParams(data), { signal, timeout: 30000, headers })
+  const response = await axios.post(`${context.apiBaseUrl}${path}`, multipart ? data : new URLSearchParams(data), { signal, timeout, headers })
   if (response.data?.code !== 200) {
     const error = new Error(response.data?.info || 'Upload request failed')
     error.kind = 'api_code'
@@ -240,7 +251,15 @@ const runTask = async (initialTask, context) => {
         form.append('uploadId', uploadId); form.append('messageId', String(task.messageId)); form.append('chunkIndex', String(index)); form.append('totalChunks', String(totalChunks))
         form.append('chunkChecksum', createHash('md5').update(chunkBuffer).digest('hex'))
         form.append('chunk', new Blob([chunkBuffer]), `${index}.chunk`)
-        await withRetry(() => request(context, '/chat/uploadFile/chunk', form, { signal: controller.signal, multipart: true }), controller.signal)
+        await withRetry(
+          () =>
+            request(context, '/chat/uploadFile/chunk', form, {
+              signal: controller.signal,
+              multipart: true,
+              timeout: getUploadChunkTimeout(end - start)
+            }),
+          controller.signal
+        )
         task = await getCurrentUploadingTask(task, context, attemptId)
         if (!task) return
         task = await persistAndEmit(task, [TASK_STATES.UPLOADING], { uploadedBytes: end }, context)
@@ -270,7 +289,8 @@ const runTask = async (initialTask, context) => {
       await withRetry(
         () => request(context, '/chat/uploadFile/complete', completeRequest, {
           signal: controller.signal,
-          multipart: completeIsMultipart
+          multipart: completeIsMultipart,
+          timeout: getUploadCompleteTimeout(task.fileSize)
         }),
         controller.signal
       )
@@ -297,8 +317,12 @@ const runTask = async (initialTask, context) => {
       if (!failed) return
       if (!sourceResolved) {
         await setUploadSourcePinned({ uploadSourceId: failed.uploadSourceId, userId: context.userId, pinned: false })
-        await context.onTerminalStatus?.({ messageId: failed.messageId, succeeded: false, error: failed.lastError })
       }
+      await context.onTerminalStatus?.({
+        messageId: failed.messageId,
+        succeeded: false,
+        error: failed.lastError
+      })
     }
   } finally {
     if (activeControllers.get(taskKey)?.attemptId === attemptId) activeControllers.delete(taskKey)
@@ -418,13 +442,18 @@ const resumePersistedUploadTasks = async ({ onTerminalStatus } = {}) => {
   if (!context) return { protectedMessageIds: [] }
   context.onTerminalStatus = onTerminalStatus || context.onTerminalStatus
   await cleanupExpiredFailedTasks(context)
-  const tasks = await listUploadTasksByStates([
+  const retainedTasks = await listUploadTasksByStates(Object.values(TASK_STATES), context.userId)
+  await cleanupUploadCovers({
+    userId: context.userId,
+    protectedCoverIds: retainedTasks.map((task) => task.coverSourceId).filter(Boolean)
+  })
+  const tasks = retainedTasks.filter((task) => [
     TASK_STATES.UPLOADING,
     TASK_STATES.QUEUED,
     TASK_STATES.PAUSED,
     TASK_STATES.AWAITING_ACK,
     TASK_STATES.CANCELING
-  ], context.userId)
+  ].includes(task.state))
   const protectedMessageIds = tasks.map((task) => task.messageId)
   for (const task of tasks) {
     await setUploadSourcePinned({ uploadSourceId: task.uploadSourceId, userId: context.userId, pinned: true })

@@ -26,6 +26,7 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   'startAuthenticatedSession',
   'restoreAuthenticatedSession',
   'getRuntimeDiagnostics',
+  'reportSyncRuntimeDiagnostics',
   'getLocalFileFolder',
   'changeLocalFileFolder',
   'resetLocalFileFolder',
@@ -147,6 +148,9 @@ const api = {
   },
   invokeGetRuntimeDiagnostics() {
     return electronAPI.ipcInvoke('getRuntimeDiagnostics')
+  },
+  invokeReportSyncRuntimeDiagnostics(payload) {
+    return electronAPI.ipcInvoke('reportSyncRuntimeDiagnostics', payload)
   },
   invokeGetLocalFileFolder() {
     return electronAPI.ipcInvoke('getLocalFileFolder')

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { getTotalUploadTimeout, uploadMediaFile } from '@/utils/MediaUploadTransport'
+import {
+  UPLOAD_CHUNK_SIZE,
+  getUploadChunkTimeout,
+  getUploadCompleteTimeout
+} from '../../../src/shared/uploadConstants.js'
 
 describe('mediaUploadTransport total timeout', () => {
   afterEach(() => {
@@ -86,5 +91,38 @@ describe('mediaUploadTransport total timeout', () => {
 
     expect(result).toMatchObject({ success: false, kind: 'protocol_error' })
     expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses the shared chunk and complete timeout budgets', async () => {
+    const file = {
+      name: 'large.bin',
+      size: 8 * 1024 * 1024,
+      type: 'application/octet-stream',
+      slice: (start, end) => new Blob([new Uint8Array(end - start)])
+    }
+    const request = vi.fn(async (config) => {
+      if (config.url === '/init') return { data: { uploadId: 'upload-1', uploadedChunks: [] } }
+      return { data: {} }
+    })
+
+    await uploadMediaFile({
+      file,
+      fileType: 2,
+      message: { messageId: 4 },
+      proxy: {
+        Api: {
+          uploadFileInit: '/init',
+          uploadFileChunk: '/chunk',
+          uploadFileComplete: '/complete',
+          uploadFileCancel: '/cancel'
+        },
+        Request: request
+      }
+    })
+
+    const chunkRequest = request.mock.calls.find(([config]) => config.url === '/chunk')[0]
+    const completeRequest = request.mock.calls.find(([config]) => config.url === '/complete')[0]
+    expect(chunkRequest.timeout).toBe(getUploadChunkTimeout(UPLOAD_CHUNK_SIZE))
+    expect(completeRequest.timeout).toBe(getUploadCompleteTimeout(file.size))
   })
 })

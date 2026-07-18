@@ -92,6 +92,14 @@ describe('preload API bridge', () => {
     await api.invokeApplySyncSnapshotPage({ snapshotId: 'snapshot-1' })
     await api.invokeGetPendingReadReceipts()
     await api.invokeAcknowledgeReadReceipt({ contactId: 'u1', requestId: 'read-1' })
+    await api.invokeReportSyncRuntimeDiagnostics({
+      scope: 'eventSync',
+      state: 'succeeded',
+      pendingCount: 0,
+      failureCount: 0,
+      lastSuccessAt: 1,
+      lastErrorKind: 'unknown'
+    })
 
     expect(electronMocks.ipcRenderer.invoke).toHaveBeenNthCalledWith(1, 'getSnapshotProgress')
     expect(electronMocks.ipcRenderer.invoke).toHaveBeenNthCalledWith(2, 'applySyncSnapshotPage', {
@@ -102,6 +110,11 @@ describe('preload API bridge', () => {
       contactId: 'u1',
       requestId: 'read-1'
     })
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenNthCalledWith(
+      5,
+      'reportSyncRuntimeDiagnostics',
+      expect.objectContaining({ scope: 'eventSync' })
+    )
   })
 
   it('registers only real File objects through the named upload source channel', async () => {

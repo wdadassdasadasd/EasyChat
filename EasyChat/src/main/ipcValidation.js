@@ -371,10 +371,16 @@ const validateDownload = (value) => {
   validateHttpUrl(payload.url)
   requireIdentifier(payload.messageId, 'messageId', { allowNegative: true })
   if (payload.fileName != null) {
-    requireString(payload.fileName, 'fileName', {
+    const fileName = requireString(payload.fileName, 'fileName', {
       maxLength: MAX_FILE_NAME_LENGTH,
       allowEmpty: true
     })
+    // path.join(downloadFolder, '.') and path.join(downloadFolder, '..') resolve
+    // to the folder itself or its parent. Reject them at the IPC boundary so the
+    // download manager never creates a temporary file outside the user folder.
+    if (fileName.trim() === '.' || fileName.trim() === '..') {
+      fail('fileName must not be a dot path segment')
+    }
   }
   requireOptionalSize(payload.fileSize, 'fileSize')
   requireOptionalSize(payload.maxSize, 'maxSize')
@@ -418,6 +424,29 @@ const validateSyncSnapshot = (value) => {
   }
 }
 
+const validateSyncRuntimeDiagnostics = (value) => {
+  const payload = requireObject(value)
+  const allowedKeys = new Set([
+    'scope',
+    'state',
+    'pendingCount',
+    'failureCount',
+    'lastSuccessAt',
+    'lastErrorKind'
+  ])
+  if (Object.keys(payload).some((key) => !allowedKeys.has(key))) {
+    fail('sync diagnostics contains unsupported fields')
+  }
+  requireEnum(payload.scope, 'scope', ['eventSync', 'readReceipt'])
+  requireEnum(payload.state, 'state', ['idle', 'running', 'succeeded', 'failed'])
+  requireEnum(payload.lastErrorKind, 'lastErrorKind', ['network', 'timeout', 'api', 'ipc', 'unknown'])
+  for (const key of ['pendingCount', 'failureCount', 'lastSuccessAt']) {
+    if (!Number.isSafeInteger(Number(payload[key])) || Number(payload[key]) < 0) {
+      fail(`${key} must be a non-negative safe integer`)
+    }
+  }
+}
+
 export {
   IpcValidationError,
   MAX_MESSAGE_LENGTH,
@@ -434,6 +463,7 @@ export {
   validateSaveSendMessage,
   validateSearchChatMessage,
   validateSyncEventsPage,
+  validateSyncRuntimeDiagnostics,
   validateSyncSnapshot,
   validateStoreRead,
   validateStoreWrite,

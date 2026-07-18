@@ -1,14 +1,15 @@
 import { CHAT_CONSTANTS } from '@/utils/ChatConstants'
 import { isRequestFailure } from '@/utils/RequestFailure'
+import {
+  UPLOAD_CONTROL_REQUEST_TIMEOUT_MS,
+  UPLOAD_RETRY_DELAYS,
+  getUploadChunkTimeout,
+  getUploadCompleteTimeout
+} from '../../../shared/uploadConstants.js'
 
 const MIN_TOTAL_UPLOAD_TIMEOUT = 30 * 60 * 1000
 const MAX_TOTAL_UPLOAD_TIMEOUT = 6 * 60 * 60 * 1000
-const uploadHandshakeTimeout = 30000
-const chunkUploadTimeout = Math.max(
-  120000,
-  (CHAT_CONSTANTS.UPLOAD_CHUNK_SIZE / (100 * 1024)) * 1000
-)
-const CHUNK_RETRY_DELAYS = [0, 1000, 3000]
+const uploadHandshakeTimeout = UPLOAD_CONTROL_REQUEST_TIMEOUT_MS
 
 const createProtocolError = (message) => {
   const error = new Error(message)
@@ -140,7 +141,7 @@ export const uploadMediaFile = async ({
       },
       showLoading: false,
       returnError: true,
-      timeout: chunkUploadTimeout
+      timeout: getUploadChunkTimeout(fileSize)
     })
   }
 
@@ -207,8 +208,8 @@ export const uploadMediaFile = async ({
             const end = Math.min(fileSize, start + chunkSize)
             const chunk = await readUploadSlice(file, start, end)
             let chunkResult = null
-            for (let attempt = 0; attempt < CHUNK_RETRY_DELAYS.length; attempt += 1) {
-              await waitForRetry(CHUNK_RETRY_DELAYS[attempt], controller.signal)
+            for (let attempt = 0; attempt < UPLOAD_RETRY_DELAYS.length; attempt += 1) {
+              await waitForRetry(UPLOAD_RETRY_DELAYS[attempt], controller.signal)
               if (controller.signal.aborted) break
               chunkResult = await request({
                 url: proxy.Api.uploadFileChunk,
@@ -221,10 +222,10 @@ export const uploadMediaFile = async ({
                 },
                 showLoading: false,
                 returnError: true,
-                timeout: chunkUploadTimeout
+                timeout: getUploadChunkTimeout(end - start)
               })
               if (!chunkResult || isRequestFailure(chunkResult)) {
-                if (!isRetryableChunkFailure(chunkResult) || attempt === CHUNK_RETRY_DELAYS.length - 1) {
+                if (!isRetryableChunkFailure(chunkResult) || attempt === UPLOAD_RETRY_DELAYS.length - 1) {
                   break
                 }
                 continue
@@ -254,7 +255,7 @@ export const uploadMediaFile = async ({
               },
               showLoading: false,
               returnError: true,
-              timeout: uploadHandshakeTimeout
+              timeout: getUploadCompleteTimeout(fileSize)
             })
           }
         }
@@ -291,7 +292,7 @@ export const uploadMediaFile = async ({
           showLoading: false,
           showError: false,
           returnError: true,
-          timeout: chunkUploadTimeout
+          timeout: UPLOAD_CONTROL_REQUEST_TIMEOUT_MS
         })
         .catch(() => {})
     }
@@ -306,7 +307,7 @@ export const cancelMediaUpload = async ({ messageId, proxy, uploadId }) => {
     showLoading: false,
     showError: false,
     returnError: true,
-    timeout: chunkUploadTimeout
+    timeout: UPLOAD_CONTROL_REQUEST_TIMEOUT_MS
   })
 }
 

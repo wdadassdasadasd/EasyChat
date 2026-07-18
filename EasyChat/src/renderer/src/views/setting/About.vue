@@ -17,6 +17,14 @@
                     <div>数据库：{{ diagnostics.database.ready ? '已就绪' : '未就绪' }}，写队列 {{ diagnostics.database.writeQueueSize }}</div>
                     <div>WebSocket：{{ diagnostics.websocket.status }}，重连 {{ diagnostics.websocket.reconnectCount }} 次</div>
                     <div>上传：活动 {{ diagnostics.uploads.activeUploadCount }}，等待确认 {{ diagnostics.uploads.pendingAckCount }}</div>
+                    <template v-if="diagnostics.synchronization">
+                        <div>
+                            事件同步：{{ diagnostics.synchronization.eventSync.state }}，失败 {{ diagnostics.synchronization.eventSync.failureCount }} 次，错误 {{ diagnostics.synchronization.eventSync.lastErrorKind }}
+                        </div>
+                        <div>
+                            读取回执：{{ diagnostics.synchronization.readReceipt.state }}，待处理 {{ diagnostics.synchronization.readReceipt.pendingCount }}，失败 {{ diagnostics.synchronization.readReceipt.failureCount }} 次，错误 {{ diagnostics.synchronization.readReceipt.lastErrorKind }}
+                        </div>
+                    </template>
                     <div>安全会话：{{ diagnostics.secureSession.available ? '可用' : '不可用' }}</div>
                 </div>
             </el-form-item>

@@ -1,8 +1,14 @@
 import { app, dialog, shell } from 'electron'
+import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
 import { initWs, closeWs } from './wsClient.js'
+import {
+  getSyncRuntimeDiagnostics,
+  reportSyncRuntimeDiagnostics,
+  resetSyncRuntimeDiagnostics
+} from './syncRuntimeDiagnostics.js'
 import logger from './logger.js'
 import store from './store.js'
 import { registerTrustedIpcHandle, registerTrustedIpcOn } from './ipcRegistry.js'
@@ -75,6 +81,7 @@ import {
   validateSaveSendMessage,
   validateSearchChatMessage,
   validateSyncEventsPage,
+  validateSyncRuntimeDiagnostics,
   validateSyncSnapshot,
   validateStoreRead,
   validateStoreWrite,
@@ -89,7 +96,7 @@ import {
   validateUploadSourceRegistration,
   validateWindowOperation
 } from './ipcValidation.js'
-import { getTempVideoFolder } from './tempVideoFiles.js'
+import { cleanupExpiredTempVideos, getTempVideoFolder } from './tempVideoFiles.js'
 import { createDownloadTaskManager } from './downloadTaskManager.js'
 
 const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
@@ -188,6 +195,7 @@ const startAuthenticatedRuntime = async (config, sender, callback, { persistSess
   await deactivateUploadTasks()
   await downloadTaskManager.deactivateDownloadTasks()
   store.initUserId(config.userId)
+  resetSyncRuntimeDiagnostics()
   // Token no longer enters electron-store; remove the legacy user-scoped key after a successful login.
   store.deleteUserData('token')
   await addUserSetting(config.userId, config.email)
@@ -481,6 +489,7 @@ const onResetToLogin = (_mainWindow, callback) => {
     clearSecureSession()
     store.clearLegacyTokenData()
     store.initUserId(null)
+    resetSyncRuntimeDiagnostics()
     callback()
     return true
   }
@@ -693,12 +702,32 @@ const onOpenTempVideoFile = () => {
     const MAX_TEMP_VIDEO_SIZE = 256 * 1024 * 1024
     validateTempVideo(data, MAX_TEMP_VIDEO_SIZE)
 
+    const cleanup = await cleanupExpiredTempVideos({
+      tempRoot: app.getPath('temp'),
+      reserveFiles: 1,
+      reserveBytes: buffer.byteLength
+    })
+    if (!cleanup.canAllocate) {
+      return {
+        success: false,
+        kind: 'temp_storage_full',
+        error: 'Temporary video storage is full. Close the player and retry.'
+      }
+    }
+
     const safeFileName = String(fileName).replace(/[\\/:*?"<>|]/g, '_')
     const tempFolder = getTempVideoFolder(app.getPath('temp'))
     fs.mkdirSync(tempFolder, { recursive: true })
-    const filePath = path.join(tempFolder, `${Date.now()}_${safeFileName}`)
+    const filePath = path.join(tempFolder, `${Date.now()}_${randomUUID()}_${safeFileName}`)
     await fs.promises.writeFile(filePath, Buffer.from(buffer))
     const error = await shell.openPath(filePath)
+    if (error) {
+      await fs.promises.unlink(filePath).catch((cleanupError) => {
+        if (cleanupError?.code !== 'ENOENT') {
+          console.error(`Failed to remove unopened temporary video: ${filePath}`, cleanupError)
+        }
+      })
+    }
 
     return {
       success: !error,
@@ -1119,11 +1148,18 @@ const onRuntimeDiagnostics = () => {
         hasError: Boolean(ws.lastError)
       },
       uploads: getUploadTaskDiagnostics(),
+      synchronization: getSyncRuntimeDiagnostics(),
       secureSession: {
         available: storage.available,
         kind: storage.kind
       }
     }
+  })
+  registerSafeIpcHandle('reportSyncRuntimeDiagnostics', async (_e, payload = {}) => {
+    requireAuthenticatedUser()
+    validateSyncRuntimeDiagnostics(payload)
+    reportSyncRuntimeDiagnostics(payload)
+    return { success: true }
   })
 }
 

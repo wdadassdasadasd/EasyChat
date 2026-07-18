@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import {
+  UPLOAD_CHUNK_SIZE,
+  UPLOAD_CONTROL_REQUEST_TIMEOUT_MS,
+  getUploadChunkTimeout,
+  getUploadCompleteTimeout
+} from '../../src/shared/uploadConstants.js'
+
 const state = vi.hoisted(() => ({ tasks: [], saved: [], source: { name: 'demo.bin', size: 8 } }))
 
 vi.mock('axios', () => ({ default: { post: vi.fn() } }))
@@ -14,6 +21,7 @@ vi.mock('../../src/main/uploadSourceRegistry', () => ({
   readUploadSourceChunk: vi.fn()
 }))
 vi.mock('../../src/main/uploadCoverRegistry', () => ({
+  cleanupUploadCovers: vi.fn(async () => ({ deletedCount: 0, failedCount: 0 })),
   readUploadCover: vi.fn(async () => ({
     cover: { type: 'image/jpeg' },
     buffer: Buffer.from([1, 2, 3])
@@ -52,6 +60,7 @@ describe('uploadTaskManager', () => {
   beforeEach(async () => {
     state.tasks = []
     state.saved = []
+    state.source = { name: 'demo.bin', size: 8 }
     vi.clearAllMocks()
     const manager = await import('../../src/main/uploadTaskManager')
     await manager.deactivateUploadTasks()
@@ -256,6 +265,52 @@ describe('uploadTaskManager', () => {
     await vi.waitFor(() => expect(state.tasks[0].state).toBe('failed'))
 
     expect(onTerminalStatus).toHaveBeenCalledWith(expect.objectContaining({ messageId: 18, succeeded: false }))
+  })
+
+  it('marks a recovered task failed locally when its upload request fails', async () => {
+    const manager = await import('../../src/main/uploadTaskManager')
+    const axios = (await import('axios')).default
+    const onTerminalStatus = vi.fn()
+    state.tasks = [{ taskId: 'network-failure', userId: 'alice', messageId: 1818, uploadSourceId: 's-1818', state: 'queued' }]
+    const requestError = new Error('upload request rejected')
+    requestError.response = { status: 400 }
+    axios.post.mockRejectedValueOnce(requestError)
+    manager.activateUploadTasks({ userId: 'alice', token: 'alice-token' })
+
+    await manager.resumePersistedUploadTasks({ onTerminalStatus })
+    await vi.waitFor(() => expect(state.tasks[0]?.state).toBe('failed'))
+
+    expect(onTerminalStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 1818, succeeded: false, error: 'upload request rejected' })
+    )
+  })
+
+  it('uses shared control, chunk and complete request timeout budgets', async () => {
+    const manager = await import('../../src/main/uploadTaskManager')
+    const axios = (await import('axios')).default
+    const sourceRegistry = await import('../../src/main/uploadSourceRegistry')
+    state.source = { name: 'slow.bin', size: UPLOAD_CHUNK_SIZE }
+    sourceRegistry.readUploadSourceChunk.mockResolvedValueOnce({
+      success: true,
+      arrayBuffer: new ArrayBuffer(UPLOAD_CHUNK_SIZE)
+    })
+    axios.post.mockImplementation(async (url) => {
+      if (url.endsWith('/init')) return { data: { code: 200, data: { uploadId: 'u-timeout', uploadedChunks: [] } } }
+      return { data: { code: 200, data: {} } }
+    })
+    manager.activateUploadTasks({ userId: 'alice', token: 'alice-token' })
+
+    await manager.enqueueUploadTask({ messageId: 182, uploadSourceId: 's-182', fileType: 5 })
+    await vi.waitFor(() =>
+      expect(axios.post.mock.calls.some(([url]) => url.endsWith('/complete'))).toBe(true)
+    )
+
+    const initCall = axios.post.mock.calls.find(([url]) => url.endsWith('/init'))
+    const chunkCall = axios.post.mock.calls.find(([url]) => url.endsWith('/chunk'))
+    const completeCall = axios.post.mock.calls.find(([url]) => url.endsWith('/complete'))
+    expect(initCall[2].timeout).toBe(UPLOAD_CONTROL_REQUEST_TIMEOUT_MS)
+    expect(chunkCall[2].timeout).toBe(getUploadChunkTimeout(UPLOAD_CHUNK_SIZE))
+    expect(completeCall[2].timeout).toBe(getUploadCompleteTimeout(UPLOAD_CHUNK_SIZE))
   })
 
   it('submits a persisted cover with the complete request', async () => {

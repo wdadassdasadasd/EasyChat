@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import fs from 'fs'
 import { spawn } from 'child_process'
 import { safeStorage } from 'electron'
@@ -9,10 +9,40 @@ import { getSecureStorageStatus } from './secureSessionStore.js'
 const REGISTRY_KEY = 'uploadSourceRegistry'
 const MAX_REGISTRY_ITEMS = 100
 const MAX_CHUNK_SIZE = 4 * 1024 * 1024
+const SOURCE_FINGERPRINT_SAMPLE_BYTES = 64 * 1024
 const FFMPEG_THUMBNAIL_TIMEOUT_MS = 10000
 const MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024
 const REGISTRY_STORAGE_VERSION = 1
 const memoryRegistries = new Map()
+
+const readFingerprintSample = async (handle, length, position) => {
+  const buffer = Buffer.alloc(length)
+  const { bytesRead } = await handle.read(buffer, 0, length, position)
+  if (bytesRead !== length) {
+    throw new Error('Upload source could not be read completely')
+  }
+  return buffer
+}
+
+const getUploadSourceFingerprint = async (filePath, size) => {
+  const fileSize = Number(size)
+  if (!Number.isSafeInteger(fileSize) || fileSize <= 0) {
+    throw new Error('Upload source size is invalid')
+  }
+  const sampleSize = Math.min(SOURCE_FINGERPRINT_SAMPLE_BYTES, fileSize)
+  const handle = await fs.promises.open(filePath, 'r')
+  try {
+    const head = await readFingerprintSample(handle, sampleSize, 0)
+    const tail = await readFingerprintSample(handle, sampleSize, Math.max(0, fileSize - sampleSize))
+    return createHash('sha256')
+      .update(`easychat-upload-source-v1:${fileSize}:`)
+      .update(head)
+      .update(tail)
+      .digest('hex')
+  } finally {
+    await handle.close()
+  }
+}
 
 const isRegistry = (value) => value && typeof value === 'object' && !Array.isArray(value)
 
@@ -117,6 +147,13 @@ const getUploadSource = async (uploadSourceId, { userId = store.getUserId() } = 
   if (!stat.isFile() || stat.size !== Number(source.size)) {
     throw new Error('Upload source is unavailable or has changed')
   }
+  if (!source.sourceFingerprint) {
+    throw new Error('Upload source must be selected again before resuming')
+  }
+  const fingerprint = await getUploadSourceFingerprint(source.filePath, stat.size)
+  if (fingerprint !== source.sourceFingerprint) {
+    throw new Error('Upload source is unavailable or has changed')
+  }
   const expectedMtime = Number(source.sourceMtimeMs || source.lastModified || 0)
   // 仅比较文件大小无法识别“同大小内容被覆盖”的情况；恢复上传前必须拒绝
   // 已变化的源文件，避免把错误内容拼接到既有上传会话中。
@@ -136,6 +173,7 @@ const registerUploadSource = async ({ filePath, name, size, type, lastModified }
   if (!stat.isFile() || stat.size !== Number(size)) {
     throw new Error('Upload source metadata does not match the selected file')
   }
+  const sourceFingerprint = await getUploadSourceFingerprint(filePath, stat.size)
   const uploadSourceId = randomUUID()
   const userId = store.getUserId()
   const registry = getRegistry(userId)
@@ -146,6 +184,7 @@ const registerUploadSource = async ({ filePath, name, size, type, lastModified }
     type: String(type || '').slice(0, 255),
     lastModified: Number(lastModified || 0),
     sourceMtimeMs: Number.isFinite(Number(stat.mtimeMs)) ? Math.trunc(stat.mtimeMs) : 0,
+    sourceFingerprint,
     pinned: false,
     createdAt: Date.now()
   }
@@ -302,10 +341,12 @@ const generateUploadSourceThumbnail = async ({ uploadSourceId, userId } = {}) =>
 export {
   FFMPEG_THUMBNAIL_TIMEOUT_MS,
   MAX_CHUNK_SIZE,
+  SOURCE_FINGERPRINT_SAMPLE_BYTES,
   MAX_THUMBNAIL_BYTES,
   generateThumbnailFromPath,
   generateUploadSourceThumbnail,
   getUploadSource,
+  getUploadSourceFingerprint,
   pinUploadSource,
   readUploadSourceChunk,
   registerUploadSource,

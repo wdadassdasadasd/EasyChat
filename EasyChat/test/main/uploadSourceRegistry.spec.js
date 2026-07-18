@@ -5,10 +5,11 @@ const safe = vi.hoisted(() => ({ available: true }))
 const fileStat = vi.hoisted(() => ({
   value: { isFile: () => true, size: 12, mtimeMs: 1000 }
 }))
+const sourceBytes = vi.hoisted(() => ({ value: Buffer.alloc(12, 7) }))
 const fileHandle = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
-  read: vi.fn(async (buffer, _offset, length) => {
-    buffer.fill(7)
+  read: vi.fn(async (buffer, _offset, length, position) => {
+    sourceBytes.value.copy(buffer, 0, position, position + length)
     return { bytesRead: length }
   })
 }))
@@ -63,6 +64,7 @@ describe('uploadSourceRegistry', () => {
     state.registry = undefined
     safe.available = true
     fileStat.value = { isFile: () => true, size: 12, mtimeMs: 1000 }
+    sourceBytes.value = Buffer.alloc(12, 7)
     vi.clearAllMocks()
   })
 
@@ -125,6 +127,22 @@ describe('uploadSourceRegistry', () => {
     ).rejects.toThrow('Upload source is unavailable or has changed')
   })
 
+  it('rejects a same-sized source whose content changes without an mtime gap', async () => {
+    const { readUploadSourceChunk, registerUploadSource } =
+      await import('../../src/main/uploadSourceRegistry')
+    const registered = await registerUploadSource({
+      filePath: 'D:/selected/a.txt',
+      name: 'a.txt',
+      size: 12,
+      lastModified: 1000
+    })
+    sourceBytes.value = Buffer.alloc(12, 8)
+
+    await expect(
+      readUploadSourceChunk({ uploadSourceId: registered.uploadSourceId, start: 0, end: 1 })
+    ).rejects.toThrow('Upload source is unavailable or has changed')
+  })
+
   it('releases persisted source mappings after upload completion', async () => {
     const { registerUploadSource, releaseUploadSource } =
       await import('../../src/main/uploadSourceRegistry')
@@ -163,13 +181,15 @@ describe('uploadSourceRegistry', () => {
     expect(registry[registered.uploadSourceId].pinned).toBe(false)
   })
 
-  it('migrates a legacy plaintext registry to safeStorage ciphertext on first access', async () => {
+  it('requires old persisted sources to be selected again before recovery', async () => {
     state.registry = {
       legacy: { filePath: 'D:/selected/legacy.txt', size: 12, sourceMtimeMs: 1000 }
     }
     const { getUploadSource } = await import('../../src/main/uploadSourceRegistry')
 
-    await expect(getUploadSource('legacy')).resolves.toMatchObject({ filePath: 'D:/selected/legacy.txt' })
+    await expect(getUploadSource('legacy')).rejects.toThrow(
+      'Upload source must be selected again before resuming'
+    )
     expect(state.registry).toMatchObject({ version: 1, ciphertext: expect.any(String) })
     expect(JSON.stringify(state.registry)).not.toContain('legacy.txt')
   })

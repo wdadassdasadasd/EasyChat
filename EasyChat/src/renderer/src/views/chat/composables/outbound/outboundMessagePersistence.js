@@ -9,7 +9,17 @@ export const createOutboundMessagePersistence = ({
   patchChatSessions,
   saveSendMessageToLocal
 }) => {
+  const sessionSnapshots = new Map()
   const getCurrentSessionSnapshot = () => ({ ...toRaw(currentChatSession.value) })
+  const getMessageKey = (messageId) => (messageId == null ? '' : String(messageId))
+
+  const getSessionSnapshot = (...messageIds) => {
+    for (const messageId of messageIds) {
+      const snapshot = sessionSnapshots.get(getMessageKey(messageId))
+      if (snapshot) return snapshot
+    }
+    return getCurrentSessionSnapshot()
+  }
 
   const stripTransientMessageFields = (message = {}) => {
     const dbMessage = { ...message }
@@ -53,15 +63,19 @@ export const createOutboundMessagePersistence = ({
     return result
   }
 
-  const persistPendingMessage = (message) =>
-    persist(
+  const persistPendingMessage = (message) => {
+    const sessionSnapshot = getCurrentSessionSnapshot()
+    const messageKey = getMessageKey(message?.messageId)
+    if (messageKey) sessionSnapshots.set(messageKey, sessionSnapshot)
+    return persist(
       {
         mode: 'pending',
         message: stripTransientMessageFields(message),
-        chatSession: getCurrentSessionSnapshot()
+        chatSession: sessionSnapshot
       },
       'Save pending message failed'
     )
+  }
 
   const persistMessageStatus = (message) =>
     persist(
@@ -69,23 +83,31 @@ export const createOutboundMessagePersistence = ({
         mode: 'status',
         message: stripTransientMessageFields(message),
         status: message.status,
-        chatSession: getCurrentSessionSnapshot()
+        chatSession: getSessionSnapshot(message?.messageId)
       },
       'Save message status failed'
     )
 
-  const persistServerMessage = (localMessageId, message) =>
-    persist(
+  const persistServerMessage = async (localMessageId, message) => {
+    const sessionSnapshot = getSessionSnapshot(localMessageId, message?.messageId)
+    const result = await persist(
       {
         mode: 'replace',
         localMessageId,
         message: stripTransientMessageFields(message),
-        chatSession: getCurrentSessionSnapshot()
+        chatSession: sessionSnapshot
       },
       'Save server message failed'
     )
+    const localKey = getMessageKey(localMessageId)
+    const serverKey = getMessageKey(message?.messageId)
+    if (serverKey) sessionSnapshots.set(serverKey, sessionSnapshot)
+    if (localKey && localKey !== serverKey) sessionSnapshots.delete(localKey)
+    return result
+  }
 
   return {
+    cleanup: () => sessionSnapshots.clear(),
     persistMessageStatus,
     persistPendingMessage,
     persistServerMessage
