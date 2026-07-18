@@ -2,6 +2,7 @@ import { createSubscriptionRegistry } from '../subscriptionRegistry'
 
 /** Keeps renderer message IPC subscriptions isolated from history state. */
 export const createMessageSubscriptionController = ({
+  applyPersistedV2Result,
   handleFileUploadDone,
   handleReceiveMessages,
   loadChatSession,
@@ -13,27 +14,6 @@ export const createMessageSubscriptionController = ({
 
   const register = () => {
     subscriptions.clear()
-    subscriptions.replace('receiveMessage', () =>
-      window.api.onReceiveMessage((rawMessage) => {
-        let message = rawMessage
-        if (typeof message === 'string') {
-          try {
-            message = JSON.parse(message)
-          } catch (error) {
-            console.error('parse receiveMessage failed', error)
-            proxy.Message.error('Receive message parse failed')
-            return
-          }
-        }
-        if (message?.success === false) {
-          proxy.Message.error(message.error || 'Receive message failed')
-        } else if (message?.messageType == 0) {
-          loadChatSession()
-        } else if (message?.messageType == 6) {
-          handleFileUploadDone(message)
-        }
-      })
-    )
     subscriptions.replace('receiveMessageBatch', () =>
       window.api.onReceiveMessageBatch((payload = {}) => {
         if (payload?.success === false) {
@@ -41,10 +21,11 @@ export const createMessageSubscriptionController = ({
           if (payload.resyncRequired) recoverReceiveResync(payload)
           return
         }
-        handleReceiveMessages(
-          Array.isArray(payload.messages) ? payload.messages : [],
-          Array.isArray(payload.sessions) ? payload.sessions : []
-        )
+        applyPersistedV2Result(payload)
+        // Contact/group/application mutations are persisted as V2 events too.
+        // They have no chat-message row, so refresh renderer-owned views only
+        // after the main process has committed their processed-event marker.
+        if (payload.stateChanged) loadChatSession()
       })
     )
     subscriptions.replace('loadChatMessage', () =>

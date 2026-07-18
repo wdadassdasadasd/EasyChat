@@ -22,16 +22,11 @@ let useChatMessages
 
 const createApiMock = () => {
   const handlers = {}
-  const unsubscribeReceiveMessage = vi.fn(() => delete handlers.receiveMessage)
   const unsubscribeReceiveMessageBatch = vi.fn(() => delete handlers.receiveMessageBatch)
   const unsubscribeLoadChatMessage = vi.fn(() => delete handlers.loadChatMessageCallback)
   return {
     handlers,
     api: {
-      onReceiveMessage: vi.fn((handler) => {
-        handlers.receiveMessage = handler
-        return unsubscribeReceiveMessage
-      }),
       onReceiveMessageBatch: vi.fn((handler) => {
         handlers.receiveMessageBatch = handler
         return unsubscribeReceiveMessageBatch
@@ -40,7 +35,6 @@ const createApiMock = () => {
         handlers.loadChatMessageCallback = handler
         return unsubscribeLoadChatMessage
       }),
-      unsubscribeReceiveMessage,
       unsubscribeReceiveMessageBatch,
       unsubscribeLoadChatMessage,
       sendLoadChatMessage: vi.fn(),
@@ -336,7 +330,6 @@ describe('useChatMessages receive flow', () => {
 
     chat.registerMessageListeners()
 
-    expect(window.api.unsubscribeReceiveMessage).toHaveBeenCalled()
     expect(window.api.unsubscribeReceiveMessageBatch).toHaveBeenCalled()
     expect(window.api.unsubscribeLoadChatMessage).toHaveBeenCalled()
   })

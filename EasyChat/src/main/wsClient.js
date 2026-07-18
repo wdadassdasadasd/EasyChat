@@ -1,11 +1,9 @@
 import { WebSocket } from 'ws'
-import { saveOrUpdateChatSessionBatch4Init } from './db/ChatSessionUserModel'
 import store from './store.js'
-import { saveMessageBatch, updateMessageStatus } from './db/ChatMessageModel'
-import { setContactApplyNoReadCount } from './db/UserSettingModel'
+import { applyV2Events, saveMessageBatch } from './db/ChatMessageModel'
 import { runtimeConfig } from '../shared/runtimeConfig.js'
+import { isV2EventEnvelope } from '../shared/v2EventTypes.js'
 import {
-  WS_SYSTEM_CONTACT_FILTER,
   HEARTBEAT_INTERVAL,
   HEARTBEAT_PONG_TIMEOUT,
   RECEIVE_FLUSH_DELAY,
@@ -25,10 +23,12 @@ import logger from './logger.js'
 let ws = null
 let maxReConnectTimes = 0
 let wsUrl = null
+let wsAuthToken = ''
 let webContentsSender = null
 let needReconnect = null
 let lockReconnect = false
 let heartbeatTimer = null
+let legacyRejectionReported = false
 let pongTimeoutTimer = null
 let pongHandler = null
 let reconnectTimer = null
@@ -139,28 +139,46 @@ const closeCurrentSocket = () => {
   ws = null
 }
 
+const blockWsForRecoveryFailure = (kind, error, failedCount) => {
+  const safeError = new Error(
+    'Local recovery storage is unavailable. Repair the local database and restart EasyChat.'
+  )
+  recordWsError(error || safeError, { status: 'recovery_blocked' })
+  needReconnect = false
+  lockReconnect = true
+  clearReconnectTimer()
+  clearHeartbeatTimer()
+  closeCurrentSocket()
+  publishWsStatus({ status: 'recovery_blocked', retryLeft: 0, error: safeError.message })
+  publishReceiveRecoveryNeeded({
+    error: safeError,
+    messages: [],
+    stats: { kind, failedCount, resyncRequired: true }
+  })
+}
+
 const persistRecoveryMessages = async (messages, kind, error) => {
   if (!messages.length) {
-    return true
+    return { persisted: true, blocked: false }
   }
+  let result
   try {
-    // 接收链路落库失败或队列溢出时先写恢复日志，再通知 renderer 做增量会话兜底。
-    await appendReceiveRecoveryMessages(store.getUserId(), messages)
+    result = await appendReceiveRecoveryMessages(store.getUserId(), messages)
+  } catch (persistError) {
+    result = { success: false, kind: 'recovery_log_write_failed', error: persistError }
+  }
+  if (result?.success) {
     publishReceiveRecoveryNeeded({
       error,
       messages,
-      stats: { kind, persistedCount: messages.length }
+      stats: { kind, persistedCount: result.storedCount }
     })
-    return true
-  } catch (persistError) {
-    console.error('Failed to persist receive recovery messages', persistError)
-    publishReceiveRecoveryNeeded({
-      error: persistError,
-      messages,
-      stats: { kind: 'recovery_log_write_failed', failedCount: messages.length }
-    })
-    return false
+    return { persisted: true, blocked: false }
   }
+
+  const failure = result?.error || new Error(`Receive recovery log ${result?.kind || 'write failed'}`)
+  blockWsForRecoveryFailure(result?.kind || 'recovery_log_write_failed', failure, messages.length)
+  return { persisted: false, blocked: true }
 }
 
 const replayReceiveRecovery = async () => {
@@ -215,13 +233,15 @@ const resetWsRuntime = async () => {
       )
     } catch (error) {
       const pending = receiveQueue.slice()
-      const persisted = await persistRecoveryMessages(pending, 'reset_flush_failed', error)
-      if (persisted) {
+      const recovery = await persistRecoveryMessages(pending, 'reset_flush_failed', error)
+      if (recovery.persisted) {
         receiveQueue.splice(0, pending.length)
       }
     }
     receiveFlushing = false
-    lockReconnect = false
+    if (wsDiagnostics.status !== 'recovery_blocked') {
+      lockReconnect = false
+    }
     messageProcessingQueue = Promise.resolve()
     incrementRuntimeGeneration()
     closeCurrentSocket()
@@ -405,6 +425,33 @@ const saveAndPublishMessageBatch = async (messages) => {
   })
 }
 
+const isV2Event = isV2EventEnvelope
+
+const normalizeV2EventForCurrentUser = (event) => {
+  const payload = { ...(event.payload || {}) }
+  // The durable event retains the sender's original target. The receiver's
+  // local view uses the peer as contactId, without mutating the event itself.
+  if (Number(payload.contactType) === 0 && payload.sendUserId !== store.getUserId()) {
+    payload.contactId = payload.sendUserId
+  }
+  return { ...event, payload }
+}
+
+const saveAndPublishV2EventBatch = async (events) => {
+  const normalizedEvents = events.map(normalizeV2EventForCurrentUser)
+  const { savedMessages = [], stateChanged = false, mediaUpdates = [], eventTypes = [] } = await applyV2Events(normalizedEvents)
+  if (!savedMessages.length && !stateChanged && !mediaUpdates.length) return
+  sendToRenderer('receiveMessageBatch', {
+    messageType: 'batch',
+    messages: savedMessages,
+    sessions: getLatestSessionList(savedMessages),
+    stateChanged,
+    mediaUpdates,
+    eventTypes,
+    stats: { receivedCount: events.length, savedCount: savedMessages.length, filteredCount: 0 }
+  })
+}
+
 const scheduleReceiveFlush = () => {
   if (receiveQueue.length >= RECEIVE_FLUSH_MAX) {
     flushReceiveQueue()
@@ -440,12 +487,12 @@ const flushReceiveQueue = async () => {
         })
         if (failedMessages.length > 0) {
           const failedSet = new Set(failedMessages)
-          const persisted = await persistRecoveryMessages(failedMessages, 'db_write_failed', error)
-          if (persisted) {
+          const recovery = await persistRecoveryMessages(failedMessages, 'db_write_failed', error)
+          if (recovery.persisted) {
             receiveQueue = receiveQueue.filter((message) => {
               return !failedSet.has(message)
             })
-          } else {
+          } else if (!recovery.blocked) {
             reconnect().catch((err) => console.error('reconnect failed', err))
           }
         }
@@ -468,10 +515,6 @@ const isCurrentRuntimeGeneration = (expectedGeneration) => {
   return expectedGeneration === wsRuntimeGeneration
 }
 
-const enqueueReceiveMessage = async (message, expectedGeneration) => {
-  return await enqueueReceiveMessages([message], expectedGeneration)
-}
-
 const enqueueReceiveMessages = async (messages, expectedGeneration) => {
   if (!messages.length || !isCurrentRuntimeGeneration(expectedGeneration)) {
     return true
@@ -481,10 +524,12 @@ const enqueueReceiveMessages = async (messages, expectedGeneration) => {
     const overflowCount = combinedQueue.length - RECEIVE_QUEUE_MAX
     const droppedMessages = combinedQueue.slice(0, overflowCount)
     const error = new Error('接收消息过多，已保存溢出消息并将在队列空闲后恢复。')
-    const persisted = await persistRecoveryMessages(droppedMessages, 'queue_overflow', error)
-    if (!persisted) {
+    const recovery = await persistRecoveryMessages(droppedMessages, 'queue_overflow', error)
+    if (!recovery.persisted) {
       recordWsError(error)
-      reconnect().catch((err) => console.error('reconnect failed', err))
+      if (!recovery.blocked) {
+        reconnect().catch((err) => console.error('reconnect failed', err))
+      }
       return false
     }
     if (!isCurrentRuntimeGeneration(expectedGeneration)) {
@@ -567,7 +612,7 @@ const enqueueMessageProcessing = (message) => {
       console.error('failed to handle WebSocket message', error)
       publishReceiveRecoveryNeeded({
         error,
-        messages: normalizeWsMessages(message).filter(isValidWsMessage),
+        messages: normalizeWsMessages(message).filter(isV2Event),
         stats: {
           kind: 'message_processing_timeout'
         }
@@ -577,22 +622,29 @@ const enqueueMessageProcessing = (message) => {
   return messageProcessingQueue
 }
 
-const buildWsUrl = (domain, token) => {
-  const url = new URL(domain)
-  url.searchParams.set('token', token)
-  return url.toString()
+const buildWsUrl = (domain) => {
+  // 令牌不能进入 URL，避免被代理、监控或错误日志记录。
+  return new URL(domain).toString()
 }
 
 const initWs = async (config, sender) => {
   resetWsDiagnostics()
+  legacyRejectionReported = false
   webContentsSender = sender
   await resetWsRuntime()
-  wsUrl = buildWsUrl(runtimeConfig.wsOrigin, config.token)
+  wsUrl = buildWsUrl(runtimeConfig.wsOrigin)
+  wsAuthToken = String(config.token || '')
   needReconnect = true
   maxReConnectTimes = WS_MAX_RECONNECT_TIMES
-  await replayReceiveRecovery().catch((error) => {
+  try {
+    await replayReceiveRecovery()
+  } catch (error) {
     console.error('Startup receive recovery replay failed', error)
-  })
+    if (error?.kind === 'corrupt') {
+      blockWsForRecoveryFailure('corrupt', error, 0)
+      return
+    }
+  }
   publishWsStatus({ status: 'connecting', retryLeft: maxReConnectTimes })
   createWs()
 }
@@ -603,6 +655,7 @@ const closeWs = async () => {
   await resetWsRuntime()
   publishWsStatus({ status: 'closed', retryLeft: 0 })
   webContentsSender = null
+  wsAuthToken = ''
 }
 
 const normalizeWsMessages = (payload, depth = 0) => {
@@ -629,74 +682,6 @@ const normalizeWsMessages = (payload, depth = 0) => {
   return [payload]
 }
 
-const isValidWsMessage = (message = {}) => {
-  if (message == null || typeof message !== 'object' || Array.isArray(message)) {
-    return false
-  }
-  const messageType = Number(message.messageType)
-  if (!Number.isFinite(messageType)) {
-    return false
-  }
-  if (messageType === 0) {
-    return true
-  }
-  if (messageType === 6) {
-    return message.messageId != null
-  }
-  return message.messageId != null && Boolean(message.sessionId)
-}
-
-const handleSingleWsMessage = async (message, expectedGeneration) => {
-  if (!isCurrentRuntimeGeneration(expectedGeneration)) {
-    return
-  }
-  const messageType = Number(message.messageType)
-
-  switch (messageType) {
-    case 0: {
-      await flushReceiveQueue()
-      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
-      const chatSessionList = (message.extendData?.chatSessionList || []).filter((item) => {
-        return item.contactName !== WS_SYSTEM_CONTACT_FILTER
-      })
-
-      await saveOrUpdateChatSessionBatch4Init(chatSessionList)
-      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
-
-      // 检测服务端 INIT 是否提供了 noReadCount：若所有会话都缺少该字段，
-      // 说明服务端不提供权威未读数，此时 INIT 消息需要正常累加未读。
-      const serverHasNoReadCount = chatSessionList.every((s) => s.noReadCount == null)
-      const chatMessageList = message.extendData?.chatMessageList || []
-      // INIT 会话列表携带服务端权威未读数，最近消息仅用于本地回填，不能再次累加未读。
-      await saveMessageBatch(chatMessageList, {
-        incrementUnread: !serverHasNoReadCount ? false : true
-      })
-      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
-      await setContactApplyNoReadCount(store.getUserId(), message.extendData?.contact?.applyCount)
-      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
-
-      sendToRenderer('receiveMessage', {
-        messageType: message.messageType
-      })
-      break
-    }
-
-    case 6: {
-      await flushReceiveQueue()
-      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
-      await updateMessageStatus(message.messageId, message.status ?? 1)
-      if (!isCurrentRuntimeGeneration(expectedGeneration)) return
-      sendToRenderer('receiveMessage', message)
-      break
-    }
-
-    default: {
-      await enqueueReceiveMessage(message, expectedGeneration)
-      break
-    }
-  }
-}
-
 const handleWsMessage = async (payload, expectedGeneration) => {
   const messages = normalizeWsMessages(payload)
   let pendingRegularMessages = []
@@ -711,20 +696,25 @@ const handleWsMessage = async (payload, expectedGeneration) => {
     if (!isCurrentRuntimeGeneration(expectedGeneration)) {
       return
     }
-    if (!isValidWsMessage(message)) {
-      console.warn('drop invalid WebSocket message', message)
-      updateWsDiagnostics({
-        invalidMessageCount: wsDiagnostics.invalidMessageCount + 1,
-        lastError: 'Invalid WebSocket message'
-      })
+    if (isV2Event(message)) {
+      await flushPendingRegularMessages()
+      await saveAndPublishV2EventBatch([message])
       continue
     }
-    const messageType = Number(message.messageType)
-    if (messageType === 0 || messageType === 6) {
-      await flushPendingRegularMessages()
-      await handleSingleWsMessage(message, expectedGeneration)
-    } else {
-      pendingRegularMessages.push(message)
+    // V1 INIT/ACK and bare messages are deliberately not persisted. Treating
+    // them as received would acknowledge data that cannot participate in the
+    // event cursor protocol. The renderer's recovery path will request V2.
+    await flushPendingRegularMessages()
+    updateWsDiagnostics({
+      invalidMessageCount: wsDiagnostics.invalidMessageCount + 1,
+      lastError: 'Legacy or malformed WebSocket event rejected'
+    })
+    if (!legacyRejectionReported) {
+      legacyRejectionReported = true
+      publishReceiveRecoveryNeeded({
+        error: 'Legacy WebSocket event rejected; V2 reconciliation required',
+        stats: { rejectedLegacyEvent: true }
+      })
     }
   }
   await flushPendingRegularMessages()
@@ -738,7 +728,11 @@ const createWs = () => {
   clearHeartbeatTimer()
   closeCurrentSocket()
   try {
-    ws = new WebSocket(wsUrl)
+    ws = new WebSocket(wsUrl, {
+      headers: {
+        Authorization: `Bearer ${wsAuthToken}`
+      }
+    })
   } catch (error) {
     console.error('failed to create WebSocket', error)
     recordWsError(error)
@@ -827,4 +821,4 @@ const reconnect = async () => {
   }
 }
 
-export { buildWsUrl, initWs, closeWs, normalizeWsMessages, isValidWsMessage, getWsDiagnostics }
+export { buildWsUrl, initWs, closeWs, normalizeWsMessages, getWsDiagnostics }

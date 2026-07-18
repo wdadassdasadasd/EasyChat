@@ -17,14 +17,15 @@ const ALLOWED_SEND_CHANNELS = new Set([
   'searchChatMessage',
   'SetLocalStore',
   'loginOrRegister',
-  'openChat',
-  'winTitleOp',
-  'reLogin'
+  'winTitleOp'
 ])
 
 const ALLOWED_INVOKE_CHANNELS = new Set([
   'saveSendMessage',
   'logout',
+  'startAuthenticatedSession',
+  'restoreAuthenticatedSession',
+  'getRuntimeDiagnostics',
   'getLocalFileFolder',
   'changeLocalFileFolder',
   'resetLocalFileFolder',
@@ -46,11 +47,13 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   'downloadChatFile',
   'cancelDownloadChatFile',
   'openDownloadedFile',
-  'showDownloadedFileInFolder'
+  'showDownloadedFileInFolder',
+  'getSyncCursor',
+  'applySyncEventsPage',
+  'applySyncSnapshot'
 ])
 
 const ALLOWED_LISTEN_CHANNELS = new Set([
-  'receiveMessage',
   'receiveMessageBatch',
   IPC_CALLBACK_CHANNELS.loadChatMessage,
   IPC_CALLBACK_CHANNELS.loadSessionData,
@@ -121,14 +124,8 @@ const api = {
   sendLoginOrRegister(isLogin) {
     electronAPI.ipcSend('loginOrRegister', isLogin)
   },
-  sendOpenChat(data) {
-    electronAPI.ipcSend('openChat', data)
-  },
   sendWinTitleOp(data) {
     electronAPI.ipcSend('winTitleOp', data)
-  },
-  sendReLogin() {
-    electronAPI.ipcSend('reLogin')
   },
 
   // --- Request-response (ipcRenderer.invoke) ---
@@ -137,6 +134,15 @@ const api = {
   },
   invokeLogout() {
     return electronAPI.ipcInvoke('logout')
+  },
+  invokeStartAuthenticatedSession(data) {
+    return electronAPI.ipcInvoke('startAuthenticatedSession', data)
+  },
+  invokeRestoreAuthenticatedSession() {
+    return electronAPI.ipcInvoke('restoreAuthenticatedSession')
+  },
+  invokeGetRuntimeDiagnostics() {
+    return electronAPI.ipcInvoke('getRuntimeDiagnostics')
   },
   invokeGetLocalFileFolder() {
     return electronAPI.ipcInvoke('getLocalFileFolder')
@@ -226,11 +232,29 @@ const api = {
   invokeShowDownloadedFileInFolder(data) {
     return electronAPI.ipcInvoke('showDownloadedFileInFolder', data)
   },
+  invokeGetSyncCursor() {
+    return electronAPI.ipcInvoke('getSyncCursor')
+  },
+  invokeApplySyncEventsPage(data) {
+    return electronAPI.ipcInvoke('applySyncEventsPage', data)
+  },
+  invokeApplySyncSnapshot(data) {
+    return electronAPI.ipcInvoke('applySyncSnapshot', data)
+  },
+  invokeGetSnapshotProgress() {
+    return electronAPI.ipcInvoke('getSnapshotProgress')
+  },
+  invokeApplySyncSnapshotPage(data) {
+    return electronAPI.ipcInvoke('applySyncSnapshotPage', data)
+  },
+  invokeGetPendingReadReceipts() {
+    return electronAPI.ipcInvoke('getPendingReadReceipts')
+  },
+  invokeAcknowledgeReadReceipt(data) {
+    return electronAPI.ipcInvoke('acknowledgeReadReceipt', data)
+  },
 
   // --- Event listeners ---
-  onReceiveMessage(listener) {
-    return electronAPI.ipcOn('receiveMessage', listener)
-  },
   onReceiveMessageBatch(listener) {
     return electronAPI.ipcOn('receiveMessageBatch', listener)
   },

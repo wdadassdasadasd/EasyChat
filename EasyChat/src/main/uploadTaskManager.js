@@ -14,12 +14,13 @@ import {
   getUploadTaskByMessageId,
   getUploadTaskByTaskId,
   listUploadTasksByStates,
-  saveUploadTask
+  saveUploadTask,
+  transitionUploadTask
 } from './db/UploadTaskModel.js'
 
 const TASK_STATES = Object.freeze({
   QUEUED: 'queued', UPLOADING: 'uploading', PAUSED: 'paused', FAILED: 'failed',
-  CANCELED: 'canceled', AWAITING_ACK: 'awaiting_ack', SUCCEEDED: 'succeeded'
+  CANCELED: 'canceled', CANCELING: 'canceling', AWAITING_ACK: 'awaiting_ack', SUCCEEDED: 'succeeded'
 })
 const MAX_CONCURRENT_UPLOADS = 2
 const RETRY_DELAYS = [0, 1000, 3000]
@@ -67,7 +68,7 @@ const getUploadedBytes = (uploaded, fileSize) => {
 }
 const request = async (context, path, data, { signal, multipart = false } = {}) => {
   const headers = { 'X-Requested-With': 'XMLHttpRequest' }
-  if (context.token) Object.assign(headers, { token: context.token, Authorization: `Bearer ${context.token}` })
+  if (context.token) headers.Authorization = `Bearer ${context.token}`
   const response = await axios.post(`${context.apiBaseUrl}${path}`, multipart ? data : new URLSearchParams(data), { signal, timeout: 30000, headers })
   if (response.data?.code !== 200) {
     const error = new Error(response.data?.info || 'Upload request failed')
@@ -86,10 +87,15 @@ const emitTask = (task, context) => {
     error: task.lastError || ''
   })
 }
-const persistAndEmit = async (task, patch, context) => {
-  const next = await saveUploadTask({ ...task, ...patch, userId: context.userId }, context.userId)
-  emitTask(next, context)
-  return next
+const persistAndEmit = async (task, allowedStates, patch, context) => {
+  const result = await transitionUploadTask({
+    taskId: task.taskId,
+    allowedStates,
+    patch: { ...patch, userId: context.userId }
+  }, context.userId)
+  if (!result.transitioned) return null
+  emitTask(result.task, context)
+  return result.task
 }
 const isRetryable = (error) => {
   const status = Number(error?.response?.status || 0)
@@ -125,15 +131,46 @@ const scheduleAckReconcile = (context, taskId, attempt = 0) => {
   const key = getTaskKey(context, taskId)
   const timer = setTimeout(() => {
     ackTimers.delete(key)
-    void reconcileAwaitingAckTask(context, taskId, attempt)
+    void reconcileTerminalTask(context, taskId, attempt)
   }, delay)
   ackTimers.set(key, { context, timer })
 }
-const reconcileAwaitingAckTask = async (context, taskId, attempt = 0) => {
+const settleTerminalTask = async (task, succeeded, error, context) => {
+  const terminalState = succeeded ? TASK_STATES.SUCCEEDED : task.state === TASK_STATES.CANCELING ? TASK_STATES.CANCELED : TASK_STATES.FAILED
+  const next = await persistAndEmit(
+    task,
+    [TASK_STATES.AWAITING_ACK, TASK_STATES.CANCELING],
+    { state: terminalState, lastError: succeeded ? '' : String(error || 'Server file processing failed') },
+    context
+  )
+  if (!next) return { settled: false }
+
+  clearAckReconcile(context, task.taskId)
+  await setUploadSourcePinned({ uploadSourceId: next.uploadSourceId, userId: context.userId, pinned: false })
+  const shouldRelease = succeeded || task.state === TASK_STATES.CANCELING
+  if (shouldRelease) {
+    await Promise.all([
+      releaseUploadSource({ uploadSourceId: next.uploadSourceId, userId: context.userId }),
+      next.coverSourceId
+        ? releaseUploadCover({ coverSourceId: next.coverSourceId, userId: context.userId })
+        : Promise.resolve()
+    ])
+    await deleteUploadTask(next.taskId, context.userId)
+  }
+  await context.onTerminalStatus?.({ messageId: next.messageId, succeeded, error: next.lastError })
+  return { settled: true, task: next, released: shouldRelease }
+}
+const reconcileTerminalTask = async (context, taskId, attempt = 0) => {
   if (!isActive(context)) return
   const task = await getUploadTaskByTaskId(taskId, context.userId)
-  if (!isActive(context) || task?.state !== TASK_STATES.AWAITING_ACK) return
+  if (!isActive(context) || ![TASK_STATES.AWAITING_ACK, TASK_STATES.CANCELING].includes(task?.state)) return
   try {
+    if (task.state === TASK_STATES.CANCELING) {
+      await request(context, '/chat/uploadFile/cancel', {
+        messageId: task.messageId,
+        uploadId: task.uploadId || ''
+      })
+    }
     const status = await request(context, '/chat/uploadFile/status', {
       messageId: task.messageId,
       uploadId: task.uploadId || ''
@@ -141,12 +178,11 @@ const reconcileAwaitingAckTask = async (context, taskId, attempt = 0) => {
     if (!isActive(context)) return
     if (status?.terminal) {
       const succeeded = Number(status.messageStatus) === 1 && !status.failed
-      await acknowledgeUploadTask({ messageId: task.messageId, succeeded, error: status.error })
-      await context.onTerminalStatus?.({ messageId: task.messageId, succeeded, error: status.error })
+      await settleTerminalTask(task, succeeded, status.error, context)
       return
     }
   } catch (error) {
-    console.warn('Failed to reconcile completed upload task', error)
+    console.warn('Failed to reconcile upload task terminal state', error)
   }
   if (isActive(context)) scheduleAckReconcile(context, taskId, attempt + 1)
 }
@@ -173,7 +209,8 @@ const runTask = async (initialTask, context) => {
     sourceResolved = true
     if (!isActive(context) || entry.invalidated) return
     const totalChunks = Math.ceil(source.size / MAX_CHUNK_SIZE)
-    task = await persistAndEmit(task, { state: TASK_STATES.UPLOADING, fileName: source.name || task.fileName, fileSize: source.size, totalChunks, lastError: '' }, context)
+    task = await persistAndEmit(task, [TASK_STATES.QUEUED], { state: TASK_STATES.UPLOADING, fileName: source.name || task.fileName, fileSize: source.size, totalChunks, lastError: '' }, context)
+    if (!task) return
     const init = await withRetry(() => request(context, '/chat/uploadFile/init', {
       messageId: task.messageId, fileName: task.fileName, fileSize: task.fileSize, fileType: task.fileType ?? '',
       totalChunks, chunkSize: MAX_CHUNK_SIZE, fileFingerprint: task.taskId
@@ -183,11 +220,12 @@ const runTask = async (initialTask, context) => {
     const uploadId = init?.uploadId
     if (!uploadId) throw new Error('Upload server did not return uploadId')
     const uploaded = normalizeUploadedChunks(init.uploadedChunks, totalChunks)
-    task = await persistAndEmit(task, {
+    task = await persistAndEmit(task, [TASK_STATES.UPLOADING], {
       uploadId,
       totalChunks,
       uploadedBytes: getUploadedBytes(uploaded, task.fileSize)
     }, context)
+    if (!task) return
     if (!init.completed) {
       for (let index = 0; index < totalChunks; index += 1) {
         if (uploaded.has(index)) continue
@@ -205,7 +243,8 @@ const runTask = async (initialTask, context) => {
         await withRetry(() => request(context, '/chat/uploadFile/chunk', form, { signal: controller.signal, multipart: true }), controller.signal)
         task = await getCurrentUploadingTask(task, context, attemptId)
         if (!task) return
-        task = await persistAndEmit(task, { uploadedBytes: end }, context)
+        task = await persistAndEmit(task, [TASK_STATES.UPLOADING], { uploadedBytes: end }, context)
+        if (!task) return
       }
       const completePayload = {
         uploadId,
@@ -238,7 +277,8 @@ const runTask = async (initialTask, context) => {
     }
     task = await getCurrentUploadingTask(task, context, attemptId)
     if (!task) return
-    task = await persistAndEmit(task, { state: TASK_STATES.AWAITING_ACK, uploadedBytes: task.fileSize, lastError: '' }, context)
+    task = await persistAndEmit(task, [TASK_STATES.UPLOADING], { state: TASK_STATES.AWAITING_ACK, uploadedBytes: task.fileSize, lastError: '' }, context)
+    if (!task) return
     scheduleAckReconcile(context, task.taskId)
   } catch (error) {
     const latest = await getUploadTaskByTaskId(initialTask.taskId, context.userId)
@@ -248,7 +288,13 @@ const runTask = async (initialTask, context) => {
       ownsAttempt &&
       (latest?.state === TASK_STATES.UPLOADING || (!sourceResolved && latest?.state === TASK_STATES.QUEUED))
     ) {
-      const failed = await persistAndEmit(latest, { state: TASK_STATES.FAILED, lastError: error?.message || 'Upload failed' }, context)
+      const failed = await persistAndEmit(
+        latest,
+        [TASK_STATES.UPLOADING, TASK_STATES.QUEUED],
+        { state: TASK_STATES.FAILED, lastError: error?.message || 'Upload failed' },
+        context
+      )
+      if (!failed) return
       if (!sourceResolved) {
         await setUploadSourcePinned({ uploadSourceId: failed.uploadSourceId, userId: context.userId, pinned: false })
         await context.onTerminalStatus?.({ messageId: failed.messageId, succeeded: false, error: failed.lastError })
@@ -264,10 +310,26 @@ const enqueueUploadTask = async ({ messageId, uploadSourceId, coverSourceId, fil
   if (!context) return { success: false, kind: 'not_logged_in', error: 'Upload context is unavailable' }
   const source = await getUploadSource(uploadSourceId, { userId: context.userId })
   const existing = await getUploadTaskByMessageId(messageId, context.userId)
+  if (existing && [TASK_STATES.QUEUED, TASK_STATES.UPLOADING, TASK_STATES.AWAITING_ACK, TASK_STATES.CANCELING].includes(existing.state)) {
+    return { success: true, taskId: existing.taskId, state: existing.state, reused: true }
+  }
   if (existing?.coverSourceId && coverSourceId && existing.coverSourceId !== coverSourceId) {
     await releaseUploadCover({ coverSourceId: existing.coverSourceId, userId: context.userId })
   }
-  const task = await saveUploadTask({ ...existing, userId: context.userId, taskId: existing?.taskId || randomUUID(), messageId, uploadSourceId, coverSourceId: coverSourceId || existing?.coverSourceId, fileName: String(fileName || source.name || ''), fileSize: Number(fileSize || source.size), fileType: Number(fileType), state: TASK_STATES.QUEUED, lastError: '' }, context.userId)
+  const patch = {
+    userId: context.userId,
+    uploadSourceId,
+    coverSourceId: coverSourceId || existing?.coverSourceId,
+    fileName: String(fileName || source.name || ''),
+    fileSize: Number(fileSize || source.size),
+    fileType: Number(fileType),
+    state: TASK_STATES.QUEUED,
+    lastError: ''
+  }
+  const task = existing
+    ? await persistAndEmit(existing, [TASK_STATES.PAUSED, TASK_STATES.FAILED], patch, context)
+    : await saveUploadTask({ ...patch, taskId: randomUUID(), messageId }, context.userId)
+  if (!task) return { success: false, kind: 'invalid_state', error: 'Upload task cannot be queued in its current state' }
   await setUploadSourcePinned({ uploadSourceId, userId: context.userId, pinned: true })
   emitTask(task, context); schedule(context)
   return { success: true, taskId: task.taskId, state: task.state }
@@ -282,7 +344,8 @@ const pauseUploadTask = async ({ messageId } = {}) => {
     entry.invalidated = true
     entry.controller.abort()
   }
-  const next = await persistAndEmit(task, { state: TASK_STATES.PAUSED }, context)
+  const next = await persistAndEmit(task, [TASK_STATES.QUEUED, TASK_STATES.UPLOADING], { state: TASK_STATES.PAUSED }, context)
+  if (!next) return { success: false, kind: 'invalid_state', error: 'Upload task cannot be paused in its current state' }
   return { success: true, taskId: next.taskId, state: next.state }
 }
 const resumeUploadTask = async ({ messageId } = {}) => {
@@ -293,7 +356,8 @@ const resumeUploadTask = async ({ messageId } = {}) => {
   if (![TASK_STATES.PAUSED, TASK_STATES.FAILED].includes(task.state)) {
     return { success: false, kind: 'invalid_state', error: 'Upload task cannot be resumed in its current state' }
   }
-  const next = await persistAndEmit(task, { state: TASK_STATES.QUEUED, lastError: '' }, context)
+  const next = await persistAndEmit(task, [TASK_STATES.PAUSED, TASK_STATES.FAILED], { state: TASK_STATES.QUEUED, lastError: '' }, context)
+  if (!next) return { success: false, kind: 'invalid_state', error: 'Upload task cannot be resumed in its current state' }
   schedule(context); return { success: true, taskId: next.taskId, state: next.state }
 }
 const cancelUploadTask = async ({ messageId } = {}) => {
@@ -306,40 +370,26 @@ const cancelUploadTask = async ({ messageId } = {}) => {
     entry.invalidated = true
     entry.controller.abort()
   }
-  const next = await persistAndEmit(task, { state: TASK_STATES.CANCELED }, context)
+  const next = await persistAndEmit(
+    task,
+    [TASK_STATES.QUEUED, TASK_STATES.UPLOADING, TASK_STATES.PAUSED, TASK_STATES.FAILED, TASK_STATES.AWAITING_ACK],
+    { state: TASK_STATES.CANCELING, lastError: '' },
+    context
+  )
+  if (!next) return { success: false, kind: 'invalid_state', error: 'Upload task cannot be canceled in its current state' }
   clearAckReconcile(context, task.taskId)
-  await setUploadSourcePinned({ uploadSourceId: task.uploadSourceId, userId: context.userId, pinned: false })
-  if (task.uploadId && isActive(context)) void request(context, '/chat/uploadFile/cancel', { messageId: task.messageId, uploadId: task.uploadId }).catch(() => {})
-  await Promise.all([
-    releaseUploadSource({ uploadSourceId: task.uploadSourceId, userId: context.userId }),
-    task.coverSourceId
-      ? releaseUploadCover({ coverSourceId: task.coverSourceId, userId: context.userId })
-      : Promise.resolve()
-  ])
-  await deleteUploadTask(task.taskId, context.userId)
-  return { success: true, taskId: next.taskId, state: next.state }
+  await reconcileTerminalTask(context, next.taskId)
+  const latest = await getUploadTaskByTaskId(next.taskId, context.userId)
+  return { success: true, taskId: next.taskId, state: latest?.state || TASK_STATES.CANCELED }
 }
 const acknowledgeUploadTask = async ({ messageId, succeeded, error } = {}) => {
   const context = getActiveContext()
   if (!context) return { success: false, kind: 'not_logged_in', error: 'Upload context is unavailable' }
   const task = await getUploadTaskByMessageId(messageId, context.userId)
   if (!task) return { success: true, acknowledged: false }
-  if ([TASK_STATES.SUCCEEDED, TASK_STATES.CANCELED].includes(task.state)) {
-    return { success: true, acknowledged: false }
-  }
-  const next = await persistAndEmit(task, { state: succeeded ? TASK_STATES.SUCCEEDED : TASK_STATES.FAILED, lastError: succeeded ? '' : String(error || 'Server file processing failed') }, context)
-  clearAckReconcile(context, task.taskId)
-  await setUploadSourcePinned({ uploadSourceId: task.uploadSourceId, userId: context.userId, pinned: false })
-  if (succeeded) {
-    await Promise.all([
-      releaseUploadSource({ uploadSourceId: task.uploadSourceId, userId: context.userId }),
-      task.coverSourceId
-        ? releaseUploadCover({ coverSourceId: task.coverSourceId, userId: context.userId })
-        : Promise.resolve()
-    ])
-    await deleteUploadTask(task.taskId, context.userId)
-  }
-  return { success: true, acknowledged: true, taskId: next.taskId, state: next.state }
+  const result = await settleTerminalTask(task, succeeded, error, context)
+  if (!result.settled) return { success: true, acknowledged: false }
+  return { success: true, acknowledged: true, taskId: result.task.taskId, state: result.task.state }
 }
 const cleanupExpiredFailedTasks = async (context) => {
   const cutoff = Date.now() - FAILED_TASK_RETENTION_MS
@@ -368,13 +418,21 @@ const resumePersistedUploadTasks = async ({ onTerminalStatus } = {}) => {
   if (!context) return { protectedMessageIds: [] }
   context.onTerminalStatus = onTerminalStatus || context.onTerminalStatus
   await cleanupExpiredFailedTasks(context)
-  const tasks = await listUploadTasksByStates([TASK_STATES.UPLOADING, TASK_STATES.QUEUED, TASK_STATES.PAUSED, TASK_STATES.AWAITING_ACK], context.userId)
+  const tasks = await listUploadTasksByStates([
+    TASK_STATES.UPLOADING,
+    TASK_STATES.QUEUED,
+    TASK_STATES.PAUSED,
+    TASK_STATES.AWAITING_ACK,
+    TASK_STATES.CANCELING
+  ], context.userId)
   const protectedMessageIds = tasks.map((task) => task.messageId)
   for (const task of tasks) {
     await setUploadSourcePinned({ uploadSourceId: task.uploadSourceId, userId: context.userId, pinned: true })
-    if (task.state === TASK_STATES.UPLOADING) await persistAndEmit(task, { state: TASK_STATES.QUEUED }, context)
-    if (task.state === TASK_STATES.AWAITING_ACK) {
-      await reconcileAwaitingAckTask(context, task.taskId)
+    if (task.state === TASK_STATES.UPLOADING) {
+      await persistAndEmit(task, [TASK_STATES.UPLOADING], { state: TASK_STATES.QUEUED }, context)
+    }
+    if ([TASK_STATES.AWAITING_ACK, TASK_STATES.CANCELING].includes(task.state)) {
+      await reconcileTerminalTask(context, task.taskId)
     }
   }
   schedule(context)
@@ -397,7 +455,17 @@ const deactivateUploadTasks = async () => {
   for (const entry of activeControllers.values()) if (entry.context.generation === previous.generation) entry.controller.abort()
   clearAckReconcilesForGeneration(previous.generation)
   const tasks = previous.userId ? await listUploadTasksByStates([TASK_STATES.UPLOADING, TASK_STATES.QUEUED], previous.userId) : []
-  await Promise.all(tasks.map((task) => saveUploadTask({ ...task, state: TASK_STATES.QUEUED }, previous.userId)))
+  await Promise.all(tasks.map((task) => transitionUploadTask({
+    taskId: task.taskId,
+    allowedStates: [TASK_STATES.UPLOADING, TASK_STATES.QUEUED],
+    patch: { state: TASK_STATES.QUEUED }
+  }, previous.userId)))
 }
 const setUploadTaskEventTarget = (eventTarget) => { if (runtime.userId) runtime = { ...runtime, eventTarget } }
-export { TASK_STATES, acknowledgeUploadTask, activateUploadTasks, cancelUploadTask, deactivateUploadTasks, enqueueUploadTask, pauseUploadTask, resumePersistedUploadTasks, resumeUploadTask, setUploadTaskEventTarget }
+const getUploadTaskDiagnostics = () => ({
+  activeUploadCount: getActiveCount(runtime),
+  pendingAckCount: [...ackTimers.values()].filter((entry) => entry.context.generation === runtime.generation)
+    .length,
+  active: Boolean(runtime.userId)
+})
+export { TASK_STATES, acknowledgeUploadTask, activateUploadTasks, cancelUploadTask, deactivateUploadTasks, enqueueUploadTask, getUploadTaskDiagnostics, pauseUploadTask, resumePersistedUploadTasks, resumeUploadTask, setUploadTaskEventTarget }

@@ -9,6 +9,7 @@ import {
   runStrict
 } from './ADB'
 import { MAX_SQL_IN_PARAMS } from '../constants'
+import { isV2EventEnvelope } from '../../shared/v2EventTypes'
 const MESSAGE_PAGE_SIZE = 20
 const MESSAGE_CONTEXT_SIZE = 20
 const MESSAGE_SEARCH_LIMIT = 50
@@ -491,6 +492,199 @@ const saveMessageBatch = async (
   })
 }
 
+/**
+ * Applies V2 messages exactly once. The processed marker and cursor advance are
+ * committed with the message/session write, so a SQLite failure cannot create a
+ * false acknowledgement cursor.
+ */
+const applyV2Events = async (events = []) => {
+  if (!Array.isArray(events)) throw new Error('events must be an array')
+  for (const event of events) {
+    if (!isV2EventEnvelope(event)) {
+      // Do not acknowledge an event the installed client cannot interpret.
+      throw new Error('Unsupported or malformed V2 event')
+    }
+  }
+  if (!events.length) return { savedMessages: [], nextCursor: null, stateChanged: false, mediaUpdates: [], eventTypes: [] }
+  return runInTransaction(async () => {
+    const userId = store.getUserId()
+    const unseen = []
+    const mediaUpdates = []
+    const eventTypes = new Set()
+    let maxSequence = 0
+    let stateChanged = false
+    for (const event of events) {
+      const sequence = Number(event.serverSequence)
+      const seen = await queryOne(
+        'select event_id from processed_event where user_id=? and event_id=?',
+        [userId, event.eventId]
+      )
+      maxSequence = Math.max(maxSequence, sequence)
+      if (seen) continue
+      eventTypes.add(event.type)
+      await runStrict(
+        'insert into processed_event(user_id,event_id,server_sequence,processed_at) values(?,?,?,?)',
+        [userId, event.eventId, sequence, Date.now()]
+      )
+      const payload = { ...(event.payload || {}) }
+      // The durable direct-message target is the recipient.  SQLite stores
+      // the peer as contactId for the receiving account, regardless of
+      // whether the event arrived over WS or the HTTP compensation path.
+      if (Number(payload.contactType) === 0 && payload.sendUserId !== userId) {
+        payload.contactId = payload.sendUserId
+      }
+      if (event.type === 'MESSAGE_UPSERT' && payload.messageId) {
+        unseen.push(payload)
+      } else if (event.type === 'MEDIA_STATUS' && payload.messageId) {
+        await updateMessageStatus(payload.messageId, payload.status ?? 0)
+        mediaUpdates.push(payload)
+        stateChanged = true
+      } else {
+        stateChanged = true
+      }
+    }
+    const result = unseen.length ? await saveMessageBatch(unseen) : { savedMessages: [] }
+    if (maxSequence > 0) {
+      await runStrict(
+        'insert into sync_cursor(user_id,server_sequence,updated_at) values(?,?,?) on conflict(user_id) do update set server_sequence=max(sync_cursor.server_sequence,excluded.server_sequence),updated_at=excluded.updated_at',
+        [userId, maxSequence, Date.now()]
+      )
+    }
+    return {
+      savedMessages: result.savedMessages || [],
+      nextCursor: maxSequence || null,
+      stateChanged,
+      mediaUpdates,
+      eventTypes: Array.from(eventTypes)
+    }
+  })
+}
+
+const getSyncCursor = async () => {
+  const row = await queryOne('select server_sequence from sync_cursor where user_id=?', [
+    store.getUserId()
+  ])
+  return Number(row?.serverSequence || 0)
+}
+
+const applyUnreadSnapshot = async (snapshot = {}) => {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return
+  for (const [contactId, count] of Object.entries(snapshot)) {
+    if (!contactId || !Number.isFinite(Number(count)) || Number(count) < 0) continue
+    await runStrict('update chat_session_user set no_read_count=? where user_id=? and contact_id=?', [
+      Math.floor(Number(count)),
+      store.getUserId(),
+      contactId
+    ])
+  }
+}
+
+const applyV2SyncPage = async ({ events = [], nextCursor, unreadSnapshot = {} } = {}) => {
+  if (!Number.isSafeInteger(Number(nextCursor)) || Number(nextCursor) < 0) {
+    throw new Error('nextCursor must be a non-negative safe integer')
+  }
+  return runInTransaction(async () => {
+    const result = await applyV2Events(events)
+    await applyUnreadSnapshot(unreadSnapshot)
+    const currentCursor = await getSyncCursor()
+    const cursor = Math.max(currentCursor, Number(nextCursor))
+    await runStrict(
+      'insert into sync_cursor(user_id,server_sequence,updated_at) values(?,?,?) on conflict(user_id) do update set server_sequence=excluded.server_sequence,updated_at=excluded.updated_at',
+      [store.getUserId(), cursor, Date.now()]
+    )
+    return {
+      success: true,
+      savedMessages: result.savedMessages || [],
+      nextCursor: cursor,
+      stateChanged: result.stateChanged,
+      mediaUpdates: result.mediaUpdates || [],
+      eventTypes: result.eventTypes || []
+    }
+  })
+}
+
+const applyV2Snapshot = async ({ sessions = [], messages = [], cursor, unreadSnapshot = {} } = {}) => {
+  if (!Number.isSafeInteger(Number(cursor)) || Number(cursor) < 0) {
+    throw new Error('cursor must be a non-negative safe integer')
+  }
+  return runInTransaction(async () => {
+    const userId = store.getUserId()
+    await runStrict('delete from processed_event where user_id=?', [userId])
+    for (const session of sessions) {
+      if (!session?.contactId) continue
+      await upsertChatSessionPreservingState({ ...session, userId, noReadCount: 0, status: 1 })
+    }
+    const result = await saveMessageBatch(messages, { incrementUnread: false })
+    await applyUnreadSnapshot(unreadSnapshot)
+    await runStrict(
+      'insert into sync_cursor(user_id,server_sequence,updated_at) values(?,?,?) on conflict(user_id) do update set server_sequence=excluded.server_sequence,updated_at=excluded.updated_at',
+      [userId, Number(cursor), Date.now()]
+    )
+    return { success: true, savedMessages: result.savedMessages || [], nextCursor: Number(cursor) }
+  })
+}
+
+const getSnapshotProgress = async () =>
+  queryOne('select snapshot_id,snapshot_cursor,next_session_cursor from snapshot_progress where user_id=?', [
+    store.getUserId()
+  ])
+
+const applyV2SnapshotPage = async ({
+  snapshotId,
+  snapshotCursor,
+  nextSessionCursor = null,
+  hasMore,
+  sessions = [],
+  messages = [],
+  unreadSnapshot = {}
+} = {}) => {
+  if (!snapshotId || !Number.isSafeInteger(Number(snapshotCursor)) || Number(snapshotCursor) < 0) {
+    throw new Error('invalid snapshot page')
+  }
+  return runInTransaction(async () => {
+    const userId = store.getUserId()
+    const prior = await getSnapshotProgress()
+    if (prior && prior.snapshotId !== snapshotId) {
+      await runStrict('delete from snapshot_stage_session where user_id=?', [userId])
+      await runStrict('delete from snapshot_stage_message where user_id=?', [userId])
+    }
+    for (const session of sessions) {
+      if (!session?.contactId) continue
+      await runStrict('insert or replace into snapshot_stage_session(user_id,snapshot_id,contact_id,payload) values(?,?,?,?)', [
+        userId, snapshotId, session.contactId, JSON.stringify(session)
+      ])
+    }
+    for (const message of messages) {
+      if (message?.messageId == null) continue
+      await runStrict('insert or replace into snapshot_stage_message(user_id,snapshot_id,message_id,payload) values(?,?,?,?)', [
+        userId, snapshotId, message.messageId, JSON.stringify(message)
+      ])
+    }
+    await runStrict('insert or replace into snapshot_progress(user_id,snapshot_id,snapshot_cursor,next_session_cursor,updated_at) values(?,?,?,?,?)', [
+      userId, snapshotId, Number(snapshotCursor), nextSessionCursor, Date.now()
+    ])
+    if (hasMore) return { success: true, complete: false, nextSessionCursor }
+    const stagedSessions = (await queryAll('select payload from snapshot_stage_session where user_id=? and snapshot_id=?', [userId, snapshotId]))
+      .map((row) => JSON.parse(row.payload))
+    const stagedMessages = (await queryAll('select payload from snapshot_stage_message where user_id=? and snapshot_id=?', [userId, snapshotId]))
+      .map((row) => JSON.parse(row.payload))
+    const visibleIds = new Set(stagedSessions.map((item) => item.contactId))
+    const current = await queryAll('select contact_id from chat_session_user where user_id=?', [userId])
+    for (const row of current) {
+      if (!visibleIds.has(row.contactId)) await runStrict('update chat_session_user set status=0 where user_id=? and contact_id=?', [userId, row.contactId])
+    }
+    for (const session of stagedSessions) await upsertChatSessionPreservingState({ ...session, userId, status: 1, noReadCount: 0 })
+    const result = await saveMessageBatch(stagedMessages, { incrementUnread: false })
+    await applyUnreadSnapshot(unreadSnapshot)
+    await runStrict('delete from processed_event where user_id=?', [userId])
+    await runStrict('insert or replace into sync_cursor(user_id,server_sequence,updated_at) values(?,?,?)', [userId, Number(snapshotCursor), Date.now()])
+    await runStrict('delete from snapshot_stage_session where user_id=?', [userId])
+    await runStrict('delete from snapshot_stage_message where user_id=?', [userId])
+    await runStrict('delete from snapshot_progress where user_id=?', [userId])
+    return { success: true, complete: true, savedMessages: result.savedMessages || [], nextCursor: Number(snapshotCursor) }
+  })
+}
+
 const isCurrentUserMessageFilePath = async (filePath) => {
   if (!filePath) {
     return false
@@ -766,6 +960,12 @@ export {
   savePendingMessage,
   replacePendingMessage,
   saveMessageBatch,
+  applyV2Events,
+  applyV2Snapshot,
+  applyV2SnapshotPage,
+  applyV2SyncPage,
+  getSnapshotProgress,
+  getSyncCursor,
   isCurrentUserMessageFilePath,
   updateMessageStatus,
   updateLocalMessageStatus,

@@ -49,9 +49,9 @@ describe('preload API bridge', () => {
     )
   })
 
-  it('strips IpcRendererEvent and returns an exact unsubscribe function', () => {
+  it('strips IpcRendererEvent and returns an exact V2 batch unsubscribe function', () => {
     const listener = vi.fn()
-    const unsubscribe = api.onReceiveMessage(listener)
+    const unsubscribe = api.onReceiveMessageBatch(listener)
     const wrappedListener = electronMocks.ipcRenderer.on.mock.calls.at(-1)[1]
     const event = { sender: { send: vi.fn() } }
     const payload = { messageId: 10 }
@@ -63,7 +63,7 @@ describe('preload API bridge', () => {
 
     unsubscribe()
     expect(electronMocks.ipcRenderer.removeListener).toHaveBeenCalledWith(
-      'receiveMessage',
+      'receiveMessageBatch',
       wrappedListener
     )
   })

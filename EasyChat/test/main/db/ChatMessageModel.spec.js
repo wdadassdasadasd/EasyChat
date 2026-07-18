@@ -120,7 +120,7 @@ describe('ChatMessageModel saveMessageBatch', () => {
     })
   })
 
-  it('does not increment unread while backfilling INIT recent messages', async () => {
+  it('does not increment unread when a recovery page supplies authoritative counts', async () => {
     const { saveMessageBatch } = await import('../../../src/main/db/ChatMessageModel')
 
     await saveMessageBatch(

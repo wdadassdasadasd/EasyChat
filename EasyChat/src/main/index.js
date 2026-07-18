@@ -1,5 +1,6 @@
 import { app, dialog, shell, BrowserWindow, Menu, Tray } from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import {
@@ -21,13 +22,17 @@ import {
   onClearChatMessage,
   onSearchChatMessage,
   onUploadSources,
-  onUploadTasks
+  onUploadTasks,
+  onRuntimeDiagnostics,
+  onEventSync
 } from './ipc.js'
 import { dbReady } from './db/ADB.js'
 import { initializeLogger } from './logger.js'
 import { cleanupExpiredTempVideos } from './tempVideoFiles.js'
 import { openExternalHttpUrl, restoreOrCreateMainWindow } from './windowLifecycle.js'
 import { closeWs } from './wsClient.js'
+import store from './store.js'
+import { configureTrustedRendererUrl, isTrustedRendererUrl } from './ipcSecurity.js'
 
 initializeLogger()
 
@@ -61,6 +66,21 @@ function createWindow() {
     }
   })
 
+  const rendererUrl =
+    is.dev && process.env['ELECTRON_RENDERER_URL']
+      ? process.env['ELECTRON_RENDERER_URL']
+      : pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  configureTrustedRendererUrl(rendererUrl)
+
+  // Desktop chat does not need Chromium-granted device permissions.  Keep the
+  // default deny policy explicit so a future renderer feature cannot silently
+  // acquire camera, microphone, notification, display-capture or geolocation
+  // access through a compromised page.
+  mainWindow.webContents.session.setPermissionCheckHandler(() => false)
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false)
+  })
+
   if (NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools()
   }
@@ -83,13 +103,14 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  const preventUntrustedNavigation = (event, url) => {
+    if (!isTrustedRendererUrl(url)) {
+      event.preventDefault()
+      console.warn('Blocked untrusted renderer navigation', url)
+    }
   }
+  mainWindow.webContents.on('will-navigate', preventUntrustedNavigation)
+  mainWindow.webContents.on('will-redirect', preventUntrustedNavigation)
 
   //托盘
   const tray = new Tray(icon)
@@ -158,9 +179,6 @@ function createWindow() {
         hasUserTrayMenu = false
         tray.setContextMenu(Menu.buildFromTemplate(contextMenu))
       }
-      mainWindow.webContents
-        .executeJavaScript("localStorage.removeItem('userInfo'); window.location.hash = '#/login';")
-        .catch(() => {})
     })
 
     onSetLocalStore()
@@ -179,6 +197,8 @@ function createWindow() {
     onChatFileDownload()
     onUploadSources()
     onUploadTasks()
+    onRuntimeDiagnostics()
+    onEventSync()
 
     winTitleOp((e, { action, data }) => {
       const webContents = e.sender
@@ -215,6 +235,15 @@ function createWindow() {
       }
     })
   } // end if (!ipcHandlersRegistered)
+
+  // Register every trusted IPC handler before renderer code can issue its
+  // first restore or diagnostics invoke. Otherwise an early invoke is lost
+  // forever because Electron has no handler-side request queue.
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(rendererUrl)
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
 }
 
 // This method will be called when Electron has finished
@@ -223,6 +252,8 @@ function createWindow() {
 app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
+  // 旧版本把 token 以可逆混淆形式保存；安全升级后不迁移该数据，要求重新登录。
+  store.clearLegacyTokenData()
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.

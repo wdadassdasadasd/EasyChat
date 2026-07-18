@@ -17,6 +17,7 @@ export const useChatMessages = ({
   loadChatSession,
   markSessionRead,
   messageListRef,
+  onResyncRequired,
   patchChatSessions,
   proxy
 }) => {
@@ -110,11 +111,6 @@ export const useChatMessages = ({
     const shouldStickToBottom = isNearMessageBottom()
 
     messages.forEach((message) => {
-      if (message.messageType == 6) {
-        handleFileUploadDone(message)
-        return
-      }
-
       const receiveContactId = getReceiveContactId(message)
       const isCurrentSession =
         message.sessionId == currentChatSession.value.sessionId ||
@@ -143,12 +139,34 @@ export const useChatMessages = ({
   const recoverReceiveResync = (payload = {}) => {
     patchChatSessions(payload.sessions || [])
     loadChatSession?.()
+    // The main process never exposes SQLite to the renderer.  Ask the page
+    // owner to run the durable HTTP/IPC recovery path before refreshing UI.
+    // A rejected recovery intentionally leaves the current local view intact.
+    Promise.resolve(onResyncRequired?.(payload)).catch((error) => {
+      console.error('incremental event recovery failed', error)
+    })
     if (currentChatSession.value?.sessionId) {
       messageHistory.loadChatMessage({ refreshTail: true })
     }
   }
 
+  // Every path (WS or HTTP compensation) reaches this point only after the
+  // main process committed the SQLite transaction.  This prevents a renderer
+  // refresh from observing an event whose cursor/processed marker was rolled
+  // back and keeps V2 side effects consistent across reconnects.
+  const applyPersistedV2Result = (payload = {}) => {
+    handleReceiveMessages(
+      Array.isArray(payload.messages) ? payload.messages : payload.savedMessages || [],
+      Array.isArray(payload.sessions) ? payload.sessions : []
+    )
+    for (const update of Array.isArray(payload.mediaUpdates) ? payload.mediaUpdates : []) {
+      handleFileUploadDone(update)
+    }
+    if (payload.stateChanged) loadChatSession()
+  }
+
   const messageSubscriptions = createMessageSubscriptionController({
+    applyPersistedV2Result,
     handleFileUploadDone,
     handleReceiveMessages,
     loadChatSession,
@@ -182,6 +200,7 @@ export const useChatMessages = ({
     onSendImageMessage,
     onSendVideoMessage,
     cancelUploadMessage,
+    applyPersistedV2Result,
     toggleUploadPause,
     registerMessageListeners,
     retryFailedMessage,
