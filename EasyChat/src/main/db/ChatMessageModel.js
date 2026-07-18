@@ -411,6 +411,24 @@ const toSendSessionInfo = ({ message = {}, chatSession = {} } = {}) => {
   }
 }
 
+// V2 MESSAGE_UPSERT events do not require a separate session event to make a
+// received message visible.  Derive the same minimal session summary that the
+// legacy WebSocket path writes, keeping the message, its summary and unread
+// count in one transaction.
+const getLatestSessionRowsForMessages = (messages = []) => {
+  const sessions = new Map()
+  for (const message of messages) {
+    const session = toSendSessionInfo({ message })
+    if (!session?.contactId) continue
+    const key = String(session.contactId)
+    const previous = sessions.get(key)
+    if (!previous || Number(session.lastReceiveTime || 0) >= Number(previous.lastReceiveTime || 0)) {
+      sessions.set(key, session)
+    }
+  }
+  return Array.from(sessions.values())
+}
+
 const savePendingMessage = async ({ message, chatSession } = {}) => {
   if (!message?.messageId) {
     return {
@@ -609,7 +627,11 @@ const applyV2Events = async (events = []) => {
         stateChanged = true
       }
     }
-    const result = unseen.length ? await saveMessageBatch(unseen) : { savedMessages: [] }
+    const result = unseen.length
+      ? await saveMessageBatch(unseen, {
+          sessionRows: getLatestSessionRowsForMessages(unseen)
+        })
+      : { savedMessages: [] }
     if (maxSequence > 0) {
       await runStrict(
         'insert into sync_cursor(user_id,server_sequence,updated_at) values(?,?,?) on conflict(user_id) do update set server_sequence=max(sync_cursor.server_sequence,excluded.server_sequence),updated_at=excluded.updated_at',

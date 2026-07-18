@@ -52,6 +52,8 @@ export const createMediaUploadAckController = ({
       uploading: false,
       uploadError: ackSucceeded ? '' : ackError,
       uploadCanceled: false,
+      uploadAwaitingAck: false,
+      uploadWaitingNetwork: false,
       uploadAckReceived: true,
       uploadAckRevision: ackRevision,
       uploadAckStatus: ackStatus
@@ -88,7 +90,7 @@ export const createMediaUploadAckController = ({
   }
 
   const cancelUploadMessage = (message = {}) => {
-    if (!message.messageId || (!message.uploading && !message.uploadPaused)) return
+    if (!message.messageId || (!message.uploading && !message.uploadPaused && !message.uploadWaitingNetwork)) return
     coordinator.getController(message.messageId)?.abort()
     Object.assign(message, { uploadCanceled: true, uploadPaused: false })
     updateMessageById?.(message.messageId, { uploadCanceled: true })
@@ -131,7 +133,9 @@ export const createMediaUploadAckController = ({
         uploadProgress: 100,
         uploadError: '',
         uploadCanceled: false,
-        uploadPaused: false
+        uploadPaused: false,
+        uploadAwaitingAck: false,
+        uploadWaitingNetwork: false
       }
       Object.assign(message, patch)
       updateMessageById?.(message.messageId, patch)
@@ -141,15 +145,49 @@ export const createMediaUploadAckController = ({
       return
     }
     if (payload.state === 'failed') {
+      message.uploadAwaitingAck = false
+      message.uploadWaitingNetwork = false
       lifecycle
         .markMessageFailed(message, payload.error || '文件上传失败，请重试。')
         .catch((error) => console.error('save failed upload task status failed', error))
       return
     }
     if (payload.state === 'canceled') {
+      message.uploadAwaitingAck = false
+      message.uploadWaitingNetwork = false
       lifecycle
         .markMessageFailed(message, '文件上传已取消。')
         .catch((error) => console.error('save canceled media status failed', error))
+      return
+    }
+    if (payload.state === 'awaiting_ack') {
+      const patch = {
+        status: 2,
+        uploading: false,
+        uploadProgress: 99,
+        uploadError: '文件已上传，等待服务端确认。',
+        uploadCanceled: false,
+        uploadPaused: false,
+        uploadAwaitingAck: true,
+        uploadWaitingNetwork: false
+      }
+      Object.assign(message, patch)
+      updateMessageById?.(message.messageId, patch)
+      return
+    }
+    if (payload.state === 'waiting_network') {
+      const patch = {
+        status: 2,
+        uploading: false,
+        uploadProgress: progress,
+        uploadError: '文件服务不可达，等待网络恢复。',
+        uploadCanceled: false,
+        uploadPaused: false,
+        uploadAwaitingAck: false,
+        uploadWaitingNetwork: true
+      }
+      Object.assign(message, patch)
+      updateMessageById?.(message.messageId, patch)
       return
     }
     const paused = payload.state === 'paused'
@@ -159,7 +197,9 @@ export const createMediaUploadAckController = ({
       uploadProgress: progress,
       uploadError: paused ? '上传已暂停。' : '',
       uploadCanceled: false,
-      uploadPaused: paused
+      uploadPaused: paused,
+      uploadAwaitingAck: false,
+      uploadWaitingNetwork: false
     }
     Object.assign(message, patch)
     updateMessageById?.(message.messageId, patch)

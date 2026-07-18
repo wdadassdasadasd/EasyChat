@@ -10,3 +10,5 @@ cookies.txt
 .vscode/
 .agents/
 AGENTS.md
+.runtime/
+EasyChat/test-results/

@@ -138,6 +138,24 @@ describe('useChatMessages receive flow', () => {
     })
   })
 
+  it('does not treat a colliding contact ID from another session type as current', () => {
+    const { chat, handlers, markSessionRead } = createHarness()
+    const collidingGroupMessage = {
+      messageId: 3,
+      sessionId: 'group_2',
+      contactId: 'u2',
+      contactType: 1,
+      messageType: 2,
+      messageContent: 'group message',
+      sendUserId: 'u3'
+    }
+
+    handlers.receiveMessageBatch({ messages: [collidingGroupMessage] })
+
+    expect(chat.messageList.value).toEqual([])
+    expect(markSessionRead).not.toHaveBeenCalled()
+  })
+
   it('ignores expired or wrong-session message page callbacks', async () => {
     const { chat, currentChatSession, handlers } = createHarness()
     currentChatSession.value = { contactId: 'u2', sessionId: 's1', contactType: 0 }
@@ -223,6 +241,27 @@ describe('useChatMessages receive flow', () => {
       expect.objectContaining({
         sessionId: 's1'
       })
+    )
+  })
+
+  it('treats equal contact IDs with different session types as distinct conversations', () => {
+    const { chat, currentChatSession, window } = createHarness()
+    chat.messageList.value = [{ messageId: 1, sessionId: 's1', messageContent: 'direct history' }]
+
+    chat.chatSessionClickHandler({
+      contactId: 'u2',
+      contactType: 1,
+      sessionId: 'group_2'
+    })
+
+    expect(currentChatSession.value).toMatchObject({
+      contactId: 'u2',
+      contactType: 1,
+      sessionId: 'group_2'
+    })
+    expect(chat.messageList.value).toEqual([])
+    expect(window.api.sendLoadChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'group_2' })
     )
   })
 

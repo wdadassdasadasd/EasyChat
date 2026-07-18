@@ -307,6 +307,30 @@ describe('useChatSessions', () => {
   })
 
   describe('loadSessionDataHandler merge', () => {
+    it('renders local sessions before deferred profile resolution completes', async () => {
+      const { handlers, proxy, sessions } = createHarness()
+      sessions.registerSessionListener()
+      let resolveProfile
+      proxy.Request.mockReturnValue(
+        new Promise((resolve) => {
+          resolveProfile = resolve
+        })
+      )
+
+      handlers.loadSessionDataCallback([
+        { contactId: 'g2', contactType: 1, sessionId: 's3', lastReceiveTime: 300, status: 1 }
+      ])
+
+      expect(sessions.chatSessionList.value.find((session) => session.contactId === 'g2')).toBeTruthy()
+      resolveProfile({ data: { groupInfo: { groupName: '延迟群', memberCount: 5 } } })
+      await vi.waitFor(() =>
+        expect(sessions.chatSessionList.value.find((session) => session.contactId === 'g2')).toMatchObject({
+          contactName: '延迟群',
+          memberCount: 5
+        })
+      )
+    })
+
     it('uses DB noReadCount when it is higher than memory', async () => {
       const { handlers, sessions } = createHarness()
       sessions.registerSessionListener()

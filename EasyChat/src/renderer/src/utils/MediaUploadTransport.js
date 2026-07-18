@@ -136,9 +136,6 @@ export const uploadMediaFile = async ({
     return await request({
       url: proxy.Api.uploadFile,
       params: { messageId: message.messageId, file: uploadFile, cover },
-      uploadProgressCallback: (event) => {
-        if (event?.total) reportProgress(onProgress, (event.loaded / event.total) * 100)
-      },
       showLoading: false,
       returnError: true,
       timeout: getUploadChunkTimeout(fileSize)
@@ -214,12 +211,6 @@ export const uploadMediaFile = async ({
               chunkResult = await request({
                 url: proxy.Api.uploadFileChunk,
                 params: { uploadId, messageId: message.messageId, chunkIndex, totalChunks, chunk },
-                uploadProgressCallback: (event) => {
-                  reportProgress(
-                    onProgress,
-                    ((uploadedBytes + Number(event?.loaded || 0)) / fileSize) * 100
-                  )
-                },
                 showLoading: false,
                 returnError: true,
                 timeout: getUploadChunkTimeout(end - start)

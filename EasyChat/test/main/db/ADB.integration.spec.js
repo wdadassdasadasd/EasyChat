@@ -248,6 +248,42 @@ describe.sequential('ADB schema migrations against SQLite', () => {
     await adb.closeDatabase()
   })
 
+  it('creates the session summary and unread count with a received V2 message', async () => {
+    const root = createRoot()
+    const { adb, chatMessageModel } = await loadChatMessageModel(root)
+    const result = await chatMessageModel.applyV2Events([
+      {
+        version: 2,
+        eventId: 'message-event-1',
+        serverSequence: 8,
+        occurredAt: 1700000000001,
+        type: 'MESSAGE_UPSERT',
+        payload: {
+          messageId: 101,
+          sessionId: 'direct-u2',
+          contactId: 'u1',
+          contactType: 0,
+          messageType: 2,
+          messageContent: 'hello from u2',
+          sendUserId: 'u2',
+          sendTime: 1700000000001
+        }
+      }
+    ])
+
+    expect(result.savedMessages).toHaveLength(1)
+    expect(await adb.queryOne(
+      'select contact_id,session_id,last_message,no_read_count from chat_session_user where user_id=? and contact_id=?',
+      ['u1', 'u2']
+    )).toEqual({
+      contactId: 'u2',
+      sessionId: 'direct-u2',
+      lastMessage: 'hello from u2',
+      noReadCount: 1
+    })
+    await adb.closeDatabase()
+  })
+
   it('persists 5,000 cross-session messages within the release budget without duplicate unread counts', async () => {
     const root = createRoot()
     const { adb, chatMessageModel } = await loadChatMessageModel(root)

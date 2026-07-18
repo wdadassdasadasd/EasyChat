@@ -112,9 +112,13 @@ export const useChatMessages = ({
 
     messages.forEach((message) => {
       const receiveContactId = getReceiveContactId(message)
-      const isCurrentSession =
-        message.sessionId == currentChatSession.value.sessionId ||
-        receiveContactId == currentChatSession.value.contactId
+      const currentSession = currentChatSession.value || {}
+      // Session identity is authoritative. Contact IDs are only a legacy fallback:
+      // a direct contact and a group can otherwise share the same raw ID.
+      const isCurrentSession = message.sessionId
+        ? String(message.sessionId) === String(currentSession.sessionId)
+        : String(receiveContactId) === String(currentSession.contactId) &&
+          Number(message.contactType) === Number(currentSession.contactType)
       if (!isCurrentSession) {
         return
       }

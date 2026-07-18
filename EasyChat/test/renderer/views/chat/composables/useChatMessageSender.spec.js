@@ -415,6 +415,31 @@ describe('useChatMessageSender', () => {
     )
   })
 
+  it('releases an unpersisted media source when pending save fails', async () => {
+    const { messageList, request, sender } = createHarness({
+      invokeResults: [{ success: false, error: 'db unavailable' }]
+    })
+
+    sender.onSendFileMessage({
+      contactId: 'u2',
+      contactType: 0,
+      file: {
+        name: 'unpersisted.txt',
+        size: 12,
+        type: 'text/plain',
+        path: 'D:/tmp/unpersisted.txt'
+      }
+    })
+    await flush()
+
+    expect(request).not.toHaveBeenCalled()
+    expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledWith({
+      uploadSourceId: 'source-unpersisted.txt'
+    })
+    expect(messageList.value[0]).toMatchObject({ status: 0 })
+    expect(messageList.value[0].uploadSourceId).toBeUndefined()
+  })
+
   it('retries a failed text message and replaces the temporary id', async () => {
     const { messageList, request, sender } = createHarness({
       requestResults: [
@@ -627,9 +652,10 @@ describe('useChatMessageSender', () => {
     ])
     expect(messageList.value[0]).toMatchObject({
       messageId: 313,
-      status: 1,
+      status: 2,
       localSyncFailed: false,
-      uploading: false
+      uploading: false,
+      uploadAwaitingAck: true
     })
   })
 
@@ -787,7 +813,7 @@ describe('useChatMessageSender', () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
     await flush()
 
-    expect(messageList.value[0].status).toBe(1)
+    expect(messageList.value[0].status).toBe(2)
     expect(window.api.invokeReleaseUploadSource).not.toHaveBeenCalled()
 
     await sender.handleFileUploadDone({
@@ -811,7 +837,7 @@ describe('useChatMessageSender', () => {
         .map((call) => call[0])
         .filter((payload) => payload.mode === 'status')
         .map((payload) => payload.status)
-    ).toEqual([1, 0])
+    ).toEqual([2, 0])
   })
 
   it('ignores a late HTTP success after an ack failure', async () => {
@@ -995,9 +1021,10 @@ describe('useChatMessageSender', () => {
     await flush()
 
     expect(messageList.value[0]).toMatchObject({
-      status: 1,
+      status: 2,
       uploading: false,
-      uploadProgress: 100
+      uploadProgress: 99,
+      uploadAwaitingAck: true
     })
   })
 
@@ -1066,7 +1093,7 @@ describe('useChatMessageSender', () => {
     vi.useRealTimers()
   })
 
-  it('updates upload progress while uploading a media message', async () => {
+  it('keeps a renderer-managed upload pending until the server confirms media processing', async () => {
     const { messageList, request, sender } = createHarness({
       requestResults: [
         {
@@ -1099,9 +1126,10 @@ describe('useChatMessageSender', () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2))
     await flush()
 
-    expect(messageList.value[0].uploadProgress).toBe(100)
+    expect(messageList.value[0].uploadProgress).toBe(99)
     expect(messageList.value[0].uploading).toBe(false)
-    expect(messageList.value[0].status).toBe(1)
+    expect(messageList.value[0].status).toBe(2)
+    expect(messageList.value[0].uploadAwaitingAck).toBe(true)
   })
 
   it('blocks oversized media before creating a message', async () => {
@@ -1268,6 +1296,16 @@ describe('useChatMessageSender', () => {
       sessionId: 's1'
     })
 
+    emitUploadTaskProgress({ messageId: 702, state: 'awaiting_ack', progress: 100 })
+    await flush()
+
+    expect(messageList.value[0]).toMatchObject({
+      status: 2,
+      uploading: false,
+      uploadProgress: 99,
+      uploadAwaitingAck: true
+    })
+
     emitUploadTaskProgress({ messageId: 702, state: 'succeeded', progress: 100 })
     await flush()
 
@@ -1275,7 +1313,8 @@ describe('useChatMessageSender', () => {
       status: 1,
       uploading: false,
       uploadProgress: 100,
-      uploadPaused: false
+      uploadPaused: false,
+      uploadAwaitingAck: false
     })
     sender.cleanupUploadControllers()
   })

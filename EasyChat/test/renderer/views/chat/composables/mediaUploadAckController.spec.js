@@ -54,4 +54,20 @@ describe('createMediaUploadAckController', () => {
     controller.cleanup()
     expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
+
+  it('freezes confirmed progress while the file service is unavailable', () => {
+    const { controller, message } = createHarness()
+    controller.subscribe()
+    const progressHandler = window.api.onUploadTaskProgress.mock.calls[0][0]
+
+    progressHandler({ messageId: 1, state: 'waiting_network', progress: 42 })
+
+    expect(message).toMatchObject({
+      status: 2,
+      uploading: false,
+      uploadProgress: 42,
+      uploadWaitingNetwork: true,
+      uploadError: '文件服务不可达，等待网络恢复。'
+    })
+  })
 })

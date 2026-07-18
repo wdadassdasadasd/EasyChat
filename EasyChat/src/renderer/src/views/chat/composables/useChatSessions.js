@@ -1,8 +1,9 @@
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import ContextMenu from '@imengyu/vue3-context-menu'
 import { createSessionOperationController } from './session/sessionOperationController'
 import { createSessionProfileResolver } from './session/sessionProfileResolver'
 import { createSessionSubscriptionController } from './session/sessionSubscriptionController'
+import { markPerformance } from '@/utils/performanceMetrics'
 
 /**
  * Owns renderer session state and composes profile resolution, subscriptions,
@@ -12,6 +13,8 @@ export const useChatSessions = ({ proxy, route }) => {
   const chatSessionList = ref([])
   const currentChatSession = ref({})
   let selectSession = () => {}
+  let sessionLoadSeq = 0
+  let hasMarkedFirstSessionListRender = false
   const sessionSubscriptions = createSessionSubscriptionController()
   const profileResolver = createSessionProfileResolver({ proxy })
 
@@ -131,18 +134,30 @@ export const useChatSessions = ({ proxy, route }) => {
     if (orderChanged) sortChatSessionList(chatSessionList.value)
   }
 
-  const handleLoadSessionData = async (dataList) => {
-    if (dataList && !Array.isArray(dataList) && dataList.success === false) {
-      proxy.Message.error(dataList.error || '会话列表加载失败，数据库可能不可用。')
-      return
-    }
+  const applyProfilePatch = (profile = {}) => {
+    if (!profile.contactId) return
+    const index = chatSessionList.value.findIndex(
+      (session) => String(session.contactId) === String(profile.contactId)
+    )
+    if (index < 0) return
 
-    const hydratedList = await profileResolver.hydrateSessionList(dataList || [])
+    const profileFields = ['contactName', 'groupName', 'nickName', 'memberCount']
+    const patch = profileFields.reduce((result, key) => {
+      if (profile[key] !== undefined) result[key] = profile[key]
+      return result
+    }, {})
+    if (!Object.keys(patch).length) return
+    const updatedSession = Object.assign({}, chatSessionList.value[index], patch)
+    chatSessionList.value[index] = updatedSession
+    syncCurrentSession(updatedSession)
+  }
+
+  const mergeLoadedSessionList = (dataList = []) => {
     const mergedMap = new Map()
     chatSessionList.value.forEach((session) => {
       if (session?.contactId) mergedMap.set(String(session.contactId), session)
     })
-    hydratedList.forEach((session) => {
+    dataList.forEach((session) => {
       if (!session?.contactId) return
       const key = String(session.contactId)
       const existing = mergedMap.get(key)
@@ -162,7 +177,35 @@ export const useChatSessions = ({ proxy, route }) => {
     const mergedList = Array.from(mergedMap.values())
     sortChatSessionList(mergedList)
     chatSessionList.value = mergedList
+  }
+
+  const hydrateSessionProfiles = (dataList, loadSeq) => {
+    void profileResolver
+      .hydrateSessionList(dataList || [], {
+        concurrency: 4,
+        shouldContinue: () => loadSeq === sessionLoadSeq,
+        onResolved: (profile) => {
+          if (loadSeq === sessionLoadSeq) applyProfilePatch(profile)
+        }
+      })
+      .catch((error) => console.warn('Failed to hydrate chat session profiles', error))
+  }
+
+  const handleLoadSessionData = (dataList) => {
+    if (dataList && !Array.isArray(dataList) && dataList.success === false) {
+      proxy.Message.error(dataList.error || '会话列表加载失败，数据库可能不可用。')
+      return
+    }
+
+    const loadSeq = ++sessionLoadSeq
+    const sessionList = Array.isArray(dataList) ? dataList : []
+    mergeLoadedSessionList(sessionList)
     openChatFromRoute()
+    if (!hasMarkedFirstSessionListRender) {
+      hasMarkedFirstSessionListRender = true
+      void nextTick(() => markPerformance('session-list-first-render'))
+    }
+    hydrateSessionProfiles(sessionList, loadSeq)
   }
 
   const registerSessionListener = () => {
@@ -176,6 +219,7 @@ export const useChatSessions = ({ proxy, route }) => {
   }
 
   const removeSessionListener = () => {
+    sessionLoadSeq += 1
     sessionSubscriptions.remove()
     operations.cleanup()
   }

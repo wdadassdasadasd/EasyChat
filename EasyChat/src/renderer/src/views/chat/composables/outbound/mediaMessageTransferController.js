@@ -131,6 +131,12 @@ export const createMediaMessageTransferController = ({
         await lifecycle.persistPendingMessage(localMessage)
       } catch (error) {
         console.error('save pending media message failed', error)
+        // The upload source is durable only after the pending message commits.
+        // Without that row it cannot be recovered after restart, so retaining the
+        // registry entry would leak an orphaned local file reference.
+        const unpersistedUploadSourceId = localMessage.uploadSourceId
+        delete localMessage.uploadSourceId
+        await releaseSource(unpersistedUploadSourceId)
         await lifecycle.markMessageFailed(
           localMessage,
           'Media message could not be saved locally. Retry later.'

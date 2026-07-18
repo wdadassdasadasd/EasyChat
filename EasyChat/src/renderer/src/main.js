@@ -17,6 +17,8 @@ import WinOp from './components/WinOp.vue'
 import { Confirm } from './utils/Confirm.js'
 import { initializeRendererLogger } from './utils/Logger.js'
 import { useUserInfoStore } from '@/stores/UserInfoStore'
+import { beginBootstrap, completeBootstrap, failBootstrap } from '@/utils/appBootstrapState'
+import { markPerformance } from '@/utils/performanceMetrics'
 
 initializeRendererLogger()
 const app = createApp(App)
@@ -57,26 +59,51 @@ router.beforeEach(async (to) => {
 })
 
 const bootstrap = async () => {
+  beginBootstrap()
   const userInfoStore = useUserInfoStore(pinia)
+  // Start the authenticated UI bundle while the secure store is being read.
+  // Login routing never waits for this promise, but a restored session can use it immediately.
+  const appFeaturesPromise = ensureElementPlusAppFeatures(app)
+  void appFeaturesPromise.catch((error) => {
+    console.warn('Failed to preload application UI features', error)
+  })
   try {
     window.localStorage.removeItem('userInfo')
   } catch {
     // Storage may be disabled; the in-memory store never consumes this legacy value.
   }
 
+  let result
   try {
-    const result = await window.api?.invokeRestoreAuthenticatedSession?.()
-    if (result?.success && result.userInfo?.token) {
-      userInfoStore.setUserInfo(result.userInfo)
-      await router.replace('/chat')
-    } else {
-      userInfoStore.clearUserInfo()
-    }
+    result = await window.api?.invokeRestoreAuthenticatedSession?.()
   } catch (error) {
     console.warn('Failed to restore secure session', error)
     userInfoStore.clearUserInfo()
+    await router.replace('/login')
+    completeBootstrap()
+    return
   }
-  app.mount('#app')
+
+  if (result?.success && result.userInfo?.token) {
+    userInfoStore.setUserInfo(result.userInfo)
+    markPerformance('authenticated-session-restored')
+    try {
+      await appFeaturesPromise
+      await router.replace('/chat')
+      completeBootstrap()
+      markPerformance('initial-route-ready')
+    } catch (error) {
+      console.error('Failed to load application UI features', error)
+      userInfoStore.clearUserInfo()
+      failBootstrap('应用界面加载失败，请重试。', () => void bootstrap())
+    }
+  } else {
+    userInfoStore.clearUserInfo()
+    await router.replace('/login')
+    completeBootstrap()
+  }
 }
 
+app.mount('#app')
+markPerformance('renderer-mounted')
 void bootstrap()

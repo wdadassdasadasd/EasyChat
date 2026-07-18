@@ -32,6 +32,8 @@ export const createOutboundMessagePersistence = ({
       'uploadProgress',
       'uploadError',
       'uploadCanceled',
+      'uploadAwaitingAck',
+      'uploadWaitingNetwork',
       'downloadStatus',
       'downloadProgress',
       'downloadPath',

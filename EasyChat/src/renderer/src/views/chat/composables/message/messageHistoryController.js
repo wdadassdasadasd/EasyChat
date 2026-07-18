@@ -76,10 +76,16 @@ export const createMessageHistoryController = ({
 
   const chatSessionClickHandler = (item) => {
     markSessionRead?.(item.contactId)
-    if (currentChatSession.value.contactId == item.contactId) {
+    const currentSession = currentChatSession.value || {}
+    const isSameSession =
+      currentSession.sessionId && item.sessionId
+        ? String(currentSession.sessionId) === String(item.sessionId)
+        : String(currentSession.contactId) === String(item.contactId) &&
+          Number(currentSession.contactType) === Number(item.contactType)
+    if (isSameSession) {
       const shouldLoadMessages =
-        item.sessionId && (!currentChatSession.value.sessionId || !messageList.value.length)
-      currentChatSession.value = Object.assign({}, currentChatSession.value, item)
+        item.sessionId && (!currentSession.sessionId || !messageList.value.length)
+      currentChatSession.value = Object.assign({}, currentSession, item)
       if (shouldLoadMessages) {
         collection.clear()
         messageLoadingMore.value = false

@@ -64,6 +64,10 @@ import { Plus, Promotion, Search } from '@element-plus/icons-vue';
 import { useRouter, useRoute } from 'vue-router';
 import {useContactStateStore} from '@/stores/ContactStateStore';
 
+defineOptions({
+  name: 'Contact'
+})
+
 const contactStateStore = useContactStateStore();
 const Route = useRoute();
 const Router = useRouter(); 

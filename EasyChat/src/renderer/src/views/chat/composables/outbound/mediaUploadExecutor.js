@@ -134,10 +134,14 @@ export const createMediaUploadExecutor = ({
     const successfulMessage = latestMessage || message
     const patch = {
       uploading: false,
-      status: 1,
-      uploadProgress: 100,
-      uploadError: '',
-      uploadCanceled: false
+      // HTTP upload completion only proves bytes reached the upload endpoint.
+      // The message remains pending until the server's media-status ACK confirms
+      // processing, matching the persisted-task path's awaiting_ack state.
+      status: 2,
+      uploadProgress: 99,
+      uploadError: '文件已上传，等待服务端确认。',
+      uploadCanceled: false,
+      uploadAwaitingAck: true
     }
     Object.assign(successfulMessage, patch)
     updateMessageById?.(message.messageId, patch)

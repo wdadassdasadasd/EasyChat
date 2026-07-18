@@ -68,6 +68,28 @@ describe('mediaUploadTransport total timeout', () => {
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ url: '/cancel' }))
   })
 
+  it('does not treat a browser upload-progress event as confirmed progress after a network failure', async () => {
+    const onProgress = vi.fn()
+    const request = vi.fn((config) => {
+      config.uploadProgressCallback?.({ loaded: 80, total: 100 })
+      return Promise.resolve({ success: false, kind: 'network', msg: 'Network unavailable' })
+    })
+
+    const result = await uploadMediaFile({
+      file: new Blob(['offline']),
+      fileType: 2,
+      message: { messageId: 21 },
+      onProgress,
+      proxy: {
+        Api: { uploadFile: '/upload', uploadFileCancel: '/cancel' },
+        Request: request
+      }
+    })
+
+    expect(result).toMatchObject({ success: false, kind: 'network' })
+    expect(onProgress).not.toHaveBeenCalled()
+  })
+
   it('rejects an init response whose uploaded chunks are outside the configured range', async () => {
     const request = vi.fn(async () => ({
       data: { uploadId: 'upload-1', uploadedChunks: [2] }

@@ -47,4 +47,17 @@ describe('createSessionProfileResolver', () => {
       expect.objectContaining({ url: '/contact/getContactUserInfo', params: { contactId: 'u2' } })
     )
   })
+
+  it('skips profile requests when the local session already has complete display data', async () => {
+    const { proxy, resolver } = createResolver()
+
+    await expect(
+      resolver.hydrateSessionList([
+        { contactId: 'g1', contactType: 1, contactName: '已有群名', memberCount: 8 },
+        { contactId: 'u1', contactType: 0, contactName: '已有昵称' }
+      ])
+    ).resolves.toHaveLength(2)
+
+    expect(proxy.Request).not.toHaveBeenCalled()
+  })
 })

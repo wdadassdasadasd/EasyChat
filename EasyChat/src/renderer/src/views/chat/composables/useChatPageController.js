@@ -3,6 +3,8 @@ import { createSubscriptionRegistry } from './subscriptionRegistry'
 import { useChatMessages } from './useChatMessages'
 import { useChatSessions } from './useChatSessions'
 import { useFileTransfer } from './useFileTransfer'
+import { scheduleWhenIdle } from '@/utils/idleTask'
+import { prefetchSecondaryRoutes } from '@/utils/routePrefetch'
 
 /**
  * Chat.vue's composition root. It owns page-lifetime subscriptions while the
@@ -18,6 +20,8 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
   let eventSyncFailureCount = 0
   let readReceiptFailureCount = 0
   let syncEventsHandler = () => Promise.resolve()
+  let cancelInitialSync = () => {}
+  let cancelRoutePrefetch = () => {}
 
   const sessions = useChatSessions({ proxy, route })
   const messages = useChatMessages({
@@ -255,10 +259,18 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
     try {
       const diagnostics = await window.api.invokeGetRuntimeDiagnostics?.()
       if (diagnostics?.success && diagnostics.websocket?.status) {
-        handleWsStatus({
-          status: diagnostics.websocket.status,
-          retryLeft: diagnostics.websocket.retryLeft
-        })
+        if (diagnostics.websocket.status === 'connected') {
+          cancelInitialSync()
+          cancelInitialSync = scheduleWhenIdle(() => {
+            cancelInitialSync = () => {}
+            handleWsStatus({ status: 'connected', retryLeft: diagnostics.websocket.retryLeft })
+          })
+        } else {
+          handleWsStatus({
+            status: diagnostics.websocket.status,
+            retryLeft: diagnostics.websocket.retryLeft
+          })
+        }
       }
     } catch (error) {
       console.warn('Failed to read initial WebSocket status', error)
@@ -318,12 +330,15 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
     void syncCurrentWsStatus()
     sessions.loadChatSession()
     sessions.openChatFromRoute()
+    cancelRoutePrefetch = prefetchSecondaryRoutes()
   }
 
   const unmount = () => {
     groupDetailVisible.value = false
     userDetailVisible.value = false
     pageSubscriptions.clear()
+    cancelInitialSync()
+    cancelRoutePrefetch()
     sessions.removeSessionListener()
     if (typeof files.cleanupFileTransfer === 'function') files.cleanupFileTransfer()
     else files.closeVideoPreviewDialog()

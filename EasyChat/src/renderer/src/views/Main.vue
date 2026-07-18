@@ -31,7 +31,7 @@
         </div>
         <div class="right-container">
             <router-view v-slot="{Component}">
-                <keep-alive include="Chat">
+                <keep-alive include="Chat,Contact,Setting">
                     <component :is="Component" ref="componentRef"></component>
                 </keep-alive>
             </router-view>
@@ -40,10 +40,12 @@
 </template>
 
 <script setup>
-import{ref,getCurrentInstance, onMounted,onUnmounted,computed,markRaw} from 'vue';
+import{ref,getCurrentInstance, onMounted,onUnmounted,computed,markRaw, nextTick} from 'vue';
 import { useRouter } from 'vue-router';
 import { ChatDotRound, MoreFilled, User } from '@element-plus/icons-vue';
 import {useUserInfoStore} from '@/stores/UserInfoStore';
+import { scheduleWhenIdle } from '@/utils/idleTask';
+import { markPerformance } from '@/utils/performanceMetrics';
 const userInfoStore = useUserInfoStore();
 const router=useRouter();
 const {proxy}=getCurrentInstance();
@@ -90,8 +92,9 @@ const currentMenu=ref(menuList.value[0]);
 const chatUnreadCount=ref(0);
 const chatUnreadText=computed(()=>chatUnreadCount.value>99?'99+':String(chatUnreadCount.value));
 const changeMenu=(item)=>{
+    markPerformance(`menu-${item.name}-start`);
     currentMenu.value=item;
-    router.push(item.path);
+    router.push(item.path).then(()=>nextTick(()=>markPerformance(`menu-${item.name}-ready`)));
 }
 const handleChatUnreadCountChange=(event)=>{
     // Chat.vue 根据会话列表聚合未读数后派发该事件，侧边栏只负责展示红点。
@@ -99,7 +102,7 @@ const handleChatUnreadCountChange=(event)=>{
 }
 
 onMounted(()=>{
-    getLoginInfo();
+    scheduleWhenIdle(()=>getLoginInfo());
     window.addEventListener('chatUnreadCountChange',handleChatUnreadCountChange);
 })
 

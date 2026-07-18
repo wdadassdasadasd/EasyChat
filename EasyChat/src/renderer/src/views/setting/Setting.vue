@@ -32,6 +32,10 @@ import { markRaw, ref } from 'vue';
 import { FolderOpened, Setting, User } from '@element-plus/icons-vue';
 import { useRoute ,useRouter} from 'vue-router';
 
+defineOptions({
+  name: 'Setting'
+})
+
 const rightTitle=ref();
 const route=useRoute();
 const router=useRouter();
