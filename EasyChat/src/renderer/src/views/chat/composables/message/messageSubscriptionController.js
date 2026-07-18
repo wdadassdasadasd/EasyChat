@@ -3,8 +3,6 @@ import { createSubscriptionRegistry } from '../subscriptionRegistry'
 /** Keeps renderer message IPC subscriptions isolated from history state. */
 export const createMessageSubscriptionController = ({
   applyPersistedV2Result,
-  handleFileUploadDone,
-  handleReceiveMessages,
   loadChatSession,
   onLoadChatMessageCallback,
   proxy,

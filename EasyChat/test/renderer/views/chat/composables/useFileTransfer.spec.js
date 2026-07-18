@@ -35,6 +35,7 @@ const createFileMessage = (patch = {}) => ({
 let progressHandler
 let unsubscribeProgress
 let invokeDownloadChatFile
+let invokeCancelDownloadChatFile
 let invokeOpenDownloadedFile
 
 beforeEach(() => {
@@ -45,10 +46,12 @@ beforeEach(() => {
     filePath: 'D:/chat/doc.txt',
     progress: 100
   }))
+  invokeCancelDownloadChatFile = vi.fn(async () => ({ success: true, canceled: true }))
   invokeOpenDownloadedFile = vi.fn(async () => ({ success: true }))
   global.window = {
     api: {
       invokeDownloadChatFile,
+      invokeCancelDownloadChatFile,
       invokeOpenDownloadedFile,
       invokeShowDownloadedFileInFolder: vi.fn(async () => ({ success: true })),
       invokeReadLocalVideoFile: vi.fn(async () => ({ success: false })),
@@ -168,6 +171,63 @@ describe('useFileTransfer', () => {
 
     expect(secondResult).toBeUndefined()
     expect(invokeDownloadChatFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the receive indicator scoped to the selected message during concurrent downloads', async () => {
+    const proxy = createProxy()
+    const pendingDownloads = new Map()
+    invokeDownloadChatFile.mockImplementation(
+      ({ messageId }) =>
+        new Promise((resolve) => {
+          pendingDownloads.set(String(messageId), resolve)
+        })
+    )
+    const transfer = useFileTransfer({ proxy })
+    const firstMessage = createFileMessage({ messageId: 10, fileName: 'first.txt' })
+    const secondMessage = createFileMessage({ messageId: 11, fileName: 'second.txt' })
+
+    transfer.openFilePreviewDialog(firstMessage)
+    const firstDownload = transfer.receiveSelectedFileMessage()
+    transfer.openFilePreviewDialog(secondMessage)
+    const secondDownload = transfer.receiveSelectedFileMessage()
+
+    await vi.waitFor(() => expect(pendingDownloads.size).toBe(2))
+
+    transfer.openFilePreviewDialog(firstMessage)
+    expect(transfer.isReceivingFile.value).toBe(true)
+
+    pendingDownloads.get('11')({ success: true, filePath: 'D:/chat/second.txt', progress: 100 })
+    await secondDownload
+
+    expect(firstMessage.downloadStatus).toBe('downloading')
+    expect(transfer.isReceivingFile.value).toBe(true)
+
+    pendingDownloads.get('10')({ success: true, filePath: 'D:/chat/first.txt', progress: 100 })
+    await firstDownload
+
+    expect(transfer.isReceivingFile.value).toBe(false)
+  })
+
+  it('cancels an active file download and releases its progress subscription', async () => {
+    const proxy = createProxy()
+    const transfer = useFileTransfer({ proxy })
+    const message = createFileMessage()
+    let resolveDownload
+    invokeDownloadChatFile.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveDownload = resolve })
+    )
+
+    transfer.openFilePreviewDialog(message)
+    const pending = transfer.receiveSelectedFileMessage()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await transfer.cancelSelectedFileDownload()
+    resolveDownload({ success: false, kind: 'canceled', error: 'Download canceled' })
+    await pending
+
+    expect(invokeCancelDownloadChatFile).toHaveBeenCalledWith({ messageId: 10 })
+    expect(unsubscribeProgress).toHaveBeenCalledTimes(1)
+    expect(message.downloadStatus).toBe('canceled')
+    expect(proxy.Message.error).not.toHaveBeenCalled()
   })
 
   it('shows an error when opening a downloaded file fails', async () => {

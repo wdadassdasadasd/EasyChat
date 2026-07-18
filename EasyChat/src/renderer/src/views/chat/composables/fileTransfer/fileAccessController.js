@@ -8,12 +8,13 @@ const emptyDownloadState = () => ({ status: '', progress: 0, path: '', error: ''
 /** Owns signed download access, message-scoped download state and desktop file actions. */
 export const createFileAccessController = ({ proxy }) => {
   const downloadStates = ref({})
-  const isReceivingFile = ref(false)
   const activeDownloadKeys = new Set()
+  const activeDownloadCancels = new Map()
 
   const getDownloadKey = (message) => String(message?.messageId || '')
   const getDownloadState = (message) =>
     downloadStates.value[getDownloadKey(message)] || emptyDownloadState()
+  const isDownloading = (message) => getDownloadState(message).status === 'downloading'
 
   const patchDownloadState = (message, patch = {}) => {
     const key = getDownloadKey(message)
@@ -28,12 +29,13 @@ export const createFileAccessController = ({ proxy }) => {
     })
   }
 
-  const createDownloadUrl = async (message, { download = false, showCover = false } = {}) => {
+  const createDownloadUrl = async (message, { download = false, showCover = false, signal } = {}) => {
     const result = await proxy.Request({
       url: proxy.Api.createDownloadToken,
       params: { fileId: message.messageId, showCover, download },
       showLoading: false,
-      showError: false
+      showError: false,
+      signal
     })
     const streamUrl = result?.data?.streamUrl
     if (!streamUrl) return ''
@@ -59,9 +61,17 @@ export const createFileAccessController = ({ proxy }) => {
 
     activeDownloadKeys.add(downloadKey)
     patchDownloadState(message, { status: 'downloading', progress: 0, error: '', path: '' })
-    isReceivingFile.value = true
+    const controller = new AbortController()
+    activeDownloadCancels.set(downloadKey, async () => {
+      controller.abort()
+      return await window.api.invokeCancelDownloadChatFile({ messageId: message.messageId })
+    })
     try {
-      const url = await createDownloadUrl(message, { download: true })
+      const url = await createDownloadUrl(message, { download: true, signal: controller.signal })
+      if (controller.signal.aborted) {
+        patchDownloadState(message, { status: 'canceled', progress: 0, error: '', path: '' })
+        return false
+      }
       if (!url) {
         patchDownloadState(message, {
           status: 'failed',
@@ -94,6 +104,10 @@ export const createFileAccessController = ({ proxy }) => {
         unsubscribeProgress?.()
       }
       if (!result?.success) {
+        if (result?.kind === 'canceled' || controller.signal.aborted) {
+          patchDownloadState(message, { status: 'canceled', progress: 0, error: '', path: '' })
+          return false
+        }
         patchDownloadState(message, {
           status: 'failed',
           progress: Number(result?.progress || 0),
@@ -112,8 +126,17 @@ export const createFileAccessController = ({ proxy }) => {
       return true
     } finally {
       activeDownloadKeys.delete(downloadKey)
-      isReceivingFile.value = false
+      activeDownloadCancels.delete(downloadKey)
     }
+  }
+
+  const cancelDownloadFileMessage = async (message) => {
+    const downloadKey = getDownloadKey(message)
+    if (!downloadKey || !activeDownloadKeys.has(downloadKey)) return false
+    patchDownloadState(message, { status: 'canceled', progress: 0, error: '', path: '' })
+    const cancel = activeDownloadCancels.get(downloadKey)
+    if (cancel) await cancel()
+    return true
   }
 
   const openDownloadedFile = async (message) => {
@@ -130,9 +153,10 @@ export const createFileAccessController = ({ proxy }) => {
 
   return {
     createDownloadUrl,
+    cancelDownloadFileMessage,
     downloadFileMessage,
     getDownloadState,
-    isReceivingFile,
+    isDownloading,
     openDownloadedFile,
     showDownloadedFileInFolder
   }

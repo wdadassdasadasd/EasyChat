@@ -88,4 +88,24 @@ describe('useVirtualMessageList', () => {
 
     expect(virtualList.totalHeight.value).toBe(210 + 170 + 96 + 76)
   })
+
+  it('keeps a 10,000-message history window bounded to the viewport and overscan', () => {
+    const messageList = ref(
+      Array.from({ length: 10000 }, (_item, index) => ({ messageId: index + 1, messageType: 2 }))
+    )
+    const virtualList = useVirtualMessageList(messageList, { estimateHeight: 50, overscan: 8 })
+
+    virtualList.handleScroll({
+      target: {
+        scrollTop: 250000,
+        clientHeight: 600
+      }
+    })
+
+    expect(virtualList.visibleMessages.value).toHaveLength(28)
+    expect(virtualList.visibleMessages.value).not.toHaveLength(messageList.value.length)
+    expect(
+      virtualList.topSpacerHeight.value + virtualList.bottomSpacerHeight.value
+    ).toBeGreaterThan(0)
+  })
 })

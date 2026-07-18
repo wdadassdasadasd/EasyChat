@@ -459,6 +459,9 @@ const applyBaselineSchema = async () => {
   for (const item of add_tables) {
     await runRawSql(item)
   }
+  // Pre-ledger installations already have chat_message, so CREATE TABLE IF
+  // NOT EXISTS cannot add later columns before their dependent indexes.
+  await applyUploadRecoveryColumns()
   for (const item of add_index) {
     await runRawSql(item)
   }
@@ -499,11 +502,18 @@ const applySnapshotRecoverySchema = async () => {
   await runRawSql('create index if not exists idx_snapshot_stage_session_user_snapshot on snapshot_stage_session(user_id asc,snapshot_id asc);')
 }
 
+const applyFtsIndexStateSchema = async () => {
+  await runRawSql(
+    "create table if not exists fts_index_state(user_id varchar primary key,status varchar not null default 'pending',last_row_id integer not null default 0,updated_at bigint not null);"
+  )
+}
+
 const REQUIRED_SCHEMA_MIGRATIONS = [
   { version: 1, name: 'baseline_schema', apply: applyBaselineSchema },
   { version: 2, name: 'upload_recovery_columns', apply: applyUploadRecoveryColumns },
   { version: 3, name: 'reliable_event_schema', apply: applyReliableEventSchema },
-  { version: 4, name: 'snapshot_recovery_schema', apply: applySnapshotRecoverySchema }
+  { version: 4, name: 'snapshot_recovery_schema', apply: applySnapshotRecoverySchema },
+  { version: 5, name: 'fts_index_state_schema', apply: applyFtsIndexStateSchema }
 ]
 
 const getAppliedSchemaVersion = async () => {

@@ -1,18 +1,81 @@
 import { randomUUID } from 'crypto'
 import fs from 'fs'
 import { spawn } from 'child_process'
+import { safeStorage } from 'electron'
 
 import store from './store.js'
+import { getSecureStorageStatus } from './secureSessionStore.js'
 
 const REGISTRY_KEY = 'uploadSourceRegistry'
 const MAX_REGISTRY_ITEMS = 100
 const MAX_CHUNK_SIZE = 4 * 1024 * 1024
 const FFMPEG_THUMBNAIL_TIMEOUT_MS = 10000
 const MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024
+const REGISTRY_STORAGE_VERSION = 1
+const memoryRegistries = new Map()
+
+const isRegistry = (value) => value && typeof value === 'object' && !Array.isArray(value)
+
+const getStoredRegistry = (userId) => store.getUserDataForUser(userId, REGISTRY_KEY)
+
+const clearStoredRegistry = (userId) => store.deleteUserDataForUser?.(userId, REGISTRY_KEY)
+
+const encryptRegistry = (registry) => ({
+  version: REGISTRY_STORAGE_VERSION,
+  ciphertext: safeStorage.encryptString(JSON.stringify(registry)).toString('base64')
+})
+
+const decryptRegistry = (stored) => {
+  if (!stored?.ciphertext || Number(stored.version) !== REGISTRY_STORAGE_VERSION) return null
+  const plain = safeStorage.decryptString(Buffer.from(stored.ciphertext, 'base64'))
+  const registry = JSON.parse(plain)
+  return isRegistry(registry) ? registry : null
+}
 
 const getRegistry = (userId = store.getUserId()) => {
-  const value = store.getUserDataForUser(userId, REGISTRY_KEY)
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  if (!userId) return {}
+  const storage = getSecureStorageStatus()
+  const stored = getStoredRegistry(userId)
+
+  if (!storage.available) {
+    if (memoryRegistries.has(userId)) return memoryRegistries.get(userId)
+    // Legacy plaintext paths must never remain on disk when secure storage is unavailable.
+    if (isRegistry(stored) && !stored.ciphertext) {
+      memoryRegistries.set(userId, stored)
+      clearStoredRegistry(userId)
+      return stored
+    }
+    return {}
+  }
+
+  let registry = {}
+  let shouldPersist = false
+  if (isRegistry(stored) && stored.ciphertext) {
+    try {
+      registry = decryptRegistry(stored) || {}
+    } catch {
+      clearStoredRegistry(userId)
+      registry = {}
+    }
+  } else if (isRegistry(stored)) {
+    // One-way migration from the old electron-store plaintext payload.
+    registry = stored
+    shouldPersist = true
+  }
+
+  if (memoryRegistries.has(userId)) {
+    registry = { ...registry, ...memoryRegistries.get(userId) }
+    shouldPersist = true
+  }
+  memoryRegistries.set(userId, registry)
+  if (shouldPersist) {
+    try {
+      store.setUserDataForUser(userId, REGISTRY_KEY, encryptRegistry(registry))
+    } catch {
+      // Keep the current-session mapping usable without falling back to plaintext persistence.
+    }
+  }
+  return registry
 }
 
 const saveRegistry = (registry, userId = store.getUserId()) => {
@@ -26,7 +89,20 @@ const saveRegistry = (registry, userId = store.getUserId()) => {
     if (index < 0) break
     entries.splice(index, 1)
   }
-  store.setUserDataForUser(userId, REGISTRY_KEY, Object.fromEntries(entries))
+  const nextRegistry = Object.fromEntries(entries)
+  memoryRegistries.set(userId, nextRegistry)
+  const storage = getSecureStorageStatus()
+  if (!storage.available) {
+    // Do not overwrite a pre-existing encrypted record; new sources remain memory-only.
+    const stored = getStoredRegistry(userId)
+    if (isRegistry(stored) && !stored.ciphertext) clearStoredRegistry(userId)
+    return
+  }
+  try {
+    store.setUserDataForUser(userId, REGISTRY_KEY, encryptRegistry(nextRegistry))
+  } catch {
+    // Secure storage failures retain the source only for this process.
+  }
 }
 
 const getUploadSource = async (uploadSourceId, { userId = store.getUserId() } = {}) => {

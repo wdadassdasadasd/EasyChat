@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const insertedRows = []
 const strictRuns = []
+let ftsReady = true
 
 vi.mock('../../../src/main/store', () => ({
   default: {
@@ -39,6 +40,9 @@ vi.mock('../../../src/main/db/ADB', () => ({
     return []
   }),
   queryOne: vi.fn(async (sql, params = []) => {
+    if (sql.includes('fts_index_state')) {
+      return ftsReady ? { status: 'ready', lastRowId: 0 } : null
+    }
     if (sql.includes('chat_session_clear')) {
       return params[1] === 's-cleared'
         ? { sessionId: 's-cleared', clearMessageId: 1000, clearTime: 5000 }
@@ -76,6 +80,7 @@ describe('ChatMessageModel saveMessageBatch', () => {
   beforeEach(() => {
     insertedRows.length = 0
     strictRuns.length = 0
+    ftsReady = true
   })
 
   it('preserves existing unread and top state when receive session patch omits them', async () => {
@@ -387,6 +392,13 @@ describe('ChatMessageModel selectMessageContextByMessageId', () => {
 })
 
 describe('ChatMessageModel searchMessageBySessionId', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    vi.clearAllMocks()
+    strictRuns.length = 0
+    ftsReady = true
+  })
+
   it('returns empty for missing sessionId', async () => {
     const { searchMessageBySessionId } = await import('../../../src/main/db/ChatMessageModel')
 
@@ -414,6 +426,20 @@ describe('ChatMessageModel searchMessageBySessionId', () => {
         fileName: ''
       }
     ])
+  })
+
+  it('uses LIKE while a bounded FTS backfill warms up', async () => {
+    ftsReady = false
+    vi.useFakeTimers()
+    const { queryAll } = await import('../../../src/main/db/ADB')
+    const { searchMessageBySessionId } = await import('../../../src/main/db/ChatMessageModel')
+
+    await searchMessageBySessionId({ sessionId: 's1', keyword: 'hello' })
+
+    expect(queryAll.mock.calls.some((call) => String(call[0]).includes('chat_message_fts f'))).toBe(false)
+    await vi.runOnlyPendingTimersAsync()
+    expect(strictRuns.some((call) => String(call.sql).includes('fts_index_state'))).toBe(true)
+    vi.useRealTimers()
   })
 
   it('uses the same clear cursor visibility rules for FTS search', async () => {

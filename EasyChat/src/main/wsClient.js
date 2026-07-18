@@ -35,6 +35,9 @@ let reconnectTimer = null
 let receiveQueue = []
 let receiveFlushTimer = null
 let receiveFlushing = false
+let v2EventQueue = []
+let v2EventFlushTimer = null
+let v2EventFlushing = false
 let wsRuntimeGeneration = 0
 let messageProcessingQueue = Promise.resolve()
 let awaitingPong = false
@@ -57,13 +60,17 @@ const wsDiagnostics = {
 
 const updateWsDiagnostics = (patch = {}) => {
   Object.assign(wsDiagnostics, patch, {
-    queueSize: receiveQueue.length,
+    queueSize: receiveQueue.length + v2EventQueue.length,
     retryLeft: maxReConnectTimes
   })
 }
 
 const getWsDiagnostics = () => {
-  return { ...wsDiagnostics, queueSize: receiveQueue.length, retryLeft: maxReConnectTimes }
+  return {
+    ...wsDiagnostics,
+    queueSize: receiveQueue.length + v2EventQueue.length,
+    retryLeft: maxReConnectTimes
+  }
 }
 
 const recordWsError = (error, patch = {}) => {
@@ -115,6 +122,13 @@ const clearReceiveFlushTimer = () => {
   if (receiveFlushTimer) {
     clearTimeout(receiveFlushTimer)
     receiveFlushTimer = null
+  }
+}
+
+const clearV2EventFlushTimer = () => {
+  if (v2EventFlushTimer) {
+    clearTimeout(v2EventFlushTimer)
+    v2EventFlushTimer = null
   }
 }
 
@@ -221,12 +235,14 @@ const resetWsRuntime = async () => {
     clearHeartbeatTimer()
     clearReconnectTimer()
     clearReceiveFlushTimer()
+    clearV2EventFlushTimer()
     const pendingProcessing = messageProcessingQueue
     try {
       await runWithTimeout(
         async () => {
           await pendingProcessing
           await flushReceiveQueue()
+          await flushV2EventQueue()
         },
         WS_RESET_FLUSH_TIMEOUT,
         'WebSocket reset flush timed out'
@@ -239,6 +255,7 @@ const resetWsRuntime = async () => {
       }
     }
     receiveFlushing = false
+    v2EventFlushing = false
     if (wsDiagnostics.status !== 'recovery_blocked') {
       lockReconnect = false
     }
@@ -437,9 +454,10 @@ const normalizeV2EventForCurrentUser = (event) => {
   return { ...event, payload }
 }
 
-const saveAndPublishV2EventBatch = async (events) => {
+const saveAndPublishV2EventBatch = async (events, expectedGeneration) => {
   const normalizedEvents = events.map(normalizeV2EventForCurrentUser)
   const { savedMessages = [], stateChanged = false, mediaUpdates = [], eventTypes = [] } = await applyV2Events(normalizedEvents)
+  if (expectedGeneration != null && !isCurrentRuntimeGeneration(expectedGeneration)) return
   if (!savedMessages.length && !stateChanged && !mediaUpdates.length) return
   sendToRenderer('receiveMessageBatch', {
     messageType: 'batch',
@@ -450,6 +468,90 @@ const saveAndPublishV2EventBatch = async (events) => {
     eventTypes,
     stats: { receivedCount: events.length, savedCount: savedMessages.length, filteredCount: 0 }
   })
+}
+
+const flushV2EventQueue = async () => {
+  clearV2EventFlushTimer()
+  if (v2EventFlushing) return
+  v2EventFlushing = true
+
+  try {
+    while (v2EventQueue.length > 0) {
+      const generation = v2EventQueue[0].generation
+      const batch = []
+      for (const entry of v2EventQueue) {
+        if (entry.generation !== generation || batch.length >= RECEIVE_FLUSH_MAX) break
+        batch.push(entry)
+      }
+      if (!batch.length) return
+      v2EventQueue.splice(0, batch.length)
+      if (!isCurrentRuntimeGeneration(generation)) continue
+
+      try {
+        await saveAndPublishV2EventBatch(
+          batch.map((entry) => entry.event),
+          generation
+        )
+      } catch (error) {
+        console.error('failed to save received V2 WebSocket events', error)
+        updateWsDiagnostics({ dbErrorCount: wsDiagnostics.dbErrorCount + 1 })
+        // V2 事件由 cursor HTTP 同步补偿，不能写入只支持旧消息的恢复日志。
+        v2EventQueue = []
+        publishReceiveRecoveryNeeded({
+          error,
+          messages: [],
+          stats: { kind: 'v2_batch_persist_failed', eventCount: batch.length }
+        })
+        return
+      }
+    }
+  } finally {
+    v2EventFlushing = false
+    updateWsDiagnostics()
+  }
+}
+
+const enqueueV2EventFlush = () => {
+  clearV2EventFlushTimer()
+  messageProcessingQueue = messageProcessingQueue
+    .catch((error) => {
+      console.error('previous WebSocket message task failed, continuing', error)
+    })
+    .then(() => flushV2EventQueue())
+  return messageProcessingQueue
+}
+
+const scheduleV2EventFlush = () => {
+  if (v2EventQueue.length >= RECEIVE_FLUSH_MAX) {
+    void enqueueV2EventFlush()
+    return
+  }
+  if (!v2EventFlushTimer) {
+    v2EventFlushTimer = setTimeout(() => {
+      v2EventFlushTimer = null
+      void enqueueV2EventFlush()
+    }, RECEIVE_FLUSH_DELAY)
+  }
+}
+
+const enqueueV2Events = (events, expectedGeneration) => {
+  if (!events.length || !isCurrentRuntimeGeneration(expectedGeneration)) return false
+  const available = RECEIVE_QUEUE_MAX - v2EventQueue.length
+  if (events.length > available) {
+    const error = new Error('V2 接收事件过多，正在通过增量同步恢复。')
+    v2EventQueue = []
+    recordWsError(error)
+    publishReceiveRecoveryNeeded({
+      error,
+      messages: [],
+      stats: { kind: 'v2_queue_overflow', eventCount: events.length }
+    })
+    return false
+  }
+  v2EventQueue.push(...events.map((event) => ({ event, generation: expectedGeneration })))
+  updateWsDiagnostics()
+  scheduleV2EventFlush()
+  return true
 }
 
 const scheduleReceiveFlush = () => {
@@ -595,8 +697,7 @@ const startHeartbeat = () => {
   heartbeatTimer = setInterval(sendHeartbeatPing, HEARTBEAT_INTERVAL)
 }
 
-const enqueueMessageProcessing = (message) => {
-  const expectedGeneration = wsRuntimeGeneration
+const enqueueMessageProcessing = (message, expectedGeneration = wsRuntimeGeneration) => {
   messageProcessingQueue = messageProcessingQueue
     .catch((error) => {
       console.error('previous WebSocket message task failed, continuing', error)
@@ -685,6 +786,7 @@ const normalizeWsMessages = (payload, depth = 0) => {
 const handleWsMessage = async (payload, expectedGeneration) => {
   const messages = normalizeWsMessages(payload)
   let pendingRegularMessages = []
+  let pendingV2Events = []
   const flushPendingRegularMessages = async () => {
     if (!pendingRegularMessages.length || !isCurrentRuntimeGeneration(expectedGeneration)) {
       return
@@ -692,19 +794,26 @@ const handleWsMessage = async (payload, expectedGeneration) => {
     await enqueueReceiveMessages(pendingRegularMessages, expectedGeneration)
     pendingRegularMessages = []
   }
+  const flushPendingV2Events = () => {
+    if (!pendingV2Events.length || !isCurrentRuntimeGeneration(expectedGeneration)) return
+    enqueueV2Events(pendingV2Events, expectedGeneration)
+    pendingV2Events = []
+  }
   for (const message of messages) {
     if (!isCurrentRuntimeGeneration(expectedGeneration)) {
       return
     }
     if (isV2Event(message)) {
       await flushPendingRegularMessages()
-      await saveAndPublishV2EventBatch([message])
+      pendingV2Events.push(message)
+      if (pendingV2Events.length >= RECEIVE_FLUSH_MAX) flushPendingV2Events()
       continue
     }
     // V1 INIT/ACK and bare messages are deliberately not persisted. Treating
     // them as received would acknowledge data that cannot participate in the
     // event cursor protocol. The renderer's recovery path will request V2.
     await flushPendingRegularMessages()
+    flushPendingV2Events()
     updateWsDiagnostics({
       invalidMessageCount: wsDiagnostics.invalidMessageCount + 1,
       lastError: 'Legacy or malformed WebSocket event rejected'
@@ -717,6 +826,7 @@ const handleWsMessage = async (payload, expectedGeneration) => {
       })
     }
   }
+  flushPendingV2Events()
   await flushPendingRegularMessages()
 }
 
@@ -740,6 +850,9 @@ const createWs = () => {
     reconnect().catch((err) => console.error('reconnect failed', err))
     return
   }
+  // 将代次绑定到此 socket，而不是在迟到回调触发时读取全局值。
+  // 这样旧连接的 message 事件不会被新连接误写入。
+  const socketGeneration = wsRuntimeGeneration
 
   ws.onopen = function () {
     logger.info('WebSocket connected')
@@ -764,7 +877,7 @@ const createWs = () => {
     }
 
     // 串行化消息处理，防止多个 handleWsMessage 并发竞争接收队列和运行代次。
-    enqueueMessageProcessing(message)
+    enqueueMessageProcessing(message, socketGeneration)
   }
 
   ws.onclose = function () {

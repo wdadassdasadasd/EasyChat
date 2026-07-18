@@ -14,8 +14,9 @@ const MESSAGE_PAGE_SIZE = 20
 const MESSAGE_CONTEXT_SIZE = 20
 const MESSAGE_SEARCH_LIMIT = 50
 const PENDING_RECOVERY_TIMEOUT_MS = 60000
+const FTS_BACKFILL_BATCH_SIZE = 100
 let ftsUnavailable = false
-const ftsBackfilledUsers = new Set()
+const ftsBackfillTimers = new Map()
 
 const getClearInfoBySessionId = (sessionId) => {
   if (!sessionId) {
@@ -90,8 +91,7 @@ const runFtsSafe = async (task, context = 'fts') => {
     return false
   }
   try {
-    await task()
-    return true
+    return await task()
   } catch (error) {
     if (isFtsAvailableError(error)) {
       ftsUnavailable = true
@@ -155,23 +155,89 @@ const deleteFtsBySessionId = (sessionId) => {
   )
 }
 
-const backfillFtsForCurrentUser = async () => {
+const getFtsIndexState = async (userId) => {
+  if (!userId) return null
+  return queryOne(
+    'select status,last_row_id from fts_index_state where user_id=?',
+    [userId]
+  )
+}
+
+const updateFtsIndexState = async ({ userId, status, lastRowId }) => {
+  await runStrict(
+    'insert into fts_index_state(user_id,status,last_row_id,updated_at) values(?,?,?,?) on conflict(user_id) do update set status=excluded.status,last_row_id=excluded.last_row_id,updated_at=excluded.updated_at',
+    [userId, status, Number(lastRowId || 0), Date.now()]
+  )
+}
+
+const backfillFtsBatchForUser = async (userId) => {
+  if (!userId || ftsUnavailable) return { complete: true }
+  return await runFtsSafe(async () => {
+    return await runInTransaction(async () => {
+      const state = await getFtsIndexState(userId)
+      if (state?.status === 'ready') return { complete: true }
+      const lastRowId = Number(state?.lastRowId || 0)
+      const rows = await queryAll(
+        [
+          'select rowid as row_id,user_id,session_id,message_id,message_content,file_name',
+          'from chat_message where user_id=? and rowid>? order by rowid asc limit ?'
+        ].join(' '),
+        [userId, lastRowId, FTS_BACKFILL_BATCH_SIZE]
+      )
+      let nextRowId = lastRowId
+      for (const row of rows) {
+        nextRowId = Number(row.rowId || nextRowId)
+        await runStrict('delete from chat_message_fts where user_id=? and message_id=?', [
+          userId,
+          row.messageId
+        ])
+        await runStrict(
+          [
+            'insert into chat_message_fts',
+            '(user_id, session_id, message_id, message_content, file_name)',
+            'values (?, ?, ?, ?, ?)'
+          ].join(' '),
+          [
+            userId,
+            row.sessionId || '',
+            row.messageId,
+            row.messageContent || '',
+            row.fileName || ''
+          ]
+        )
+      }
+      const complete = rows.length < FTS_BACKFILL_BATCH_SIZE
+      await updateFtsIndexState({ userId, status: complete ? 'ready' : 'pending', lastRowId: nextRowId })
+      return { complete }
+    })
+  }, 'backfill fts batch')
+}
+
+const scheduleFtsBackfillForCurrentUser = () => {
   const userId = store.getUserId()
-  if (!userId || ftsUnavailable || ftsBackfilledUsers.has(userId)) {
-    return false
+  if (!userId || ftsUnavailable || ftsBackfillTimers.has(userId)) return false
+
+  const runNextBatch = async () => {
+    let shouldContinue = false
+    try {
+      if (store.getUserId() !== userId) return
+      const result = await backfillFtsBatchForUser(userId)
+      if (!result || result.complete || store.getUserId() !== userId) return
+      shouldContinue = true
+    } catch (error) {
+      console.error('ChatMessageModel scheduled FTS backfill failed', error)
+    } finally {
+      if (shouldContinue && store.getUserId() === userId) {
+        ftsBackfillTimers.set(userId, setTimeout(runNextBatch, 0))
+      } else {
+        ftsBackfillTimers.delete(userId)
+      }
+    }
   }
-  return runFtsSafe(async () => {
-    const sql = [
-      'insert into chat_message_fts',
-      '(user_id, session_id, message_id, message_content, file_name)',
-      "select user_id, session_id, message_id, coalesce(message_content, ''), coalesce(file_name, '')",
-      'from chat_message',
-      'where user_id=? and message_id not in',
-      '(select message_id from chat_message_fts where user_id=?)'
-    ].join(' ')
-    await runStrict(sql, [userId, userId])
-    ftsBackfilledUsers.add(userId)
-  }, 'backfill fts')
+
+  const timer = setTimeout(runNextBatch, 0)
+  ftsBackfillTimers.set(userId, timer)
+  return true
 }
 
 const filterVisibleMessages = async (messageList = []) => {
@@ -888,7 +954,6 @@ const searchMessageBySessionIdFts = async ({ sessionId, keyword } = {}) => {
     return []
   }
 
-  await backfillFtsForCurrentUser()
   const clearInfo = await getClearInfoBySessionId(sessionId)
   const sqlParts = [
     'select m.* from chat_message_fts f',
@@ -903,16 +968,20 @@ const searchMessageBySessionIdFts = async ({ sessionId, keyword } = {}) => {
 }
 
 const searchMessageBySessionId = async ({ sessionId, keyword } = {}) => {
-  try {
-    const ftsResults = await searchMessageBySessionIdFts({ sessionId, keyword })
-    if (ftsResults.length > 0) {
-      return ftsResults
+  if (!sessionId || !keyword) return []
+  const userId = store.getUserId()
+  const state = await getFtsIndexState(userId)
+  if (state?.status === 'ready') {
+    try {
+      const ftsResults = await searchMessageBySessionIdFts({ sessionId, keyword })
+      if (ftsResults.length > 0) return ftsResults
+    } catch (error) {
+      if (isFtsAvailableError(error)) ftsUnavailable = true
+      console.error('FTS search failed, fallback to LIKE', error)
     }
-  } catch (error) {
-    if (isFtsAvailableError(error)) {
-      ftsUnavailable = true
-    }
-    console.error('FTS search failed, fallback to LIKE', error)
+  } else {
+    // 冷数据回填在低优先级小批次中完成；当前搜索先走完整 LIKE 结果，避免半成品索引漏查。
+    scheduleFtsBackfillForCurrentUser()
   }
   return searchMessageBySessionIdLike({ sessionId, keyword })
 }
@@ -976,5 +1045,6 @@ export {
   recoverStalePendingMessages,
   searchMessageBySessionIdLike,
   searchMessageBySessionIdFts,
-  searchMessageBySessionId
+  searchMessageBySessionId,
+  backfillFtsBatchForUser
 }

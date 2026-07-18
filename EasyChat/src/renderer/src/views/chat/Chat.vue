@@ -126,6 +126,7 @@
                 :downloadState="selectedFileDownloadState"
                 @closed="closeFilePreviewDialog"
                 @receive="receiveSelectedFileMessage"
+                @cancel="cancelSelectedFileDownload"
                 @openFile="openDownloadedFile(selectedFileMessage)"
                 @showInFolder="showDownloadedFileInFolder(selectedFileMessage)"
             />
@@ -139,6 +140,7 @@
                 :videoUrl="videoPreviewUrl"
                 @closed="closeVideoPreviewDialog"
                 @download="downloadSelectedVideoMessage"
+                @cancel="cancelSelectedVideoDownload"
                 @openFile="openDownloadedFile(selectedVideoMessage)"
                 @showInFolder="showDownloadedFileInFolder(selectedVideoMessage)"
                 @openExternal="openSelectedVideoExternal"
@@ -205,6 +207,8 @@ const {
     onSendVideoMessage,
     retryFailedMessage,
     settleScrollToBottom,
+    cancelSelectedFileDownload,
+    cancelSelectedVideoDownload,
     closeFilePreviewDialog,
     closeVideoPreviewDialog,
     downloadSelectedVideoMessage,

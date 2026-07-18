@@ -149,6 +149,24 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
     }
   }
 
+  // The authenticated runtime starts the WebSocket before routing to Chat. A
+  // fast connection can therefore publish `connected` before this component
+  // subscribes. Re-read the current status after subscribing so first-open
+  // reconciliation does not depend on a later reconnect.
+  const syncCurrentWsStatus = async () => {
+    try {
+      const diagnostics = await window.api.invokeGetRuntimeDiagnostics?.()
+      if (diagnostics?.success && diagnostics.websocket?.status) {
+        handleWsStatus({
+          status: diagnostics.websocket.status,
+          retryLeft: diagnostics.websocket.retryLeft
+        })
+      }
+    } catch (error) {
+      console.warn('Failed to read initial WebSocket status', error)
+    }
+  }
+
   const handleClearMessages = () => {
     const sessionId = sessions.currentChatSession.value.sessionId
     if (!sessionId) {
@@ -199,6 +217,7 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
     messages.registerMessageListeners()
     sessions.registerSessionListener()
     pageSubscriptions.replace('wsStatus', () => window.api.onWsStatusChange(handleWsStatus))
+    void syncCurrentWsStatus()
     sessions.loadChatSession()
     sessions.openChatFromRoute()
   }

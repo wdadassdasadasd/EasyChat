@@ -1,6 +1,8 @@
 import { ref } from 'vue'
 import Utils from '@/utils/Utils'
 
+export const MAX_VIDEO_PREVIEW_BLOB_BYTES = 128 * 1024 * 1024
+
 /** Owns video-preview state and any object URL created solely for playback. */
 export const createVideoPreviewController = ({ fileAccess, proxy }) => {
   const selectedVideoMessage = ref(null)
@@ -13,6 +15,12 @@ export const createVideoPreviewController = ({ fileAccess, proxy }) => {
   let ownsVideoPreviewUrl = false
   let previewSeq = 0
   let disposed = false
+  let previewAbortController = null
+
+  const abortVideoPreviewLoad = () => {
+    previewAbortController?.abort()
+    previewAbortController = null
+  }
 
   const revokeVideoPreviewUrl = () => {
     if (videoPreviewUrl.value && ownsVideoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl.value)
@@ -53,7 +61,11 @@ export const createVideoPreviewController = ({ fileAccess, proxy }) => {
     return new Blob([buffer], { type: Utils.getVideoMimeType(Utils.getFileMessageName(message)) })
   }
 
-  const fetchVideoBlobFallback = async (message, onProgress) => {
+  const fetchVideoBlobFallback = async (message, onProgress, { signal, abort } = {}) => {
+    if (signal?.aborted) return { canceled: true }
+    if (Number(message?.fileSize || 0) > MAX_VIDEO_PREVIEW_BLOB_BYTES) return { tooLarge: true }
+
+    let tooLarge = false
     onProgress?.(0)
     const blob = await proxy.Request({
       url: proxy.Api.downloadFile,
@@ -62,20 +74,35 @@ export const createVideoPreviewController = ({ fileAccess, proxy }) => {
       showLoading: false,
       showError: false,
       timeout: 0,
+      signal,
+      returnError: true,
       downloadProgressCallback: (event) => {
+        if (Number(event?.total || 0) > MAX_VIDEO_PREVIEW_BLOB_BYTES) {
+          tooLarge = true
+          abort?.()
+          return
+        }
         if (!event?.total) return
         onProgress?.(Math.min(99, Math.max(0, Math.round((event.loaded / event.total) * 100))))
       }
     })
-    if (!blob) return readLocalVideoBlob(message, onProgress)
+    if (signal?.aborted) return { canceled: !tooLarge, tooLarge }
+    if (!blob || blob?.success === false) {
+      if (signal?.aborted) return { canceled: true }
+      return { blob: await readLocalVideoBlob(message, onProgress) }
+    }
     const errorText = await parseBlobError(blob)
-    if (errorText || blob.type?.includes('json')) return readLocalVideoBlob(message, onProgress)
+    if (signal?.aborted) return { canceled: true }
+    if (errorText || blob.type?.includes('json')) {
+      return { blob: await readLocalVideoBlob(message, onProgress) }
+    }
     onProgress?.(100)
-    return new Blob([blob], { type: Utils.getVideoMimeType(Utils.getFileMessageName(message)) })
+    return { blob: new Blob([blob], { type: Utils.getVideoMimeType(Utils.getFileMessageName(message)) }) }
   }
 
   const closeVideoPreviewDialog = () => {
     previewSeq += 1
+    abortVideoPreviewLoad()
     selectedVideoMessage.value = null
     isLoadingVideo.value = false
     revokeVideoPreviewUrl()
@@ -83,10 +110,14 @@ export const createVideoPreviewController = ({ fileAccess, proxy }) => {
 
   const openVideoPreviewDialog = async (message) => {
     if (!Utils.isVideoMessage(message) || Utils.isVideoPreviewDisabled(message)) return
+    abortVideoPreviewLoad()
+    const controller = new AbortController()
+    previewAbortController = controller
     const requestSeq = ++previewSeq
     const isCurrent = () =>
       !disposed &&
       requestSeq === previewSeq &&
+      previewAbortController === controller &&
       selectedVideoMessage.value?.messageId == message.messageId
     selectedVideoMessage.value = message
     showVideoPreviewDialog.value = true
@@ -98,7 +129,10 @@ export const createVideoPreviewController = ({ fileAccess, proxy }) => {
     }
 
     isLoadingVideo.value = true
-    const streamUrl = await fileAccess.createDownloadUrl(message, { download: false })
+    const streamUrl = await fileAccess.createDownloadUrl(message, {
+      download: false,
+      signal: controller.signal
+    })
     if (!isCurrent()) return
     isLoadingVideo.value = false
     if (streamUrl) {
@@ -107,11 +141,16 @@ export const createVideoPreviewController = ({ fileAccess, proxy }) => {
     }
 
     isLoadingVideo.value = true
-    const blob = await fetchVideoBlobFallback(message, (progress) => {
+    const fallback = await fetchVideoBlobFallback(message, (progress) => {
       if (isCurrent()) videoDownloadProgress.value = progress
-    })
+    }, { signal: controller.signal, abort: () => controller.abort() })
     if (!isCurrent()) return
     isLoadingVideo.value = false
+    if (fallback.tooLarge) {
+      videoPlaybackError.value = '视频过大，无法直接预览，请下载后播放'
+      return
+    }
+    const blob = fallback.blob
     if (!blob) {
       videoPlaybackError.value = '视频暂时无法预览，可以下载后打开'
       return
@@ -137,7 +176,13 @@ export const createVideoPreviewController = ({ fileAccess, proxy }) => {
       const result = await window.api.invokeOpenDownloadedFile({ filePath: state.path })
       if (result?.success) return
     }
-    const blob = videoPreviewBlob || (await fetchVideoBlobFallback(message))
+    const fallback = videoPreviewBlob
+      ? { blob: videoPreviewBlob }
+      : await fetchVideoBlobFallback(message, undefined, {
+          signal: previewAbortController?.signal,
+          abort: () => previewAbortController?.abort()
+        })
+    const blob = fallback.blob
     if (!blob) return
     const result = await window.api.invokeOpenTempVideoFile({
       fileName: Utils.getFileMessageName(message),

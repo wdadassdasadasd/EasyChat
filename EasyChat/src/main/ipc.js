@@ -1,7 +1,5 @@
 import { app, dialog, shell } from 'electron'
 import fs from 'fs'
-import http from 'http'
-import https from 'https'
 import path from 'path'
 import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
 import { initWs, closeWs } from './wsClient.js'
@@ -92,6 +90,7 @@ import {
   validateWindowOperation
 } from './ipcValidation.js'
 import { getTempVideoFolder } from './tempVideoFiles.js'
+import { createDownloadTaskManager } from './downloadTaskManager.js'
 
 const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
 const MAX_LOCAL_REPLACE_RECOVERY_ITEMS = 100
@@ -187,11 +186,13 @@ const startAuthenticatedRuntime = async (config, sender, callback, { persistSess
   if (!persistence.success) return persistence
 
   await deactivateUploadTasks()
+  await downloadTaskManager.deactivateDownloadTasks()
   store.initUserId(config.userId)
   // Token no longer enters electron-store; remove the legacy user-scoped key after a successful login.
   store.deleteUserData('token')
   await addUserSetting(config.userId, config.email)
   try {
+    downloadTaskManager.activateDownloadRuntime({ userId: config.userId, eventTarget: sender })
     activateUploadTasks({
       userId: config.userId,
       token: config.token,
@@ -475,6 +476,7 @@ const onMarkSessionRead = () => {
 const onResetToLogin = (_mainWindow, callback) => {
   const reset = async () => {
     await deactivateUploadTasks()
+    await downloadTaskManager.deactivateDownloadTasks()
     await closeWs()
     clearSecureSession()
     store.clearLegacyTokenData()
@@ -770,27 +772,23 @@ const onOpenTempVideoFile = () => {
   })
 }
 
-const activeDownloads = new Map()
-
 const sanitizeFileName = (fileName = 'download') => {
   const safeName = String(fileName || 'download').replace(/[\\/:*?"<>|]/g, '_')
   return safeName.trim() || 'download'
 }
 
-const resolveConflictFilePath = (folder, fileName) => {
+const resolveConflictFilePath = (folder, fileName, reservedTargetPaths = new Set()) => {
   const safeName = sanitizeFileName(fileName)
   const ext = path.extname(safeName)
   const base = path.basename(safeName, ext)
   let targetPath = path.join(folder, safeName)
   let index = 1
-  while (fs.existsSync(targetPath)) {
+  while (fs.existsSync(targetPath) || reservedTargetPaths.has(targetPath)) {
     targetPath = path.join(folder, `${base} (${index})${ext}`)
     index += 1
   }
   return targetPath
 }
-
-const MAX_DOWNLOAD_REDIRECTS = 10
 
 const addHttpOrigin = (origins, value, label) => {
   if (!value) {
@@ -840,6 +838,8 @@ const isPathWithinFolder = async (filePath, folderPath) => {
   return Boolean(relativePath) && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
 }
 
+/* The former IPC-owned downloader is retained here temporarily for migration review.
+ * Runtime ownership now lives in downloadTaskManager below.
 const downloadToFile = ({
   e,
   fileName,
@@ -1008,48 +1008,46 @@ const downloadToFile = ({
   })
 }
 
+*/
+
+const downloadTaskManager = createDownloadTaskManager({
+  getTargetPath: async (fileName, { reservedTargetPaths } = {}) => {
+    const folderInfo = await getLocalFileFolder()
+    const targetPath = resolveConflictFilePath(
+      folderInfo.localFileFolder,
+      fileName,
+      reservedTargetPaths
+    )
+    return { targetPath, tempPath: `${targetPath}.download` }
+  },
+  getErrorMessage,
+  validateUrl: validateDownloadUrlOrigin
+})
+
 const onChatFileDownload = () => {
   registerSafeIpcHandle('downloadChatFile', async (e, data = {}) => {
     validateDownload(data)
     const { fileName, fileSize, maxSize, messageId, url } = data
     const allowedOrigins = getAllowedDownloadOrigins()
     validateDownloadUrlOrigin(url, allowedOrigins)
-    if (activeDownloads.has(String(messageId))) {
-      return {
-        success: false,
-        error: 'File is already downloading'
-      }
-    }
-    return await downloadToFile({ e, fileName, fileSize, maxSize, messageId, url, allowedOrigins })
+    return await downloadTaskManager.downloadChatFile({
+      eventTarget: e.sender,
+      userId: store.getUserId(),
+      fileName,
+      fileSize,
+      maxSize,
+      messageId,
+      url,
+      allowedOrigins
+    })
   })
 
   registerSafeIpcHandle('cancelDownloadChatFile', async (_e, data = {}) => {
     validateDownloadId(data)
-    const request = activeDownloads.get(String(data.messageId || ''))
-    if (request) {
-      request.destroy(new Error('Download canceled'))
-      activeDownloads.delete(String(data.messageId))
-    }
-    // 清理取消下载时残留的临时文件
-    try {
-      const folderInfo = await getLocalFileFolder()
-      const tempPattern = String(data.messageId || '')
-      if (tempPattern && folderInfo?.localFileFolder) {
-        const files = fs.readdirSync(folderInfo.localFileFolder)
-        for (const file of files) {
-          if (file.endsWith('.download') && file.includes(tempPattern)) {
-            try {
-              fs.unlinkSync(path.join(folderInfo.localFileFolder, file))
-            } catch (e) {
-              // Best-effort cleanup for canceled downloads.
-            }
-          }
-        }
-      }
-    } catch (e) {
-      // Cancel remains successful even if temporary-file cleanup fails.
-    }
-    return { success: true }
+    return await downloadTaskManager.cancelDownloadChatFile({
+      userId: store.getUserId(),
+      messageId: data.messageId
+    })
   })
 
   registerSafeIpcHandle('openDownloadedFile', async (_e, data = {}) => {

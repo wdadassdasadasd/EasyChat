@@ -50,7 +50,11 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
   'showDownloadedFileInFolder',
   'getSyncCursor',
   'applySyncEventsPage',
-  'applySyncSnapshot'
+  'applySyncSnapshot',
+  'getSnapshotProgress',
+  'applySyncSnapshotPage',
+  'getPendingReadReceipts',
+  'acknowledgeReadReceipt'
 ])
 
 const ALLOWED_LISTEN_CHANNELS = new Set([

@@ -84,6 +84,26 @@ describe('preload API bridge', () => {
     )
   })
 
+  it('allows every named recovery and read-receipt invoke used by the chat page', async () => {
+    electronMocks.ipcRenderer.invoke.mockClear()
+    electronMocks.ipcRenderer.invoke.mockResolvedValue({ success: true })
+
+    await api.invokeGetSnapshotProgress()
+    await api.invokeApplySyncSnapshotPage({ snapshotId: 'snapshot-1' })
+    await api.invokeGetPendingReadReceipts()
+    await api.invokeAcknowledgeReadReceipt({ contactId: 'u1', requestId: 'read-1' })
+
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenNthCalledWith(1, 'getSnapshotProgress')
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenNthCalledWith(2, 'applySyncSnapshotPage', {
+      snapshotId: 'snapshot-1'
+    })
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenNthCalledWith(3, 'getPendingReadReceipts')
+    expect(electronMocks.ipcRenderer.invoke).toHaveBeenNthCalledWith(4, 'acknowledgeReadReceipt', {
+      contactId: 'u1',
+      requestId: 'read-1'
+    })
+  })
+
   it('registers only real File objects through the named upload source channel', async () => {
     electronMocks.ipcRenderer.invoke.mockResolvedValueOnce({
       success: true,

@@ -111,6 +111,13 @@ const add_tables = [
     'updated_at bigint not null,' +
     'primary key (user_id, task_id),' +
     'unique (user_id, message_id)' +
+    ');',
+  // FTS 历史回填进度独立保存，避免首次搜索在写队列中执行无界全表写入。
+  'create table if not exists fts_index_state(' +
+    'user_id varchar primary key,' +
+    "status varchar not null default 'pending'," +
+    'last_row_id integer not null default 0,' +
+    'updated_at bigint not null' +
     ');'
 ]
 

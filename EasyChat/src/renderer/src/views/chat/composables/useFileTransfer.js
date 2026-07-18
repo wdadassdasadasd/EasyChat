@@ -13,6 +13,10 @@ export const useFileTransfer = ({ proxy }) => {
   const selectedFileDownloadState = computed(() =>
     fileAccess.getDownloadState(selectedFileMessage.value)
   )
+  // A download belongs to a message, not to the page. Keeping this derived from
+  // the selected message prevents one completed download from clearing another
+  // message's in-flight UI state.
+  const isReceivingFile = computed(() => fileAccess.isDownloading(selectedFileMessage.value))
   const selectedVideoDownloadState = computed(() =>
     fileAccess.getDownloadState(videoPreview.selectedVideoMessage.value)
   )
@@ -23,7 +27,6 @@ export const useFileTransfer = ({ proxy }) => {
   }
   const closeFilePreviewDialog = () => {
     selectedFileMessage.value = null
-    fileAccess.isReceivingFile.value = false
   }
   const receiveSelectedFileMessage = async () => {
     const message = selectedFileMessage.value
@@ -35,6 +38,16 @@ export const useFileTransfer = ({ proxy }) => {
       await fileAccess.downloadFileMessage(videoPreview.selectedVideoMessage.value)
     }
   }
+  const cancelSelectedFileDownload = async () => {
+    if (selectedFileMessage.value) return await fileAccess.cancelDownloadFileMessage(selectedFileMessage.value)
+    return false
+  }
+  const cancelSelectedVideoDownload = async () => {
+    if (videoPreview.selectedVideoMessage.value) {
+      return await fileAccess.cancelDownloadFileMessage(videoPreview.selectedVideoMessage.value)
+    }
+    return false
+  }
   const cleanupFileTransfer = () => {
     closeFilePreviewDialog()
     videoPreview.cleanup()
@@ -42,10 +55,12 @@ export const useFileTransfer = ({ proxy }) => {
 
   return {
     cleanupFileTransfer,
+    cancelSelectedFileDownload,
+    cancelSelectedVideoDownload,
     closeFilePreviewDialog,
     closeVideoPreviewDialog: videoPreview.closeVideoPreviewDialog,
     downloadSelectedVideoMessage,
-    isReceivingFile: fileAccess.isReceivingFile,
+    isReceivingFile,
     isLoadingVideo: videoPreview.isLoadingVideo,
     markVideoPlaybackError: videoPreview.markVideoPlaybackError,
     openDownloadedFile: fileAccess.openDownloadedFile,

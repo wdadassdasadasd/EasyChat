@@ -65,6 +65,11 @@
                         :disabled="loading || !message || downloadState?.status === 'downloading'"
                         @click="$emit('download')"
                     >{{ downloadButtonText }}</el-button>
+                    <el-button
+                        v-if="downloadState?.status === 'downloading'"
+                        size="small"
+                        @click="$emit('cancel')"
+                    >取消下载</el-button>
                 </div>
             </div>
         </div>
@@ -106,7 +111,7 @@ const props = defineProps({
     }
 });
 
-defineEmits(['closed', 'download', 'openExternal', 'openFile', 'showInFolder', 'update:modelValue', 'videoError']);
+defineEmits(['cancel', 'closed', 'download', 'openExternal', 'openFile', 'showInFolder', 'update:modelValue', 'videoError']);
 
 const videoName = computed(() => Utils.getFileMessageName(props.message || {}));
 const safeProgress = computed(() => Math.min(100, Math.max(0, Number(props.progress) || 0)));

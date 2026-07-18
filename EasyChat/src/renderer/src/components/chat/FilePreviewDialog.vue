@@ -25,6 +25,12 @@
             >
                 {{ actionText }}
             </button>
+            <button
+                v-if="downloadState?.status === 'downloading'"
+                class="file-preview-cancel"
+                type="button"
+                @click="$emit('cancel')"
+            >取消下载</button>
             <el-progress
                 v-if="downloadState?.status === 'downloading'"
                 class="file-preview-progress"
@@ -69,7 +75,7 @@ const props = defineProps({
     }
 });
 
-defineEmits(['closed', 'openFile', 'receive', 'showInFolder', 'update:modelValue']);
+defineEmits(['cancel', 'closed', 'openFile', 'receive', 'showInFolder', 'update:modelValue']);
 
 const actionText = computed(() => {
     if (props.downloadState?.status === 'downloading' || props.receiving) {
@@ -195,6 +201,14 @@ const actionText = computed(() => {
 .file-preview-progress {
     width: 260px;
     margin-top: 16px;
+}
+
+.file-preview-cancel {
+    margin-top: 12px;
+    border: none;
+    background: transparent;
+    color: #666;
+    cursor: pointer;
 }
 
 .file-preview-error {
