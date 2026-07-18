@@ -29,17 +29,26 @@ export const createFileAccessController = ({ proxy }) => {
     })
   }
 
-  const createDownloadUrl = async (message, { download = false, showCover = false, signal } = {}) => {
+  const createDownloadUrl = async (
+    message,
+    { download = false, showCover = false, signal, returnDetails = false } = {}
+  ) => {
     const result = await proxy.Request({
       url: proxy.Api.createDownloadToken,
       params: { fileId: message.messageId, showCover, download },
       showLoading: false,
       showError: false,
-      signal
+      signal,
+      returnError: true
     })
     const streamUrl = result?.data?.streamUrl
-    if (!streamUrl) return ''
-    return getApiUrl(streamUrl) || ''
+    const url = streamUrl ? getApiUrl(streamUrl) || '' : ''
+    if (!returnDetails) return url
+    return {
+      url,
+      error: result?.msg || result?.error || (result?.kind === 'network' ? '文件服务不可达，请检查网络后重试。' : ''),
+      kind: result?.kind || ''
+    }
   }
 
   const downloadFileMessage = async (message) => {
@@ -67,7 +76,12 @@ export const createFileAccessController = ({ proxy }) => {
       return await window.api.invokeCancelDownloadChatFile({ messageId: message.messageId })
     })
     try {
-      const url = await createDownloadUrl(message, { download: true, signal: controller.signal })
+      const downloadAccess = await createDownloadUrl(message, {
+        download: true,
+        signal: controller.signal,
+        returnDetails: true
+      })
+      const url = downloadAccess.url
       if (controller.signal.aborted) {
         patchDownloadState(message, { status: 'canceled', progress: 0, error: '', path: '' })
         return false
@@ -76,9 +90,9 @@ export const createFileAccessController = ({ proxy }) => {
         patchDownloadState(message, {
           status: 'failed',
           progress: 0,
-          error: 'Download link could not be created.'
+          error: downloadAccess.error || 'Download link could not be created.'
         })
-        proxy.Message.error('Download failed')
+        proxy.Message.error(downloadAccess.error || 'Download failed')
         return false
       }
       const progressHandler = (payload = {}) => {

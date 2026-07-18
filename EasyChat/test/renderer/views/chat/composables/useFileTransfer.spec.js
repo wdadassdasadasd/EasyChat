@@ -138,6 +138,27 @@ describe('useFileTransfer', () => {
     expect(proxy.Message.error).toHaveBeenCalledWith('network down')
   })
 
+  it('reports a file-service network failure before starting the main-process download', async () => {
+    const proxy = createProxy()
+    proxy.Request.mockResolvedValueOnce({
+      kind: 'network',
+      msg: '文件服务不可达，请检查网络后重试。'
+    })
+    const transfer = useFileTransfer({ proxy })
+    const message = createFileMessage()
+
+    transfer.openFilePreviewDialog(message)
+    await transfer.receiveSelectedFileMessage()
+
+    expect(invokeDownloadChatFile).not.toHaveBeenCalled()
+    expect(message).toMatchObject({
+      downloadStatus: 'failed',
+      downloadProgress: 0,
+      downloadError: '文件服务不可达，请检查网络后重试。'
+    })
+    expect(proxy.Message.error).toHaveBeenCalledWith('文件服务不可达，请检查网络后重试。')
+  })
+
   it('rejects oversized downloads before requesting a signed download url', async () => {
     const proxy = createProxy()
     const transfer = useFileTransfer({ proxy })

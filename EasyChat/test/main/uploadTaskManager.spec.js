@@ -285,6 +285,88 @@ describe('uploadTaskManager', () => {
     )
   })
 
+  it('keeps a network-unavailable upload pending and resumes it after the retry delay', async () => {
+    vi.useFakeTimers()
+    const manager = await import('../../src/main/uploadTaskManager')
+    const axios = (await import('axios')).default
+    const sourceRegistry = await import('../../src/main/uploadSourceRegistry')
+    const networkError = Object.assign(new Error('connect ECONNREFUSED'), {
+      code: 'ECONNREFUSED',
+      isAxiosError: true
+    })
+    axios.post.mockRejectedValue(networkError)
+    sourceRegistry.readUploadSourceChunk.mockResolvedValue({
+      success: true,
+      arrayBuffer: new ArrayBuffer(8)
+    })
+    manager.activateUploadTasks({ userId: 'alice', token: 'alice-token' })
+
+    await manager.enqueueUploadTask({ messageId: 1819, uploadSourceId: 's-1819', fileType: 5 })
+    await vi.advanceTimersByTimeAsync(4000)
+
+    expect(state.tasks[0]).toMatchObject({
+      state: 'waiting_network',
+      uploadSourceId: 's-1819'
+    })
+    expect(state.tasks[0].uploadedBytes || 0).toBe(0)
+    expect(sourceRegistry.releaseUploadSource).not.toHaveBeenCalled()
+
+    axios.post.mockImplementation(async (url) => {
+      if (url.endsWith('/init')) {
+        return { data: { code: 200, data: { uploadId: 'u-network', uploadedChunks: [] } } }
+      }
+      return { data: { code: 200, data: {} } }
+    })
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(axios.post.mock.calls.some(([url]) => url.endsWith('/init'))).toBe(true)
+    expect(['uploading', 'awaiting_ack']).toContain(state.tasks[0]?.state)
+    vi.useRealTimers()
+  })
+
+  it('cancels a network retry timer when the waiting upload is paused', async () => {
+    vi.useFakeTimers()
+    const manager = await import('../../src/main/uploadTaskManager')
+    const axios = (await import('axios')).default
+    const networkError = Object.assign(new Error('connect ECONNREFUSED'), {
+      code: 'ECONNREFUSED',
+      isAxiosError: true
+    })
+    axios.post.mockRejectedValue(networkError)
+    manager.activateUploadTasks({ userId: 'alice', token: 'alice-token' })
+
+    await manager.enqueueUploadTask({ messageId: 1820, uploadSourceId: 's-1820', fileType: 5 })
+    await vi.advanceTimersByTimeAsync(4000)
+    await manager.pauseUploadTask({ messageId: 1820 })
+    const callsBeforeWait = axios.post.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60000)
+
+    expect(state.tasks[0]?.state).toBe('paused')
+    expect(axios.post).toHaveBeenCalledTimes(callsBeforeWait)
+    vi.useRealTimers()
+  })
+
+  it('cancels a network retry timer when the authenticated runtime is deactivated', async () => {
+    vi.useFakeTimers()
+    const manager = await import('../../src/main/uploadTaskManager')
+    const axios = (await import('axios')).default
+    const networkError = Object.assign(new Error('connect ECONNREFUSED'), {
+      code: 'ECONNREFUSED',
+      isAxiosError: true
+    })
+    axios.post.mockRejectedValue(networkError)
+    manager.activateUploadTasks({ userId: 'alice', token: 'alice-token' })
+
+    await manager.enqueueUploadTask({ messageId: 1821, uploadSourceId: 's-1821', fileType: 5 })
+    await vi.advanceTimersByTimeAsync(4000)
+    await manager.deactivateUploadTasks()
+    const callsBeforeWait = axios.post.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60000)
+
+    expect(axios.post).toHaveBeenCalledTimes(callsBeforeWait)
+    vi.useRealTimers()
+  })
+
   it('uses shared control, chunk and complete request timeout budgets', async () => {
     const manager = await import('../../src/main/uploadTaskManager')
     const axios = (await import('axios')).default

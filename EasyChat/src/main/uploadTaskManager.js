@@ -26,14 +26,18 @@ import {
 
 const TASK_STATES = Object.freeze({
   QUEUED: 'queued', UPLOADING: 'uploading', PAUSED: 'paused', FAILED: 'failed',
-  CANCELED: 'canceled', CANCELING: 'canceling', AWAITING_ACK: 'awaiting_ack', SUCCEEDED: 'succeeded'
+  CANCELED: 'canceled', CANCELING: 'canceling', AWAITING_ACK: 'awaiting_ack',
+  WAITING_NETWORK: 'waiting_network', SUCCEEDED: 'succeeded'
 })
 const MAX_CONCURRENT_UPLOADS = 2
 const RETRY_DELAYS = UPLOAD_RETRY_DELAYS
 const ACK_RECONCILE_DELAYS = [0, 1000, 3000, 10000, 30000, 60000]
+const NETWORK_RETRY_DELAYS = [5000, 10000, 30000, 60000]
 const FAILED_TASK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 const activeControllers = new Map()
 const ackTimers = new Map()
+const networkRetryTimers = new Map()
+const networkRetryAttempts = new Map()
 let runtime = { generation: 0, userId: null, token: '', apiBaseUrl: '', eventTarget: null }
 
 const getApiBaseUrl = () => runtimeConfig.apiBaseUrl
@@ -108,9 +112,20 @@ const persistAndEmit = async (task, allowedStates, patch, context) => {
   emitTask(result.task, context)
   return result.task
 }
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETDOWN',
+  'ENETUNREACH', 'ENOTFOUND', 'ETIMEDOUT'
+])
 const isRetryable = (error) => {
+  if (axios.isCancel?.(error) || error?.kind === 'api_code' || error?.kind === 'protocol_error') return false
   const status = Number(error?.response?.status || 0)
-  return !status || status === 408 || status === 429 || status >= 500
+  if (status) return status === 408 || status === 429 || status >= 500
+  return Boolean(
+    error?.isAxiosError ||
+    error?.request ||
+    NETWORK_ERROR_CODES.has(String(error?.code || '').toUpperCase()) ||
+    /network|timeout|socket|connect|dns/i.test(String(error?.message || ''))
+  )
 }
 const withRetry = async (operation, signal) => {
   let lastError
@@ -135,6 +150,47 @@ const clearAckReconcilesForGeneration = (generation) => {
     ackTimers.delete(key)
   }
 }
+const clearNetworkRetry = (context, taskId, { resetAttempt = true } = {}) => {
+  const key = getTaskKey(context, taskId)
+  const entry = networkRetryTimers.get(key)
+  if (entry) {
+    clearTimeout(entry.timer)
+    networkRetryTimers.delete(key)
+  }
+  if (resetAttempt) networkRetryAttempts.delete(key)
+}
+const clearNetworkRetriesForGeneration = (generation) => {
+  for (const [key, entry] of networkRetryTimers.entries()) {
+    if (entry.context.generation !== generation) continue
+    clearTimeout(entry.timer)
+    networkRetryTimers.delete(key)
+    networkRetryAttempts.delete(key)
+  }
+}
+const scheduleNetworkRetry = (context, taskId) => {
+  if (!isActive(context)) return
+  const key = getTaskKey(context, taskId)
+  if (networkRetryTimers.has(key)) return
+  const attempt = networkRetryAttempts.get(key) || 0
+  const delay = NETWORK_RETRY_DELAYS[Math.min(attempt, NETWORK_RETRY_DELAYS.length - 1)]
+  networkRetryAttempts.set(key, attempt + 1)
+  const timer = setTimeout(() => {
+    networkRetryTimers.delete(key)
+    void (async () => {
+      if (!isActive(context)) return
+      const task = await getUploadTaskByTaskId(taskId, context.userId)
+      if (!isActive(context) || task?.state !== TASK_STATES.WAITING_NETWORK) return
+      const queued = await persistAndEmit(
+        task,
+        [TASK_STATES.WAITING_NETWORK],
+        { state: TASK_STATES.QUEUED, lastError: '' },
+        context
+      )
+      if (queued) schedule(context)
+    })().catch((error) => console.error('Failed to requeue network-waiting upload task', error))
+  }, delay)
+  networkRetryTimers.set(key, { context, timer })
+}
 const scheduleAckReconcile = (context, taskId, attempt = 0) => {
   if (!isActive(context)) return
   clearAckReconcile(context, taskId)
@@ -157,6 +213,7 @@ const settleTerminalTask = async (task, succeeded, error, context) => {
   if (!next) return { settled: false }
 
   clearAckReconcile(context, task.taskId)
+  clearNetworkRetry(context, task.taskId)
   await setUploadSourcePinned({ uploadSourceId: next.uploadSourceId, userId: context.userId, pinned: false })
   const shouldRelease = succeeded || task.state === TASK_STATES.CANCELING
   if (shouldRelease) {
@@ -299,6 +356,7 @@ const runTask = async (initialTask, context) => {
     if (!task) return
     task = await persistAndEmit(task, [TASK_STATES.UPLOADING], { state: TASK_STATES.AWAITING_ACK, uploadedBytes: task.fileSize, lastError: '' }, context)
     if (!task) return
+    clearNetworkRetry(context, task.taskId)
     scheduleAckReconcile(context, task.taskId)
   } catch (error) {
     const latest = await getUploadTaskByTaskId(initialTask.taskId, context.userId)
@@ -308,20 +366,29 @@ const runTask = async (initialTask, context) => {
       ownsAttempt &&
       (latest?.state === TASK_STATES.UPLOADING || (!sourceResolved && latest?.state === TASK_STATES.QUEUED))
     ) {
-      const failed = await persistAndEmit(
+      const waitingForNetwork = isRetryable(error)
+      const next = await persistAndEmit(
         latest,
         [TASK_STATES.UPLOADING, TASK_STATES.QUEUED],
-        { state: TASK_STATES.FAILED, lastError: error?.message || 'Upload failed' },
+        {
+          state: waitingForNetwork ? TASK_STATES.WAITING_NETWORK : TASK_STATES.FAILED,
+          lastError: error?.message || (waitingForNetwork ? 'File service is unavailable' : 'Upload failed')
+        },
         context
       )
-      if (!failed) return
+      if (!next) return
+      if (waitingForNetwork) {
+        scheduleNetworkRetry(context, next.taskId)
+        return
+      }
+      clearNetworkRetry(context, next.taskId)
       if (!sourceResolved) {
-        await setUploadSourcePinned({ uploadSourceId: failed.uploadSourceId, userId: context.userId, pinned: false })
+        await setUploadSourcePinned({ uploadSourceId: next.uploadSourceId, userId: context.userId, pinned: false })
       }
       await context.onTerminalStatus?.({
-        messageId: failed.messageId,
+        messageId: next.messageId,
         succeeded: false,
-        error: failed.lastError
+        error: next.lastError
       })
     }
   } finally {
@@ -334,7 +401,8 @@ const enqueueUploadTask = async ({ messageId, uploadSourceId, coverSourceId, fil
   if (!context) return { success: false, kind: 'not_logged_in', error: 'Upload context is unavailable' }
   const source = await getUploadSource(uploadSourceId, { userId: context.userId })
   const existing = await getUploadTaskByMessageId(messageId, context.userId)
-  if (existing && [TASK_STATES.QUEUED, TASK_STATES.UPLOADING, TASK_STATES.AWAITING_ACK, TASK_STATES.CANCELING].includes(existing.state)) {
+  if (existing && [TASK_STATES.QUEUED, TASK_STATES.UPLOADING, TASK_STATES.WAITING_NETWORK, TASK_STATES.AWAITING_ACK, TASK_STATES.CANCELING].includes(existing.state)) {
+    emitTask(existing, context)
     return { success: true, taskId: existing.taskId, state: existing.state, reused: true }
   }
   if (existing?.coverSourceId && coverSourceId && existing.coverSourceId !== coverSourceId) {
@@ -351,7 +419,7 @@ const enqueueUploadTask = async ({ messageId, uploadSourceId, coverSourceId, fil
     lastError: ''
   }
   const task = existing
-    ? await persistAndEmit(existing, [TASK_STATES.PAUSED, TASK_STATES.FAILED], patch, context)
+    ? await persistAndEmit(existing, [TASK_STATES.PAUSED, TASK_STATES.FAILED, TASK_STATES.WAITING_NETWORK], patch, context)
     : await saveUploadTask({ ...patch, taskId: randomUUID(), messageId }, context.userId)
   if (!task) return { success: false, kind: 'invalid_state', error: 'Upload task cannot be queued in its current state' }
   await setUploadSourcePinned({ uploadSourceId, userId: context.userId, pinned: true })
@@ -368,8 +436,9 @@ const pauseUploadTask = async ({ messageId } = {}) => {
     entry.invalidated = true
     entry.controller.abort()
   }
-  const next = await persistAndEmit(task, [TASK_STATES.QUEUED, TASK_STATES.UPLOADING], { state: TASK_STATES.PAUSED }, context)
+  const next = await persistAndEmit(task, [TASK_STATES.QUEUED, TASK_STATES.UPLOADING, TASK_STATES.WAITING_NETWORK], { state: TASK_STATES.PAUSED }, context)
   if (!next) return { success: false, kind: 'invalid_state', error: 'Upload task cannot be paused in its current state' }
+  clearNetworkRetry(context, next.taskId)
   return { success: true, taskId: next.taskId, state: next.state }
 }
 const resumeUploadTask = async ({ messageId } = {}) => {
@@ -377,11 +446,12 @@ const resumeUploadTask = async ({ messageId } = {}) => {
   if (!context) return { success: false, kind: 'not_logged_in', error: 'Upload context is unavailable' }
   const task = await getUploadTaskByMessageId(messageId, context.userId)
   if (!task) return { success: false, kind: 'not_found', error: 'Upload task not found' }
-  if (![TASK_STATES.PAUSED, TASK_STATES.FAILED].includes(task.state)) {
+  if (![TASK_STATES.PAUSED, TASK_STATES.FAILED, TASK_STATES.WAITING_NETWORK].includes(task.state)) {
     return { success: false, kind: 'invalid_state', error: 'Upload task cannot be resumed in its current state' }
   }
-  const next = await persistAndEmit(task, [TASK_STATES.PAUSED, TASK_STATES.FAILED], { state: TASK_STATES.QUEUED, lastError: '' }, context)
+  const next = await persistAndEmit(task, [TASK_STATES.PAUSED, TASK_STATES.FAILED, TASK_STATES.WAITING_NETWORK], { state: TASK_STATES.QUEUED, lastError: '' }, context)
   if (!next) return { success: false, kind: 'invalid_state', error: 'Upload task cannot be resumed in its current state' }
+  clearNetworkRetry(context, next.taskId)
   schedule(context); return { success: true, taskId: next.taskId, state: next.state }
 }
 const cancelUploadTask = async ({ messageId } = {}) => {
@@ -396,12 +466,13 @@ const cancelUploadTask = async ({ messageId } = {}) => {
   }
   const next = await persistAndEmit(
     task,
-    [TASK_STATES.QUEUED, TASK_STATES.UPLOADING, TASK_STATES.PAUSED, TASK_STATES.FAILED, TASK_STATES.AWAITING_ACK],
+    [TASK_STATES.QUEUED, TASK_STATES.UPLOADING, TASK_STATES.PAUSED, TASK_STATES.FAILED, TASK_STATES.WAITING_NETWORK, TASK_STATES.AWAITING_ACK],
     { state: TASK_STATES.CANCELING, lastError: '' },
     context
   )
   if (!next) return { success: false, kind: 'invalid_state', error: 'Upload task cannot be canceled in its current state' }
   clearAckReconcile(context, task.taskId)
+  clearNetworkRetry(context, task.taskId)
   await reconcileTerminalTask(context, next.taskId)
   const latest = await getUploadTaskByTaskId(next.taskId, context.userId)
   return { success: true, taskId: next.taskId, state: latest?.state || TASK_STATES.CANCELED }
@@ -451,6 +522,7 @@ const resumePersistedUploadTasks = async ({ onTerminalStatus } = {}) => {
     TASK_STATES.UPLOADING,
     TASK_STATES.QUEUED,
     TASK_STATES.PAUSED,
+    TASK_STATES.WAITING_NETWORK,
     TASK_STATES.AWAITING_ACK,
     TASK_STATES.CANCELING
   ].includes(task.state))
@@ -460,6 +532,10 @@ const resumePersistedUploadTasks = async ({ onTerminalStatus } = {}) => {
     if (task.state === TASK_STATES.UPLOADING) {
       await persistAndEmit(task, [TASK_STATES.UPLOADING], { state: TASK_STATES.QUEUED }, context)
     }
+    if (task.state === TASK_STATES.WAITING_NETWORK) {
+      emitTask(task, context)
+      scheduleNetworkRetry(context, task.taskId)
+    }
     if ([TASK_STATES.AWAITING_ACK, TASK_STATES.CANCELING].includes(task.state)) {
       await reconcileTerminalTask(context, task.taskId)
     }
@@ -468,6 +544,7 @@ const resumePersistedUploadTasks = async ({ onTerminalStatus } = {}) => {
   return { protectedMessageIds }
 }
 const activateUploadTasks = ({ userId, token, eventTarget, onTerminalStatus } = {}) => {
+  clearNetworkRetriesForGeneration(runtime.generation)
   runtime = {
     generation: runtime.generation + 1,
     userId,
@@ -483,6 +560,7 @@ const deactivateUploadTasks = async () => {
   runtime = { generation: runtime.generation + 1, userId: null, token: '', apiBaseUrl: '', eventTarget: null, onTerminalStatus: null }
   for (const entry of activeControllers.values()) if (entry.context.generation === previous.generation) entry.controller.abort()
   clearAckReconcilesForGeneration(previous.generation)
+  clearNetworkRetriesForGeneration(previous.generation)
   const tasks = previous.userId ? await listUploadTasksByStates([TASK_STATES.UPLOADING, TASK_STATES.QUEUED], previous.userId) : []
   await Promise.all(tasks.map((task) => transitionUploadTask({
     taskId: task.taskId,

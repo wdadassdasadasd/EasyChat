@@ -5,12 +5,25 @@
         width="690px"
         top="60px"
         class="file-preview-dialog"
-        :show-close="true"
+        :show-close="false"
         :close-on-click-modal="true"
         :append-to-body="true"
         @update:model-value="$emit('update:modelValue', $event)"
         @closed="$emit('closed')"
     >
+        <template #header>
+            <div class="file-preview-dialog-header">
+                <button
+                    class="file-preview-close"
+                    type="button"
+                    aria-label="关闭文件窗口"
+                    @pointerdown.stop
+                    @click.stop="$emit('update:modelValue', false)"
+                >
+                    <el-icon><Close /></el-icon>
+                </button>
+            </div>
+        </template>
         <div class="file-preview-panel" v-if="message">
             <div class="file-preview-icon">
                 <span>?</span>
@@ -54,6 +67,7 @@
 
 <script setup>
 import { computed } from 'vue';
+import { Close } from '@element-plus/icons-vue';
 import Utils from '@/utils/Utils';
 
 const props = defineProps({
@@ -103,14 +117,47 @@ const actionText = computed(() => {
     height: 44px;
     padding: 0;
     margin: 0;
+    position: relative;
+    z-index: 1;
+    pointer-events: auto;
+    -webkit-app-region: no-drag;
 }
 
-:deep(.file-preview-dialog .el-dialog__headerbtn) {
-    top: 12px;
-    right: 18px;
-    width: 24px;
-    height: 24px;
-    font-size: 18px;
+.file-preview-dialog-header {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    pointer-events: auto;
+    -webkit-app-region: no-drag;
+}
+
+.file-preview-close {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    z-index: 2;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #8a8f99;
+    cursor: pointer;
+    pointer-events: auto;
+    -webkit-app-region: no-drag;
+
+    &:hover {
+        background: #f2f3f5;
+        color: #333;
+    }
+
+    &:focus-visible {
+        outline: 2px solid #07c160;
+        outline-offset: 1px;
+    }
 }
 
 :deep(.file-preview-dialog .el-dialog__body) {

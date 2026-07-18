@@ -172,4 +172,28 @@ describe('downloadTaskManager runtime ownership', () => {
       'D:/downloads/final.txt'
     )
   })
+
+  it('classifies connection failures as network errors and removes the partial file', async () => {
+    const http = (await import('http')).default
+    const { createDownloadTaskManager } = await import('../../src/main/downloadTaskManager')
+    const manager = createDownloadTaskManager({
+      getTargetPath: async () => ({ targetPath: 'D:/downloads/offline.bin', tempPath: 'D:/downloads/offline.bin.download' }),
+      validateUrl: (url) => url
+    })
+    const eventTarget = sender()
+    manager.activateDownloadRuntime({ userId: 'alice', eventTarget })
+
+    const pending = manager.downloadChatFile({
+      eventTarget,
+      userId: 'alice',
+      messageId: 'offline-1',
+      url: 'http://files.example.com/offline.bin'
+    })
+    await tick()
+    const request = http.get.mock.results.at(-1).value
+    request.emit('error', Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }))
+
+    await expect(pending).resolves.toMatchObject({ success: false, kind: 'network' })
+    expect(fsState.unlinks).toContain('D:/downloads/offline.bin.download')
+  })
 })

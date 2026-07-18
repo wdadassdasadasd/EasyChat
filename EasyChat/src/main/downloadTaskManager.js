@@ -4,8 +4,15 @@ import https from 'https'
 
 const MAX_DOWNLOAD_REDIRECTS = 10
 const DOWNLOAD_STALLED_TIMEOUT_MS = 30000
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETDOWN',
+  'ENETUNREACH', 'ENOTFOUND', 'ETIMEDOUT'
+])
 
 const defaultGetErrorMessage = (error) => error?.message || String(error || 'unknown error')
+const isNetworkError = (error) =>
+  NETWORK_ERROR_CODES.has(String(error?.code || '').toUpperCase()) ||
+  /network|timeout|socket|connect|dns/i.test(String(error?.message || ''))
 
 /**
  * Owns non-persistent download work for the current authenticated desktop runtime.
@@ -66,6 +73,13 @@ const createDownloadTaskManager = ({
     await cleanupTempPath(task)
     finish(task, result)
   }
+
+  const failFromTransportError = (task, error) =>
+    finishWithCleanup(task, {
+      success: false,
+      ...(isNetworkError(error) ? { kind: 'network' } : {}),
+      error: getErrorMessage(error)
+    })
 
   const stopTask = async (task, result, error = new Error(result.error)) => {
     if (!task || task.settled) return false
@@ -234,32 +248,32 @@ const createDownloadTaskManager = ({
         })
         output.on('error', (error) => {
           if (task.settled) return
-          void finishWithCleanup(task, {
-            success: false,
-            ...(task.canceled ? { kind: 'canceled' } : {}),
-            error: task.canceled ? 'Download canceled' : getErrorMessage(error)
-          })
+          if (task.canceled) {
+            void finishWithCleanup(task, { success: false, kind: 'canceled', error: 'Download canceled' })
+            return
+          }
+          void failFromTransportError(task, error)
         })
         response.on('error', (error) => {
           if (task.settled) return
-          void finishWithCleanup(task, {
-            success: false,
-            ...(task.canceled ? { kind: 'canceled' } : {}),
-            error: task.canceled ? 'Download canceled' : getErrorMessage(error)
-          })
+          if (task.canceled) {
+            void finishWithCleanup(task, { success: false, kind: 'canceled', error: 'Download canceled' })
+            return
+          }
+          void failFromTransportError(task, error)
         })
       })
       task.request = request
       request.on('error', (error) => {
         if (task.settled) return
-        void finishWithCleanup(task, {
-          success: false,
-          ...(task.canceled ? { kind: 'canceled' } : {}),
-          error: task.canceled ? 'Download canceled' : getErrorMessage(error)
-        })
+        if (task.canceled) {
+          void finishWithCleanup(task, { success: false, kind: 'canceled', error: 'Download canceled' })
+          return
+        }
+        void failFromTransportError(task, error)
       })
     } catch (error) {
-      void finishWithCleanup(task, { success: false, error: getErrorMessage(error) })
+      void failFromTransportError(task, error)
     }
   }
 

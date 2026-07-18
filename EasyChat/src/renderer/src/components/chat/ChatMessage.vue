@@ -39,7 +39,7 @@
                 <template v-if="message.status == 2">
                     <span>{{ sendingText }}</span>
                     <button
-                        v-if="message.uploading || message.uploadPaused"
+                        v-if="message.uploading || message.uploadPaused || message.uploadWaitingNetwork"
                         class="message-retry-btn"
                         type="button"
                         @click="$emit('cancelUploadMessage', message)"
@@ -113,6 +113,15 @@ const showSendState = computed(() => {
 });
 
 const sendingText = computed(() => {
+    if (props.message?.uploadWaitingNetwork) {
+        return '等待网络恢复...';
+    }
+    if (props.message?.uploadAwaitingAck) {
+        return '等待服务端确认...';
+    }
+    if (props.message?.uploadPaused) {
+        return '上传已暂停';
+    }
     if (props.message?.uploading) {
         const progress = Number(props.message?.uploadProgress || 0);
         return progress > 0 ? `Uploading ${progress}%` : 'Uploading...';
