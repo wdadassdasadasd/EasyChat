@@ -1,0 +1,6 @@
+target/
+logs/
+log.path_IS_UNDEFINED/
+.env
+*.log
+*.rdb
