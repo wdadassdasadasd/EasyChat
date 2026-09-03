@@ -125,18 +125,22 @@ const createHarness = ({ requestResults = [], invokeResults = [] } = {}) => {
     messageList.value[index] = { ...messageList.value[index], ...patch }
     return true
   }
+  const messageStore = {
+    appendIfMissing: appendMessageIfMissing,
+    findById: (messageId) =>
+      messageList.value.find((item) => String(item.messageId) === String(messageId)),
+    replaceById: replaceMessageById,
+    updateById: updateMessageById
+  }
 
   const sender = useChatMessageSender({
-    appendMessageIfMissing,
     currentChatSession,
     currentUserId,
     isNearMessageBottom: () => true,
-    messageList,
+    messageStore,
     patchChatSessions,
     proxy,
-    replaceMessageById,
-    scrollMessageToBottom: vi.fn(),
-    updateMessageById
+    scrollMessageToBottom: vi.fn()
   })
 
   return {
@@ -1249,10 +1253,12 @@ describe('useChatMessageSender', () => {
   it('keeps a persisted media task running after the user switches sessions', async () => {
     let currentChatSession
     const harness = createHarness({
-      requestResults: [() => {
-        currentChatSession.value = { contactId: 'u3', contactType: 0, sessionId: 's2' }
-        return { data: createServerMediaMessage(711, 'switch-safe.txt') }
-      }]
+      requestResults: [
+        () => {
+          currentChatSession.value = { contactId: 'u3', contactType: 0, sessionId: 's2' }
+          return { data: createServerMediaMessage(711, 'switch-safe.txt') }
+        }
+      ]
     })
     currentChatSession = harness.currentChatSession
     window.api.invokeEnqueueUploadTask = vi.fn(async () => ({ success: true, taskId: 'task-711' }))
@@ -1260,7 +1266,12 @@ describe('useChatMessageSender', () => {
     harness.sender.onSendFileMessage({
       contactId: 'u2',
       contactType: 0,
-      file: { name: 'switch-safe.txt', size: 12, type: 'text/plain', path: 'D:/tmp/switch-safe.txt' }
+      file: {
+        name: 'switch-safe.txt',
+        size: 12,
+        type: 'text/plain',
+        path: 'D:/tmp/switch-safe.txt'
+      }
     })
 
     await vi.waitFor(() => expect(window.api.invokeEnqueueUploadTask).toHaveBeenCalledOnce())
@@ -1273,17 +1284,27 @@ describe('useChatMessageSender', () => {
     const { sender } = createHarness({
       requestResults: [{ data: createServerMediaMessage(712, 'enqueue-failed.txt') }]
     })
-    window.api.invokeEnqueueUploadTask = vi.fn(async () => ({ success: false, error: 'database unavailable' }))
+    window.api.invokeEnqueueUploadTask = vi.fn(async () => ({
+      success: false,
+      error: 'database unavailable'
+    }))
 
     sender.onSendFileMessage({
       contactId: 'u2',
       contactType: 0,
-      file: { name: 'enqueue-failed.txt', size: 12, type: 'text/plain', path: 'D:/tmp/enqueue-failed.txt' }
+      file: {
+        name: 'enqueue-failed.txt',
+        size: 12,
+        type: 'text/plain',
+        path: 'D:/tmp/enqueue-failed.txt'
+      }
     })
 
-    await vi.waitFor(() => expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledWith({
-      uploadSourceId: 'source-enqueue-failed.txt'
-    }))
+    await vi.waitFor(() =>
+      expect(window.api.invokeReleaseUploadSource).toHaveBeenCalledWith({
+        uploadSourceId: 'source-enqueue-failed.txt'
+      })
+    )
   })
 
   it('marks the local message successful after the task manager reconciles a delayed ACK', async () => {

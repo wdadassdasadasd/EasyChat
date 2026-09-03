@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSubscriptionRegistry } from '@/views/chat/composables/subscriptionRegistry'
+import { createSubscriptionRegistry } from '@/views/chat/composables/useChatSessions'
 
 describe('createSubscriptionRegistry', () => {
   it('replaces a named subscription and clears every remaining subscription once', () => {

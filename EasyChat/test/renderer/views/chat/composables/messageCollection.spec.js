@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMessageCollection } from '@/views/chat/composables/message/messageCollection'
+import { createMessageCollection } from '@/views/chat/composables/useChatMessages'
 
 describe('createMessageCollection', () => {
   beforeEach(() => {

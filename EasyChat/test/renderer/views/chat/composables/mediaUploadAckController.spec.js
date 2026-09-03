@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
-import { createMediaUploadAckController } from '@/views/chat/composables/outbound/mediaUploadAckController'
+import { createMediaUploadAckController } from '@/views/chat/composables/useChatMessageSender'
 
 const createHarness = () => {
   const unsubscribe = vi.fn()
@@ -28,9 +27,11 @@ const createHarness = () => {
   const controller = createMediaUploadAckController({
     coordinator,
     lifecycle,
-    messageList: ref([message]),
-    proxy: { Message: { error: vi.fn() } },
-    updateMessageById: vi.fn()
+    messageStore: {
+      findById: (messageId) => (messageId == message.messageId ? message : null),
+      updateById: vi.fn()
+    },
+    proxy: { Message: { error: vi.fn() } }
   })
   return { controller, lifecycle, message, unsubscribe }
 }

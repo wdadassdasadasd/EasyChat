@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
+import { nextTick, reactive, ref } from 'vue'
 
 const useChatSessions = vi.fn()
 const useChatMessages = vi.fn()
@@ -14,9 +14,7 @@ let useChatPageController
 describe('useChatPageController', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
-    ;({ useChatPageController } = await import(
-      '@/views/chat/composables/useChatPageController'
-    ))
+    ;({ useChatPageController } = await import('@/views/chat/composables/useChatPageController'))
   })
 
   it('registers child listeners before loading and releases every page owner on unmount', () => {
@@ -67,6 +65,46 @@ describe('useChatPageController', () => {
     expect(sessions.removeSessionListener).toHaveBeenCalledTimes(1)
     expect(messages.cleanupChatMessages).toHaveBeenCalledTimes(1)
     expect(files.closeVideoPreviewDialog).toHaveBeenCalledTimes(1)
+  })
+
+  it('owns route intent and stops its route watcher on unmount', async () => {
+    global.window = { api: {} }
+    const sessions = {
+      chatSessionList: ref([]),
+      currentChatSession: ref({}),
+      loadChatSession: vi.fn(),
+      markSessionRead: vi.fn(),
+      openChatFromRoute: vi.fn(),
+      patchChatSessions: vi.fn(),
+      registerSessionListener: vi.fn(),
+      removeSessionListener: vi.fn(),
+      setSessionSelector: vi.fn(),
+      setChatSessionTop: vi.fn(),
+      updateCurrentChatSession: vi.fn()
+    }
+    const messages = {
+      chatSessionClickHandler: vi.fn(),
+      cleanupChatMessages: vi.fn()
+    }
+    useChatSessions.mockReturnValue(sessions)
+    useChatMessages.mockReturnValue(messages)
+    useFileTransfer.mockReturnValue({ closeVideoPreviewDialog: vi.fn() })
+    const route = reactive({ query: { chatId: '', type: '' } })
+    const controller = useChatPageController({
+      currentUserId: ref('u1'),
+      messageListRef: ref(null),
+      proxy: { Confirm: vi.fn(), Message: { error: vi.fn(), success: vi.fn() } },
+      route
+    })
+
+    route.query.chatId = 'u2'
+    await nextTick()
+    expect(sessions.openChatFromRoute).toHaveBeenCalledTimes(1)
+
+    controller.unmount()
+    route.query.chatId = 'u3'
+    await nextTick()
+    expect(sessions.openChatFromRoute).toHaveBeenCalledTimes(1)
   })
 
   it('reconciles when WebSocket connected before the chat page subscribed', async () => {
@@ -162,19 +200,30 @@ describe('useChatPageController', () => {
     const sessions = {
       chatSessionList: ref([]),
       currentChatSession: ref({ contactId: 'u2', sessionId: 's1' }),
-      loadChatSession: vi.fn(), markSessionRead: vi.fn(), openChatFromRoute: vi.fn(),
-      patchChatSessions: vi.fn(), registerSessionListener: vi.fn(), removeSessionListener: vi.fn(),
-      setSessionSelector: vi.fn(), setChatSessionTop: vi.fn(), updateCurrentChatSession: vi.fn()
+      loadChatSession: vi.fn(),
+      markSessionRead: vi.fn(),
+      openChatFromRoute: vi.fn(),
+      patchChatSessions: vi.fn(),
+      registerSessionListener: vi.fn(),
+      removeSessionListener: vi.fn(),
+      setSessionSelector: vi.fn(),
+      setChatSessionTop: vi.fn(),
+      updateCurrentChatSession: vi.fn()
     }
     const messages = {
-      applyPersistedV2Result: vi.fn(), chatSessionClickHandler: vi.fn(), clearCurrentMessages: vi.fn(),
-      cleanupChatMessages: vi.fn(), loadChatMessage: vi.fn(), registerMessageListeners: vi.fn()
+      applyPersistedV2Result: vi.fn(),
+      chatSessionClickHandler: vi.fn(),
+      clearCurrentMessages: vi.fn(),
+      cleanupChatMessages: vi.fn(),
+      loadChatMessage: vi.fn(),
+      registerMessageListeners: vi.fn()
     }
     useChatSessions.mockReturnValue(sessions)
     useChatMessages.mockReturnValue(messages)
     useFileTransfer.mockReturnValue({ closeVideoPreviewDialog: vi.fn() })
     const request = vi.fn((config) => {
-      if (config.url === '/chat/markRead') return Promise.resolve({ success: false, msg: 'timeout' })
+      if (config.url === '/chat/markRead')
+        return Promise.resolve({ success: false, msg: 'timeout' })
       return Promise.resolve({ data: { events: [], nextCursor: 8, hasMore: false } })
     })
 
@@ -183,7 +232,9 @@ describe('useChatPageController', () => {
       messageListRef: ref(null),
       proxy: {
         Api: { markRead: '/chat/markRead', syncEvents: '/chat/syncEvents' },
-        Confirm: vi.fn(), Message: { error: vi.fn(), success: vi.fn() }, Request: request
+        Confirm: vi.fn(),
+        Message: { error: vi.fn(), success: vi.fn() },
+        Request: request
       },
       route: { query: {} }
     })
@@ -193,9 +244,16 @@ describe('useChatPageController', () => {
     expect(window.api.invokeGetSyncCursor).toHaveBeenCalledTimes(1)
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ url: '/chat/syncEvents' }))
     expect(window.api.invokeAcknowledgeReadReceipt).not.toHaveBeenCalled()
-    expect(report).toHaveBeenCalledWith(expect.objectContaining({
-      scope: 'readReceipt', state: 'failed', lastErrorKind: 'timeout', pendingCount: 1
-    }))
-    expect(report).toHaveBeenCalledWith(expect.objectContaining({ scope: 'eventSync', state: 'succeeded' }))
+    expect(report).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: 'readReceipt',
+        state: 'failed',
+        lastErrorKind: 'timeout',
+        pendingCount: 1
+      })
+    )
+    expect(report).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'eventSync', state: 'succeeded' })
+    )
   })
 })

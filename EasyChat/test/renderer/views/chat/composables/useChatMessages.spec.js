@@ -1,23 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
-vi.mock('@/views/chat/composables/useMessageScroll', () => ({
-  useMessageScroll: () => ({
-    cleanupMessageScroll: vi.fn(),
-    clearInitialBottomLock: vi.fn(),
-    getActiveMessageLoadSeq: () => 1,
-    getMessagePanel: () => ({ scrollHeight: 100, scrollTop: 0 }),
-    getMessagePanelRenderSeq: () => 1,
-    isNearMessageBottom: () => true,
-    markMessagePanelReady: vi.fn(),
-    messagePanelPhase: ref('ready'),
-    scrollMessageToBottom: vi.fn(),
-    settleScrollToBottom: vi.fn(),
-    showMessagePanelAtBottom: vi.fn(),
-    startMessagePanelRender: vi.fn()
-  })
-}))
-
 let useChatMessages
 
 const createApiMock = () => {
@@ -337,7 +320,7 @@ describe('useChatMessages receive flow', () => {
         dataList: [{ messageId: 2, sessionId: 's1' }],
         hasMore: false,
         loadMode: 'context',
-        loadSeq: 1,
+        loadSeq: 0,
         sessionId: 's1'
       })
 

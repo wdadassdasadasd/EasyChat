@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createVideoPreviewController } from '@/views/chat/composables/fileTransfer/videoPreviewController'
+
+vi.mock('@/utils/Request', () => ({ getApiUrl: (url) => url }))
+
+import { createVideoPreviewController } from '@/views/chat/composables/useFileTransfer'
 
 const videoMessage = (messageId, patch = {}) => ({
   messageId,
@@ -81,7 +84,11 @@ describe('createVideoPreviewController', () => {
     const request = vi.fn()
     const preview = createVideoPreviewController({
       fileAccess: { createDownloadUrl: vi.fn(async () => ''), getDownloadState: () => ({}) },
-      proxy: { Api: { downloadFile: '/chat/downloadFile' }, Message: { error: vi.fn() }, Request: request }
+      proxy: {
+        Api: { downloadFile: '/chat/downloadFile' },
+        Message: { error: vi.fn() },
+        Request: request
+      }
     })
 
     await preview.openVideoPreviewDialog(videoMessage(1, { fileSize: 129 * 1024 * 1024 }))

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createMediaCoverFactory } from '@/views/chat/composables/composer/mediaCoverFactory'
+import { createMediaCoverFactory } from '@/views/chat/composables/useMessageComposer'
 
 const createBrowserFallbackFixture = () => {
   const video = {

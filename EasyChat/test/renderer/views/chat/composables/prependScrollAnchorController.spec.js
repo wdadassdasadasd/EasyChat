@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
-import { createPrependScrollAnchorController } from '@/views/chat/composables/message/prependScrollAnchorController'
+import { createPrependScrollAnchorController } from '@/views/chat/composables/useChatMessages'
 
 const waitForTimers = () => new Promise((resolve) => setTimeout(resolve, 0))
 

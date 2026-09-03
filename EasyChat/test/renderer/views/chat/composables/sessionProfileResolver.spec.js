@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSessionProfileResolver } from '@/views/chat/composables/session/sessionProfileResolver'
+import { createSessionProfileResolver } from '@/views/chat/composables/useChatSessions'
 
 const createResolver = () => {
   const proxy = {

@@ -1,10 +1,27 @@
-import { computed, ref } from 'vue'
-import { createSubscriptionRegistry } from './subscriptionRegistry'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useChatMessages } from './useChatMessages'
 import { useChatSessions } from './useChatSessions'
 import { useFileTransfer } from './useFileTransfer'
 import { scheduleWhenIdle } from '@/utils/idleTask'
 import { prefetchSecondaryRoutes } from '@/utils/routePrefetch'
+
+const createSubscriptionRegistry = () => {
+  const subscriptions = new Map()
+  const replace = (name, subscribe) => {
+    subscriptions.get(name)?.()
+    if (!subscribe) {
+      subscriptions.delete(name)
+      return
+    }
+    const unsubscribe = subscribe()
+    subscriptions.set(name, typeof unsubscribe === 'function' ? unsubscribe : () => {})
+  }
+  const clear = () => {
+    subscriptions.forEach((unsubscribe) => unsubscribe())
+    subscriptions.clear()
+  }
+  return { clear, replace }
+}
 
 /**
  * Chat.vue's composition root. It owns page-lifetime subscriptions while the
@@ -45,6 +62,36 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
     )
   )
 
+  // Route intent and the shell unread badge are page integrations, not view
+  // concerns. Keeping them here makes mount/unmount the only page lifecycle.
+  const stopRouteWatch = watch(
+    () => [route.query.type, route.query.chatId],
+    () => sessions.openChatFromRoute()
+  )
+  const stopSessionWatch = watch(
+    () =>
+      `${sessions.currentChatSession.value.contactId || ''}_${sessions.currentChatSession.value.contactType || ''}`,
+    () => {
+      groupDetailVisible.value = false
+      userDetailVisible.value = false
+    }
+  )
+  const stopUnreadWatch = watch(
+    totalUnreadCount,
+    (count) => {
+      void nextTick(() => {
+        if (
+          typeof window === 'undefined' ||
+          typeof window.dispatchEvent !== 'function' ||
+          typeof CustomEvent !== 'function'
+        )
+          return
+        window.dispatchEvent(new CustomEvent('chatUnreadCountChange', { detail: { count } }))
+      })
+    },
+    { immediate: true }
+  )
+
   const applySyncResult = (result = {}) => {
     messages.applyPersistedV2Result(result)
     if (!result.stateChanged) sessions.loadChatSession()
@@ -53,7 +100,8 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
   const getDiagnosticErrorKind = (error) => {
     const value = String(error?.kind || error?.code || error?.message || '').toLowerCase()
     if (value.includes('timeout')) return 'timeout'
-    if (value.includes('network') || value.includes('offline') || value.includes('disconnect')) return 'network'
+    if (value.includes('network') || value.includes('offline') || value.includes('disconnect'))
+      return 'network'
     if (value.includes('ipc') || value.includes('acknowledgement')) return 'ipc'
     if (value.includes('api') || value.includes('receipt failed')) return 'api'
     return 'unknown'
@@ -74,9 +122,11 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
         showError: false,
         returnError: true
       })
-      if (!response || response.success === false) throw new Error(response?.msg || 'Read receipt failed')
+      if (!response || response.success === false)
+        throw new Error(response?.msg || 'Read receipt failed')
       const acknowledged = await window.api.invokeAcknowledgeReadReceipt(receipt)
-      if (!acknowledged?.success) throw new Error(acknowledged?.error || 'Read receipt acknowledgement failed')
+      if (!acknowledged?.success)
+        throw new Error(acknowledged?.error || 'Read receipt acknowledgement failed')
     }
   }
 
@@ -137,7 +187,8 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
         showError: false,
         returnError: true
       })
-      if (!snapshot || snapshot.success === false) throw new Error(snapshot?.msg || 'Snapshot sync failed')
+      if (!snapshot || snapshot.success === false)
+        throw new Error(snapshot?.msg || 'Snapshot sync failed')
       const data = snapshot.data || {}
       snapshotCursor = Number(data.snapshotCursor)
       const applied = await window.api.invokeApplySyncSnapshotPage({
@@ -167,7 +218,8 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
         lastErrorKind: 'unknown'
       })
       const cursorResult = await window.api.invokeGetSyncCursor()
-      if (!cursorResult?.success) throw new Error(cursorResult?.error || 'Unable to read sync cursor')
+      if (!cursorResult?.success)
+        throw new Error(cursorResult?.error || 'Unable to read sync cursor')
       let cursor = Number(cursorResult.cursor || 0)
       for (;;) {
         const response = await proxy.Request({
@@ -177,7 +229,8 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
           showError: false,
           returnError: true
         })
-        if (!response || response.success === false) throw new Error(response?.msg || 'Event sync failed')
+        if (!response || response.success === false)
+          throw new Error(response?.msg || 'Event sync failed')
         const data = response.data || {}
         if (data.cursorExpired) {
           await syncSnapshotPages()
@@ -339,6 +392,9 @@ export const useChatPageController = ({ currentUserId, messageListRef, proxy, ro
     pageSubscriptions.clear()
     cancelInitialSync()
     cancelRoutePrefetch()
+    stopRouteWatch()
+    stopSessionWatch()
+    stopUnreadWatch()
     sessions.removeSessionListener()
     if (typeof files.cleanupFileTransfer === 'function') files.cleanupFileTransfer()
     else files.closeVideoPreviewDialog()

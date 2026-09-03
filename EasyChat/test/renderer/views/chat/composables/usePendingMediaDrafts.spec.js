@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { usePendingMediaDrafts } from '@/views/chat/composables/composer/usePendingMediaDrafts'
+import { usePendingMediaDrafts } from '@/views/chat/composables/useMessageComposer'
 
 const createFile = (name, type) => ({ name, size: 12, type })
 
