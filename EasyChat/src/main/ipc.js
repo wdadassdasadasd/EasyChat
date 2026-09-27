@@ -102,6 +102,20 @@ import { createDownloadTaskManager } from './downloadTaskManager.js'
 const LOCAL_REPLACE_RECOVERY_KEY = 'localReplaceRecoveryQueue'
 const MAX_LOCAL_REPLACE_RECOVERY_ITEMS = 100
 const MAX_LOCAL_VIDEO_READ_SIZE = 128 * 1024 * 1024
+const SUPPORTED_VIDEO_EXTENSIONS = new Set([
+  '.mp4',
+  '.mov',
+  '.webm',
+  '.mkv',
+  '.avi',
+  '.flv',
+  '.wmv',
+  '.ogg',
+  '.ogv',
+  '.3gp',
+  '.m4v',
+  '.rmvb'
+])
 const NODE_ENV = process.env.NODE_ENV
 const DEFAULT_DEV_RENDERER_DOWNLOAD_ORIGINS = [
   'http://localhost:5173',
@@ -281,6 +295,13 @@ const buildValidationError = (message) => {
   const error = new Error(message)
   error.kind = 'validation_error'
   return error
+}
+
+const validateVideoExtension = (fileName) => {
+  const extension = path.extname(String(fileName || '')).toLowerCase()
+  if (!SUPPORTED_VIDEO_EXTENSIONS.has(extension)) {
+    throw buildValidationError('Video file extension is not supported')
+  }
 }
 
 const buildIpcErrorPayload = (callbackChannel, error, payload = {}) => {
@@ -701,6 +722,7 @@ const onOpenTempVideoFile = () => {
     // 限制临时视频文件大小，防止 renderer 传入超大 blob 耗尽主进程内存。
     const MAX_TEMP_VIDEO_SIZE = 256 * 1024 * 1024
     validateTempVideo(data, MAX_TEMP_VIDEO_SIZE)
+    validateVideoExtension(fileName)
 
     const cleanup = await cleanupExpiredTempVideos({
       tempRoot: app.getPath('temp'),
@@ -740,6 +762,7 @@ const onOpenTempVideoFile = () => {
     // 自己刚发送的视频可从本地路径读取，用于服务端文件尚未可下载时的预览回退。
     const { filePath } = data
     validateFilePathPayload(data)
+    validateVideoExtension(filePath)
     if (!filePath || !fs.existsSync(filePath)) {
       return {
         success: false,
@@ -779,6 +802,7 @@ const onOpenTempVideoFile = () => {
     // 系统播放器入口优先打开本地原文件，避免重复下载大视频。
     const { filePath } = data
     validateFilePathPayload(data)
+    validateVideoExtension(filePath)
     if (!filePath || !fs.existsSync(filePath)) {
       return {
         success: false,

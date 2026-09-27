@@ -46,6 +46,19 @@
   </div>
 </template>
 
+<script>
+export const shouldShowMessageTimeDivider = (
+  globalIndex,
+  currentTime,
+  previousTime,
+  separatorGap
+) =>
+  Boolean(
+    currentTime &&
+      (globalIndex === 0 || !previousTime || currentTime - previousTime >= separatorGap)
+  )
+</script>
+
 <script setup>
 import { computed, nextTick, ref, toRef, watch } from 'vue'
 import ChatMessage from './ChatMessage.vue'
@@ -173,9 +186,12 @@ const visibleRenderList = computed(() => {
   visible.forEach((message, index) => {
     const globalIndex = start + index
     const currentTime = normalizeTimestamp(message?.sendTime)
-    const shouldShowTime =
-      currentTime &&
-      (index === 0 || !previousTime || currentTime - previousTime >= TIME_SEPARATOR_GAP)
+    const shouldShowTime = shouldShowMessageTimeDivider(
+      globalIndex,
+      currentTime,
+      previousTime,
+      TIME_SEPARATOR_GAP
+    )
     if (shouldShowTime) {
       list.push({
         type: 'time',

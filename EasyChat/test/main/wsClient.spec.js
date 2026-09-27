@@ -94,6 +94,39 @@ describe('wsClient V2 contract', () => {
     await closeWs()
   })
 
+  it('parses and persists a V2 JSON message received as a Buffer', async () => {
+    const { applyV2Events } = await import('../../src/main/db/ChatMessageModel')
+    const { closeWs, initWs } = await import('../../src/main/wsClient')
+    const sender = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    const event = v2(
+      'MESSAGE_UPSERT',
+      { messageId: 20, sessionId: 's1', contactId: 'u2', contactType: 0, sendUserId: 'u2' },
+      20
+    )
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+
+    wsInstances.at(-1).onmessage({ data: Buffer.from(JSON.stringify(event), 'utf8') })
+
+    await vi.waitFor(() => expect(applyV2Events).toHaveBeenCalledTimes(1))
+    expect(applyV2Events).toHaveBeenCalledWith([event])
+    await closeWs()
+  })
+
+  it('reports malformed Buffer JSON as a parse error without reaching V2 persistence', async () => {
+    const { applyV2Events } = await import('../../src/main/db/ChatMessageModel')
+    const { closeWs, getWsDiagnostics, initWs } = await import('../../src/main/wsClient')
+    const sender = { send: vi.fn(), isDestroyed: vi.fn(() => false) }
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await initWs({ token: 'token-1', userId: 'u1' }, sender)
+
+    wsInstances.at(-1).onmessage({ data: Buffer.from('{not-json', 'utf8') })
+
+    expect(getWsDiagnostics()).toMatchObject({ parseErrorCount: 1, invalidMessageCount: 0 })
+    expect(applyV2Events).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+    await closeWs()
+  })
+
   it('batches consecutive V2 events before one durable write and renderer publish', async () => {
     vi.useFakeTimers()
     const { applyV2Events } = await import('../../src/main/db/ChatMessageModel')

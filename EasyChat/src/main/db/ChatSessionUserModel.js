@@ -16,9 +16,12 @@ const upsertSessionPreservingState = async (sessionInfo) => {
   }
 
   const previous = await selectUserSessionByContactId(sessionInfo.contactId)
+  const definedSessionInfo = Object.fromEntries(
+    Object.entries(sessionInfo).filter(([, value]) => value !== undefined)
+  )
   const nextSession = {
     ...previous,
-    ...sessionInfo,
+    ...definedSessionInfo,
     noReadCount: sessionInfo.noReadCount ?? previous?.noReadCount ?? 0,
     topType: sessionInfo.topType ?? previous?.topType,
     status: sessionInfo.status ?? previous?.status ?? 1,

@@ -830,6 +830,16 @@ const handleWsMessage = async (payload, expectedGeneration) => {
   await flushPendingRegularMessages()
 }
 
+const parseWsMessageData = (data) => {
+  if (typeof data === 'string') {
+    return JSON.parse(data)
+  }
+  if (Buffer.isBuffer(data)) {
+    return JSON.parse(data.toString('utf8'))
+  }
+  return data
+}
+
 const createWs = () => {
   if (wsUrl == null) {
     return
@@ -866,7 +876,7 @@ const createWs = () => {
   ws.onmessage = function (e) {
     let message = null
     try {
-      message = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
+      message = parseWsMessageData(e.data)
     } catch (error) {
       console.error('failed to parse WebSocket message', error)
       updateWsDiagnostics({

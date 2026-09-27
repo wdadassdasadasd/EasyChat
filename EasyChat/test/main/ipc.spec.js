@@ -727,6 +727,53 @@ describe('IPC: upload sources', () => {
 })
 
 describe('IPC: local video access', () => {
+  it('accepts supported video extensions for temporary, read, and open flows', async () => {
+    const { shell } = await import('electron')
+    ipcExports.onOpenTempVideoFile()
+
+    const temporary = await mockIpcHandle.openTempVideoFile(ipcEvent(), {
+      fileName: 'remote.WEBM',
+      buffer: new Uint8Array([1]).buffer
+    })
+    const read = await mockIpcHandle.readLocalVideoFile(ipcEvent(), {
+      filePath: '/tmp/exists.mp4'
+    })
+    const opened = await mockIpcHandle.openLocalVideoFile(ipcEvent(), {
+      filePath: '/tmp/exists.mp4'
+    })
+
+    expect(temporary).toMatchObject({ success: true })
+    expect(read).toMatchObject({ success: true, fileSize: 3 })
+    expect(opened).toMatchObject({ success: true })
+    expect(shell.openPath).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects non-video extensions before writing, reading, or opening files', async () => {
+    const fs = (await import('fs')).default
+    const { shell } = await import('electron')
+    const { isCurrentUserMessageFilePath } = await import('../../src/main/db/ChatMessageModel')
+    ipcExports.onOpenTempVideoFile()
+
+    const temporary = await mockIpcHandle.openTempVideoFile(ipcEvent(), {
+      fileName: 'video.mp4.exe',
+      buffer: new Uint8Array([1]).buffer
+    })
+    const read = await mockIpcHandle.readLocalVideoFile(ipcEvent(), {
+      filePath: '/tmp/video.mp4.exe'
+    })
+    const opened = await mockIpcHandle.openLocalVideoFile(ipcEvent(), {
+      filePath: '/tmp/video.mp4.exe'
+    })
+
+    for (const result of [temporary, read, opened]) {
+      expect(result).toMatchObject({ success: false, kind: 'validation_error' })
+    }
+    expect(fs.promises.writeFile).not.toHaveBeenCalled()
+    expect(fs.promises.readFile).not.toHaveBeenCalled()
+    expect(isCurrentUserMessageFilePath).not.toHaveBeenCalled()
+    expect(shell.openPath).not.toHaveBeenCalled()
+  })
+
   it('uses unique temporary paths for concurrent video previews in the same millisecond', async () => {
     const fs = (await import('fs')).default
     vi.spyOn(Date, 'now').mockReturnValue(123456)

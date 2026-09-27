@@ -117,6 +117,28 @@ describe('ChatSessionUserModel saveOrUpdateChatSessionBatch4Init', () => {
     })
   })
 
+  it('preserves existing fields when a partial patch explicitly contains undefined', async () => {
+    const { saveOrUpdateChatSessionBatch4Init } =
+      await import('../../../src/main/db/ChatSessionUserModel')
+
+    await saveOrUpdateChatSessionBatch4Init([
+      {
+        contactId: 'c1',
+        contactName: undefined,
+        sessionId: undefined,
+        lastMessage: 'new msg'
+      }
+    ])
+
+    const sessionWrite = insertedRows.find((row) => row.tableName === 'chat_session_user')
+    expect(sessionWrite?.data).toMatchObject({
+      contactId: 'c1',
+      contactName: 'User One',
+      sessionId: 's1',
+      lastMessage: 'new msg'
+    })
+  })
+
   it('handles empty array without error', async () => {
     const { saveOrUpdateChatSessionBatch4Init } =
       await import('../../../src/main/db/ChatSessionUserModel')
