@@ -25,7 +25,7 @@
         />
         <div class="file-message-source">
             <span class="file-message-source-icon"></span>
-            <span>微信电脑版</span>
+            <span>EasyChat 桌面版</span>
         </div>
     </div>
 </template>

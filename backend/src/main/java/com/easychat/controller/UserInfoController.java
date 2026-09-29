@@ -1,16 +1,20 @@
 package com.easychat.controller;
 
 import com.easychat.annotation.GlobalInterceptor;
+import com.easychat.entity.config.AppConfig;
 import com.easychat.entity.constants.Constants;
 import com.easychat.entity.dto.TokenUserInfoDto;
+import com.easychat.entity.enums.JoinTypeEnum;
+import com.easychat.entity.enums.ResponseCodeEnum;
 import com.easychat.entity.po.UserInfo;
 import com.easychat.entity.vo.ResponseVO;
 import com.easychat.entity.vo.UserInfoVO;
+import com.easychat.exception.BusinessException;
 import com.easychat.service.UserInfoService;
 import com.easychat.utils.CopyTools;
 import com.easychat.utils.PasswordHasher;
-import com.easychat.utils.StringTools;
 import com.easychat.websocket.ChannelContextUtils;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -26,6 +30,7 @@ import java.io.IOException;
  */
 @RestController("userInfoController")
 @RequestMapping("/userInfo")
+@Validated
 public class UserInfoController extends ABaseController {
 
     @Resource
@@ -34,13 +39,18 @@ public class UserInfoController extends ABaseController {
     @Resource
     private ChannelContextUtils channelContextUtils;
 
+    @Resource
+    private AppConfig appConfig;
+
     @RequestMapping("/getUserInfo")
     @GlobalInterceptor
     public ResponseVO getUserInfo(HttpServletRequest request) {
         TokenUserInfoDto tokenUserInfoDto = getTokenUserInfo(request);
         UserInfo userInfo = userInfoService.getUserInfoByUserId(tokenUserInfoDto.getUserId());
         UserInfoVO userInfoVO = CopyTools.copy(userInfo, UserInfoVO.class);
-        userInfoVO.setAdmin(tokenUserInfoDto.getAdmin());
+        boolean admin = appConfig.isAdminUserId(tokenUserInfoDto.getUserId());
+        userInfoVO.setAdmin(admin);
+        tokenUserInfoDto.setAdmin(admin);
         return getSuccessResponseVO(userInfoVO);
     }
 
@@ -48,14 +58,26 @@ public class UserInfoController extends ABaseController {
     @GlobalInterceptor
     public ResponseVO saveUserInfo(HttpServletRequest request, UserInfo userInfo, MultipartFile avatarFile, MultipartFile avatarCover) throws IOException {
         TokenUserInfoDto tokenUserInfoDto = getTokenUserInfo(request);
-        userInfo.setUserId(tokenUserInfoDto.getUserId());
-        userInfo.setPassword(null);
-        userInfo.setStatus(null);
-        userInfo.setCreateTime(null);
-        userInfo.setLastLoginTime(null);
-        this.userInfoService.updateUserInfo(userInfo, avatarFile, avatarCover);
-        if (!tokenUserInfoDto.getNickName().equals(userInfo.getNickName())) {
-            tokenUserInfoDto.setNickName(userInfo.getNickName());
+        if (userInfo == null || userInfo.getNickName() == null
+                || userInfo.getNickName().trim().isEmpty() || userInfo.getNickName().length() > 20
+                || (userInfo.getJoinType() != null && JoinTypeEnum.getByType(userInfo.getJoinType()) == null)
+                || (userInfo.getSex() != null && userInfo.getSex() != 0 && userInfo.getSex() != 1)) {
+            throw new BusinessException(ResponseCodeEnum.CODE_600);
+        }
+        if (avatarFile != null && (avatarCover == null || avatarCover.isEmpty())) {
+            throw new BusinessException("头像缩略图不能为空");
+        }
+        UserInfo profileUpdate = new UserInfo();
+        profileUpdate.setUserId(tokenUserInfoDto.getUserId());
+        profileUpdate.setNickName(userInfo.getNickName());
+        profileUpdate.setJoinType(userInfo.getJoinType());
+        profileUpdate.setSex(userInfo.getSex());
+        profileUpdate.setPersonalSignature(userInfo.getPersonalSignature());
+        profileUpdate.setAreaName(userInfo.getAreaName());
+        profileUpdate.setAreaCode(userInfo.getAreaCode());
+        this.userInfoService.updateUserInfo(profileUpdate, avatarFile, avatarCover);
+        if (!java.util.Objects.equals(tokenUserInfoDto.getNickName(), profileUpdate.getNickName())) {
+            tokenUserInfoDto.setNickName(profileUpdate.getNickName());
             resetTokenUserInfo(request, tokenUserInfoDto);
         }
         return getUserInfo(request);

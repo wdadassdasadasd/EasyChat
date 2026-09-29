@@ -184,6 +184,9 @@ public class GroupInfoServiceImpl implements GroupInfoService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveGroup(GroupInfo groupInfo, MultipartFile avatarFile, MultipartFile avatarCover) {
+        if (avatarFile != null && (avatarCover == null || avatarCover.isEmpty())) {
+            throw new BusinessException("头像缩略图不能为空");
+        }
         Date curDate = new Date();
         if (StringTools.isEmpty(groupInfo.getGroupId())) {
             GroupInfoQuery groupInfoQuery = new GroupInfoQuery();
@@ -256,7 +259,7 @@ public class GroupInfoServiceImpl implements GroupInfoService {
             domainEventPublisher.messageUpsert(messageSend);
         } else {
             GroupInfo dbInfo = this.groupInfoMapper.selectByGroupId(groupInfo.getGroupId());
-            if (!dbInfo.getGroupOwnerId().equals(groupInfo.getGroupOwnerId())) {
+            if (dbInfo == null || !dbInfo.getGroupOwnerId().equals(groupInfo.getGroupOwnerId())) {
                 throw new BusinessException(ResponseCodeEnum.CODE_600);
             }
             this.groupInfoMapper.updateByGroupId(groupInfo, groupInfo.getGroupId());
@@ -289,8 +292,11 @@ public class GroupInfoServiceImpl implements GroupInfoService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void dissolutionGroup(String userId, String groupId) {
+        if (StringTools.isEmpty(groupId)) {
+            throw new BusinessException(ResponseCodeEnum.CODE_600);
+        }
         GroupInfo dbInfo = this.groupInfoMapper.selectByGroupId(groupId);
-        if (null == groupId || !dbInfo.getGroupOwnerId().equals(userId)) {
+        if (dbInfo == null || !dbInfo.getGroupOwnerId().equals(userId)) {
             throw new BusinessException(ResponseCodeEnum.CODE_600);
         }
         //删除群组

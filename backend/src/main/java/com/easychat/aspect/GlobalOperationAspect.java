@@ -1,6 +1,7 @@
 package com.easychat.aspect;
 
 import com.easychat.annotation.GlobalInterceptor;
+import com.easychat.entity.config.AppConfig;
 import com.easychat.entity.dto.TokenUserInfoDto;
 import com.easychat.entity.enums.ResponseCodeEnum;
 import com.easychat.exception.BusinessException;
@@ -26,6 +27,9 @@ public class GlobalOperationAspect {
 
     @Resource
     private RedisComponet redisComponet;
+
+    @Resource
+    private AppConfig appConfig;
 
     private static Logger logger = LoggerFactory.getLogger(GlobalOperationAspect.class);
 
@@ -65,7 +69,7 @@ public class GlobalOperationAspect {
         if (tokenUserInfoDto == null) {
             throw new BusinessException(ResponseCodeEnum.CODE_901);
         }
-        if (checkAdmin && !tokenUserInfoDto.getAdmin()) {
+        if (checkAdmin && !appConfig.isAdminUserId(tokenUserInfoDto.getUserId())) {
             throw new BusinessException(ResponseCodeEnum.CODE_404);
         }
     }

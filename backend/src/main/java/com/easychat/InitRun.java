@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
 import javax.sql.DataSource;
+import java.sql.Connection;
 import java.sql.SQLException;
 
 @Component("initRun")
@@ -23,15 +24,16 @@ public class InitRun implements ApplicationRunner {
     private NettyWebSocketStarter nettyWebSocketStarter;
 
     @Override
-    public void run(ApplicationArguments args) {
-        try {
-            dataSource.getConnection();
-            new Thread(nettyWebSocketStarter).start();
-            logger.error("服务启动成功，可以开始愉快的开发了");
+    public void run(ApplicationArguments args) throws Exception {
+        try (Connection ignored = dataSource.getConnection()) {
+            nettyWebSocketStarter.start();
+            logger.info("服务启动成功，可以开始愉快的开发了");
         } catch (SQLException e) {
-            logger.error("数据库配置错误，请检查数据库配置");
+            logger.error("数据库配置错误，请检查数据库配置", e);
+            throw e;
         } catch (Exception e) {
             logger.error("服务启动失败", e);
+            throw e;
         }
     }
 }

@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { IPC_CALLBACK_CHANNELS } from '../shared/ipcChannels.js'
+import { runtimeConfig } from '../shared/runtimeConfig.js'
 import { initWs, closeWs } from './wsClient.js'
 import {
   getSyncRuntimeDiagnostics,
@@ -83,8 +84,6 @@ import {
   validateSyncEventsPage,
   validateSyncRuntimeDiagnostics,
   validateSyncSnapshot,
-  validateStoreRead,
-  validateStoreWrite,
   validateTempVideo,
   validateTopChatSession,
   validateUploadSourceChunk,
@@ -357,42 +356,6 @@ const registerSafeIpcHandle = (channel, handler) => {
     } catch (error) {
       console.error(`IPC ${channel} failed`, error)
       return buildIpcErrorPayload(channel, error)
-    }
-  })
-}
-
-//存数据到主进程store
-const onSetLocalStore = () => {
-  registerTrustedIpcOn('SetLocalStore', (e, payload) => {
-    try {
-      requireAuthenticatedUser()
-      validateStoreWrite(payload)
-    } catch (error) {
-      console.error('IPC SetLocalStore rejected', error)
-      return
-    }
-    const { key, value } = payload
-    store.setData(key, value)
-  })
-}
-
-const onGetLocalStore = () => {
-  registerTrustedIpcOn('GetLocalStore', (e, payload) => {
-    try {
-      requireAuthenticatedUser()
-      validateStoreRead(payload)
-    } catch (error) {
-      console.error('IPC GetLocalStore rejected', error)
-      e.sender.send(IPC_CALLBACK_CHANNELS.getLocalStore, undefined)
-      return
-    }
-    const key = typeof payload === 'string' ? payload : payload.key
-    try {
-      const value = store.getData(key)
-      e.sender.send(IPC_CALLBACK_CHANNELS.getLocalStore, value)
-    } catch (error) {
-      console.error('Failed to get local store data', error)
-      e.sender.send(IPC_CALLBACK_CHANNELS.getLocalStore, undefined)
     }
   })
 }
@@ -858,12 +821,8 @@ const addHttpOrigin = (origins, value, label) => {
 }
 
 const getAllowedDownloadOrigins = () => {
-  const domainKeys =
-    NODE_ENV === 'development' ? ['devDomain', 'prodDomain'] : ['prodDomain', 'devDomain']
   const origins = new Set()
-  domainKeys.forEach((key) => {
-    addHttpOrigin(origins, store.getData(key), key)
-  })
+  addHttpOrigin(origins, runtimeConfig.apiOrigin, 'runtime API origin')
   if (NODE_ENV === 'development') {
     addHttpOrigin(origins, process.env.ELECTRON_RENDERER_URL, 'ELECTRON_RENDERER_URL')
     DEFAULT_DEV_RENDERER_DOWNLOAD_ORIGINS.forEach((origin) =>
@@ -1230,8 +1189,6 @@ export {
   onLoginSuccess,
   onResetToLogin,
   winTitleOp,
-  onSetLocalStore,
-  onGetLocalStore,
   onLoadSessionData,
   onDelChatSessionSafe as onDelChatSession,
   onMarkSessionRead,

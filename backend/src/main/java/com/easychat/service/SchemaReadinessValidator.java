@@ -34,6 +34,8 @@ public class SchemaReadinessValidator implements ApplicationRunner {
         requireColumn("chat_message", "file_object_key");
         requireIndex("chat_event_outbox", "idx_chat_event_outbox_target_sequence");
         requireMigration("p1-2-ha-gates");
+        requireMigration("p1-3-event-outbox-collation");
+        requireColumnCollation("chat_event_outbox", "target_id", "utf8mb4_general_ci");
         logger.info("V2 schema readiness check passed");
     }
 
@@ -54,6 +56,13 @@ public class SchemaReadinessValidator implements ApplicationRunner {
     private void requireMigration(String version) {
         Integer count = jdbcTemplate.queryForObject("select count(1) from easychat_schema_migration where version=?", Integer.class, version);
         if (count == null || count == 0) fail("migration version");
+    }
+
+    private void requireColumnCollation(String table, String column, String collation) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(1) from information_schema.columns where table_schema=database() and table_name=? and column_name=? and collation_name=?",
+                Integer.class, table, column, collation);
+        if (count == null || count == 0) fail("column collation");
     }
 
     private void require(String sql, String table, String kind) {

@@ -1,6 +1,9 @@
 <template>
     <div class="login-panel">
-        <div class="title drag">EasyChat</div>
+        <div class="title brand drag">
+          <img :src="appIcon" class="brand-icon" alt="EasyChat" />
+          <span>EasyChat</span>
+        </div>
         <div v-if="showLoading" class="loading-panel">
           <img src="../assets/img/loading.gif"/>
           加载中...
@@ -42,7 +45,7 @@
                      <el-icon><Key /></el-icon>
                   </template>
                   <template #suffix>
-                    <img :src="checkCodeUrl" class="check-code" @click="changeCheckCode"/>
+                    <img :src="checkCodeUrl" class="check-code" @click="changeCheckCode(true)"/>
                   </template>
                 </el-input>
               </el-form-item>
@@ -64,6 +67,8 @@ import { ref, nextTick, getCurrentInstance, onBeforeUnmount } from 'vue';
 import { Key, Lock, Message, User } from '@element-plus/icons-vue';
 import {useUserInfoStore} from '@/stores/UserInfoStore.js';
 import { useRouter } from 'vue-router';
+import { createCaptchaLoader } from '@/utils/CaptchaLoader.js';
+import appIcon from '../../../../resources/icon.png';
 
 const router=useRouter();
 const userInfoStore=useUserInfoStore();
@@ -72,6 +77,8 @@ const {proxy} = getCurrentInstance();
 const formData=ref({})
 const formDataRef=ref()
 const checkCodeUrl=ref()
+const errorMsg=ref(null);
+const showLoading=ref(false);
 const rules={
  email:[{required:true,message:'请输入邮箱'}],
  password:[{required:true,message:'请输入密码'}],
@@ -86,44 +93,31 @@ const changeOpType=()=>{
     formDataRef.value.resetFields();
     formData.value={};
     cleanVerify();
-    changeCheckCode();
+    changeCheckCode(true);
   })
 }
 
 // 获取验证码
-const checkCodeRetryCount = ref(0)
-const MAX_CHECKCODE_RETRY = 3
-let checkCodeTimer = null
-
-const changeCheckCode = async () => {
-  if (checkCodeRetryCount.value >= MAX_CHECKCODE_RETRY) {
-    errorMsg.value = '验证码加载失败，请稍后手动点击刷新'
-    checkCodeUrl.value = ''
-    return
-  }
-  checkCodeRetryCount.value += 1
-
-  let result = await proxy.Request({
+const captchaLoader = createCaptchaLoader({
+  request: () => proxy.Request({
     url: proxy.Api.checkCode,
     showError: false
-  })
-  if (!result) {
+  }),
+  onSuccess: (result) => {
+    errorMsg.value = null
+    checkCodeUrl.value = result.data.checkCode
+    localStorage.setItem('checkCodeKey', result.data.checkCodeKey)
+  },
+  onFailure: () => {
     showLoading.value = false
-    // 延迟 1 秒后再重试，避免瞬间高频请求
-    checkCodeTimer = setTimeout(() => {
-      checkCodeTimer = null
-      changeCheckCode()
-    }, 1000)
-    return
+  },
+  onExhausted: () => {
+    errorMsg.value = '验证码加载失败，请点击验证码手动重试'
+    checkCodeUrl.value = ''
   }
-  checkCodeRetryCount.value = 0
-  checkCodeUrl.value = result.data.checkCode
-  localStorage.setItem('checkCodeKey', result.data.checkCodeKey)
-}
-changeCheckCode();
-
-const errorMsg=ref(null);
-const showLoading=ref(false);
+})
+const changeCheckCode = (manual = false) => captchaLoader.load({ manual })
+void changeCheckCode();
 
 
 const checkValue=(type,value,msg)=>{
@@ -185,13 +179,12 @@ const submit=async()=>{
   //登录错误处理回调
   errorCallback:(response)=>{
     showLoading.value=false;
-    changeCheckCode();
     errorMsg.value=response?.info || response?.msg || `登录失败(${response?.code || 'unknown'})`;
   }
 })
   if (!result) {
     showLoading.value = false
-    changeCheckCode()
+    void changeCheckCode(true)
     return
   }
   if(isLogin.value){
@@ -225,10 +218,7 @@ const submit=async()=>{
 }
 
 onBeforeUnmount(() => {
-  if (checkCodeTimer) {
-    clearTimeout(checkCodeTimer)
-    checkCodeTimer = null
-  }
+  captchaLoader.dispose()
 })
 
 
@@ -243,6 +233,16 @@ onBeforeUnmount(() => {
 }
 .email-select {
   width: 250px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.brand-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
 }
 .loading-panel {
   height: calc(100vh - 32px);

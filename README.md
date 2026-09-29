@@ -142,13 +142,10 @@ src/renderer/src/views/chat/
     ├── useChatMessages.js                 # 历史分页、实时消息合并、搜索和去重
     ├── useChatMessageSender.js            # 文本/媒体发送、pending 替换和重试
     ├── useMessageComposer.js              # 输入框、表情、草稿和发送前组装
-    ├── useMessageScroll.js                # 滚动到底、历史加载位置保持
     ├── useVirtualMessageList.js           # 动态高度虚拟列表
     ├── useFileTransfer.js                 # 上传、下载、预览、取消和进度
-    ├── outbound/                          # 发出消息与媒体上传生命周期
-    ├── message/                           # 消息集合、历史与订阅控制
-    ├── session/                           # 会话操作、资料解析与订阅控制
-    └── fileTransfer/                      # 本地文件访问与视频预览控制
+    ├── useGroupChatDrawer.js              # 群聊抽屉的资料加载与成员操作
+    └── useUserChatDrawer.js               # 单聊抽屉的资料加载与联系人操作
 ```
 
 这样的目录设计形成“页面编排 + 领域 composable + 主进程能力”的结构：页面负责展示和组合，composable 负责业务状态与副作用，主进程负责系统能力和持久化。
@@ -173,7 +170,7 @@ src/renderer/src/views/chat/
 - `useChatMessages.js`：历史消息分页、实时消息合并、搜索、会话切换代次保护和消息去重。
 - `useChatMessageSender.js`：文本和媒体消息发送、pending 状态、本地消息替换和失败重试。
 - `useMessageComposer.js`：输入框、表情、草稿和待发送媒体组装。
-- `useMessageScroll.js` 与 `useVirtualMessageList.js`：滚动位置保持、动态高度缓存和可视区域渲染。
+- `useChatMessages.js` 内的滚动控制与 `useVirtualMessageList.js`：滚动位置保持、动态高度缓存和可视区域渲染。
 - `useFileTransfer.js`：上传、下载、打开、预览、取消和进度管理。
 
 这种拆分让 `Chat.vue` 保持页面编排职责，具体业务状态和副作用由领域 composable 承担，便于单独维护和测试。
@@ -267,6 +264,10 @@ npm run build:win
 npm run build:mac
 npm run build:linux
 ```
+
+`npm run build:win` 固定生成未签名的本机联调包，HTTP 地址为
+`http://localhost:5050`，WebSocket 地址为 `ws://localhost:5051/ws`。安装包只包含
+编译结果、运行图标与生产依赖，不包含本地数据库、日志、测试或开发运行目录。
 
 ## 项目价值
 

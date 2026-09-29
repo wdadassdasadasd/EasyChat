@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.PreDestroy;
 import javax.annotation.Resource;
+import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -27,7 +28,7 @@ import java.util.concurrent.TimeUnit;
  * @Date 2023/12/17 10:06
  */
 @Component
-public class NettyWebSocketStarter implements Runnable {
+public class NettyWebSocketStarter {
 
     private static final Logger logger = LoggerFactory.getLogger(NettyWebSocketStarter.class);
 
@@ -60,18 +61,25 @@ public class NettyWebSocketStarter implements Runnable {
      * work线程组，用于处理消息
      */
     private EventLoopGroup workerGroup = new NioEventLoopGroup();
+    private volatile Channel serverChannel;
 
     /**
      * 资源关闭——在容器销毁时关闭
      */
     @PreDestroy
     public void close() {
+        if (serverChannel != null) {
+            serverChannel.close();
+            serverChannel = null;
+        }
         bossGroup.shutdownGracefully();
         workerGroup.shutdownGracefully();
     }
 
-    @Override
-    public void run() {
+    public synchronized void start() {
+        if (serverChannel != null && serverChannel.isActive()) {
+            return;
+        }
         try {
             //创建服务端启动助手
             ServerBootstrap serverBootstrap = new ServerBootstrap();
@@ -105,16 +113,16 @@ public class NettyWebSocketStarter implements Runnable {
                         }
                     });
             //启动
-            ChannelFuture channelFuture = serverBootstrap.bind(appConfig.getWsPort()).sync();
-            logger.info("Netty服务端启动成功,端口:{}", appConfig.getWsPort());
-            channelFuture.channel().closeFuture().sync();
+            ChannelFuture channelFuture = serverBootstrap.bind(new InetSocketAddress(appConfig.getWsHost(), appConfig.getWsPort())).sync();
+            serverChannel = channelFuture.channel();
+            logger.info("Netty服务端启动成功,地址:{},端口:{}", appConfig.getWsHost(), appConfig.getWsPort());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            close();
+            throw new IllegalStateException("WebSocket server startup was interrupted", e);
         } catch (Exception e) {
-            e.printStackTrace();
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
-        } finally {
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
+            close();
+            throw new IllegalStateException("WebSocket server failed to bind", e);
         }
     }
 }

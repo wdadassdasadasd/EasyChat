@@ -15,7 +15,6 @@ const ALLOWED_SEND_CHANNELS = new Set([
   'loadChatMessage',
   'clearChatMessage',
   'searchChatMessage',
-  'SetLocalStore',
   'loginOrRegister',
   'winTitleOp'
 ])
@@ -122,9 +121,6 @@ const api = {
   },
   sendSearchChatMessage(data) {
     electronAPI.ipcSend('searchChatMessage', data)
-  },
-  sendSetLocalStore(data) {
-    electronAPI.ipcSend('SetLocalStore', data)
   },
   sendLoginOrRegister(isLogin) {
     electronAPI.ipcSend('loginOrRegister', isLogin)

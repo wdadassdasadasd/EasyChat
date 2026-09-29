@@ -473,8 +473,13 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             return;
         }
 
+        String originalFileName = file.getOriginalFilename();
+        if (StringTools.isEmpty(message.getFileName()) || StringTools.isEmpty(originalFileName)
+                || !message.getFileName().equals(originalFileName)) {
+            throw new BusinessException(ResponseCodeEnum.CODE_600);
+        }
         SysSettingDto sysSettingDto = redisComponet.getSysSetting();
-        String fileSuffix = StringTools.getFileSuffix(file.getOriginalFilename());
+        String fileSuffix = getSafeFileSuffix(originalFileName);
         if (!StringTools.isEmpty(fileSuffix) && ArraysUtil.contains(Constants.IMAGE_SUFFIX_LIST, fileSuffix.toLowerCase())
                 && file.getSize() > Constants.FILE_SIZE_MB * sysSettingDto.getMaxImageSize()) {
             throw new BusinessException("图片大小超过限制");
@@ -487,8 +492,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 file.getSize() > Constants.FILE_SIZE_MB * sysSettingDto.getMaxFileSize()) {
             throw new BusinessException("文件大小超过限制");
         }
-        String fileName = file.getOriginalFilename();
-        String fileExtName = StringTools.getFileSuffix(fileName);
+        String fileName = originalFileName;
+        String fileExtName = getSafeFileSuffix(fileName);
         String fileRealName = messageId + fileExtName;
         String month = DateUtil.format(new Date(message.getSendTime()), DateTimePatternEnum.YYYYMM.getPattern());
         File folder = new File(appConfig.getProjectFolder() + Constants.FILE_FOLDER_FILE + month);
@@ -798,22 +803,31 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     @Override
     public File downloadFile(TokenUserInfoDto userInfoDto, Long messageId, Boolean cover) {
+        if (messageId == null || userInfoDto == null || StringTools.isEmpty(userInfoDto.getUserId())) {
+            throw new BusinessException(ResponseCodeEnum.CODE_600);
+        }
         ChatMessage message = chatMessageMapper.selectByMessageId(messageId);
+        if (message == null || message.getSendTime() == null || StringTools.isEmpty(message.getFileName())) {
+            throw new BusinessException(ResponseCodeEnum.CODE_600);
+        }
         String contactId = message.getContactId();
         UserContactTypeEnum contactTypeEnum = UserContactTypeEnum.getByPrefix(contactId);
-        if (UserContactTypeEnum.USER.getType().equals(contactTypeEnum)
+        if (contactTypeEnum == null) {
+            throw new BusinessException(ResponseCodeEnum.CODE_600);
+        }
+        if (contactTypeEnum == UserContactTypeEnum.USER
                 && !userInfoDto.getUserId().equals(message.getContactId())
                 && !userInfoDto.getUserId().equals(message.getSendUserId())) {
             throw new BusinessException(ResponseCodeEnum.CODE_600);
         }
-        if (UserContactTypeEnum.GROUP.getType().equals(contactTypeEnum)) {
+        if (contactTypeEnum == UserContactTypeEnum.GROUP) {
             UserContactQuery userContactQuery = new UserContactQuery();
             userContactQuery.setUserId(userInfoDto.getUserId());
             userContactQuery.setContactType(UserContactTypeEnum.GROUP.getType());
             userContactQuery.setContactId(contactId);
             userContactQuery.setStatus(UserContactStatusEnum.FRIEND.getStatus());
             Integer contactCount = userContactMapper.selectCount(userContactQuery);
-            if (contactCount == 0) {
+            if (contactCount == null || contactCount == 0) {
                 throw new BusinessException(ResponseCodeEnum.CODE_600);
             }
         }
@@ -823,7 +837,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             folder.mkdirs();
         }
         String fileName = message.getFileName();
-        String fileExtName = StringTools.getFileSuffix(fileName);
+        String fileExtName = getSafeFileSuffix(fileName);
         String fileRealName = messageId + fileExtName;
 
         if (cover != null && cover) {

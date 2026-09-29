@@ -257,53 +257,6 @@ describe('IPC: synchronization diagnostics', () => {
 })
 
 // ═══════════════════════════════════════════════
-// Store channels
-// ═══════════════════════════════════════════════
-describe('IPC: SetLocalStore', () => {
-  it('registers handler via onSetLocalStore and saves data', () => {
-    ipcExports.onSetLocalStore()
-    const handler = mockIpcOn['SetLocalStore']
-    expect(handler).toBeDefined()
-
-    handler(ipcEvent(), { key: 'devDomain', value: 'http://localhost:5050' })
-    // fire-and-forget, no callback sent
-  })
-
-  it('rejects unknown keys without writing to the store', async () => {
-    const store = (await import('../../src/main/store')).default
-    ipcExports.onSetLocalStore()
-
-    mockIpcOn.SetLocalStore(ipcEvent(), { key: 'token', value: 'stolen' })
-
-    expect(store.setData).not.toHaveBeenCalled()
-  })
-})
-
-describe('IPC: GetLocalStore', () => {
-  it('returns stored value via callback', () => {
-    ipcExports.onGetLocalStore()
-    const handler = mockIpcOn['GetLocalStore']
-    expect(handler).toBeDefined()
-
-    handler(ipcEvent(), 'devDomain')
-    expect(mockSender.send).toHaveBeenCalledWith('getLocalStoreCallback', 'test-value')
-  })
-
-  it('sends undefined on store error', async () => {
-    const store = (await import('../../src/main/store')).default
-    store.getData.mockImplementationOnce(() => {
-      throw new Error('boom')
-    })
-
-    ipcExports.onGetLocalStore()
-    const handler = mockIpcOn['GetLocalStore']
-
-    handler(ipcEvent(), 'devDomain')
-    expect(mockSender.send).toHaveBeenCalledWith('getLocalStoreCallback', undefined)
-  })
-})
-
-// ═══════════════════════════════════════════════
 // Session channels (registerSafeIpcOn)
 // ═══════════════════════════════════════════════
 describe('IPC: startAuthenticatedSession', () => {
@@ -855,18 +808,7 @@ describe('IPC: local video access', () => {
 // File download channels
 // ═══════════════════════════════════════════════
 describe('IPC: downloadChatFile', () => {
-  const allowDownloadDomain = async (origin = 'http://files.example.com') => {
-    const store = (await import('../../src/main/store')).default
-    store.getData.mockImplementation((key) => {
-      if (key === 'devDomain' || key === 'prodDomain') {
-        return origin
-      }
-      return 'test-value'
-    })
-  }
-
   it('rejects when url or messageId missing', async () => {
-    await allowDownloadDomain()
     ipcExports.onChatFileDownload()
     const handler = mockIpcHandle['downloadChatFile']
 
@@ -876,13 +818,12 @@ describe('IPC: downloadChatFile', () => {
   })
 
   it('rejects duplicate download', async () => {
-    await allowDownloadDomain()
     ipcExports.onChatFileDownload()
     const handler = mockIpcHandle['downloadChatFile']
 
     // Start a download (don't await — it will hang internally)
     handler(ipcEvent(), {
-      url: 'http://files.example.com/f',
+      url: 'http://localhost:5050/f',
       messageId: 'dup1',
       fileName: 'f.mp4'
     })
@@ -892,7 +833,7 @@ describe('IPC: downloadChatFile', () => {
 
     // Second call must be rejected immediately
     const result = await handler(ipcEvent(), {
-      url: 'http://files.example.com/f',
+      url: 'http://localhost:5050/f',
       messageId: 'dup1',
       fileName: 'f.mp4'
     })
@@ -900,8 +841,9 @@ describe('IPC: downloadChatFile', () => {
     expect(result.error).toContain('already downloading')
   }, 10000)
 
-  it('rejects downloads outside configured backend domains before network access', async () => {
-    await allowDownloadDomain('http://api.example.com')
+  it('does not let mutable store values expand the compiled download origin', async () => {
+    const store = (await import('../../src/main/store')).default
+    store.getData.mockReturnValue('http://evil.example.com')
     const http = (await import('http')).default
     ipcExports.onChatFileDownload()
 
@@ -918,12 +860,32 @@ describe('IPC: downloadChatFile', () => {
     expect(http.get).not.toHaveBeenCalled()
   })
 
+  it('allows the compiled backend origin when the fresh-install store has no domain keys', async () => {
+    const store = (await import('../../src/main/store')).default
+    store.getData.mockReturnValue(undefined)
+    const http = (await import('http')).default
+    const request = { on: vi.fn(), destroy: vi.fn(), abort: vi.fn() }
+    http.get.mockReturnValueOnce(request)
+    ipcExports.onChatFileDownload()
+
+    mockIpcHandle.downloadChatFile(ipcEvent(), {
+      url: 'http://localhost:5050/api/chat/streamFile?token=download-token',
+      messageId: 'fresh-install-1',
+      fileName: 'file.bin'
+    })
+
+    await new Promise((r) => setTimeout(r, 0))
+    expect(http.get).toHaveBeenCalledWith(
+      'http://localhost:5050/api/chat/streamFile?token=download-token',
+      expect.any(Function)
+    )
+  })
+
   it('allows development renderer proxy download urls produced by getApiUrl', async () => {
     vi.stubEnv('NODE_ENV', 'development')
     vi.stubEnv('ELECTRON_RENDERER_URL', 'http://localhost:5173')
     vi.resetModules()
     ipcExports = await import('../../src/main/ipc')
-    await allowDownloadDomain('http://localhost:5050')
     const http = (await import('http')).default
     const request = { on: vi.fn(), destroy: vi.fn(), abort: vi.fn() }
     http.get.mockReturnValueOnce(request)
@@ -943,7 +905,6 @@ describe('IPC: downloadChatFile', () => {
   })
 
   it('rejects unsafe redirects and clears the active download state', async () => {
-    await allowDownloadDomain()
     const http = (await import('http')).default
     const createRequest = () => ({ on: vi.fn(), destroy: vi.fn(), abort: vi.fn() })
     http.get
@@ -973,7 +934,7 @@ describe('IPC: downloadChatFile', () => {
     ipcExports.onChatFileDownload()
     const handler = mockIpcHandle.downloadChatFile
     const payload = {
-      url: 'http://files.example.com/file',
+      url: 'http://localhost:5050/file',
       messageId: 'redirect-1',
       fileName: 'file.bin'
     }
@@ -988,7 +949,6 @@ describe('IPC: downloadChatFile', () => {
   })
 
   it('rejects redirects to non-configured http origins', async () => {
-    await allowDownloadDomain('http://files.example.com')
     const http = (await import('http')).default
     http.get.mockImplementationOnce((_url, callback) => {
       const request = { on: vi.fn(), destroy: vi.fn(), abort: vi.fn() }
@@ -1004,7 +964,7 @@ describe('IPC: downloadChatFile', () => {
 
     ipcExports.onChatFileDownload()
     const result = await mockIpcHandle.downloadChatFile(ipcEvent(), {
-      url: 'http://files.example.com/file',
+      url: 'http://localhost:5050/file',
       messageId: 'redirect-origin-1',
       fileName: 'file.bin'
     })

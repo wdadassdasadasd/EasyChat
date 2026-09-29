@@ -5,6 +5,7 @@ import com.easychat.entity.query.UserInfoQuery;
 import com.easychat.entity.vo.PaginationResultVO;
 import com.easychat.entity.vo.ResponseVO;
 import com.easychat.service.UserInfoService;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -14,6 +15,7 @@ import javax.validation.constraints.NotNull;
 
 @RestController("adminUserInfoController")
 @RequestMapping("/admin")
+@Validated
 public class AdminUserInfoController extends ABaseController {
 
     @Resource

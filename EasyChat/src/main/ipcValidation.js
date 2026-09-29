@@ -149,31 +149,6 @@ const validateWindowOperation = (value) => {
   }
 }
 
-const STORE_URL_PROTOCOLS = {
-  prodDomain: ['http:', 'https:'],
-  devDomain: ['http:', 'https:'],
-  prodWsDomain: ['ws:', 'wss:'],
-  devWsDomain: ['ws:', 'wss:']
-}
-
-const validateStoreWrite = (value) => {
-  const payload = requireObject(value)
-  const key = requireString(payload.key, 'key', { maxLength: 64 })
-  const protocols = STORE_URL_PROTOCOLS[key]
-  if (!protocols) {
-    fail('key is not an allowed local store setting')
-  }
-  requireUrl(payload.value, 'value', protocols)
-}
-
-const validateStoreRead = (value) => {
-  const key = typeof value === 'string' ? value : requireObject(value).key
-  requireString(key, 'key', { maxLength: 64 })
-  if (!STORE_URL_PROTOCOLS[key]) {
-    fail('key is not an allowed local store setting')
-  }
-}
-
 const validateContactId = (value) => {
   requireIdentifier(value, 'contactId')
 }
@@ -465,8 +440,6 @@ export {
   validateSyncEventsPage,
   validateSyncRuntimeDiagnostics,
   validateSyncSnapshot,
-  validateStoreRead,
-  validateStoreWrite,
   validateTempVideo,
   validateTopChatSession,
   validateUploadSourceChunk,

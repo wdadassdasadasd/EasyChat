@@ -36,14 +36,16 @@ $env:EASYCHAT_DB_USERNAME = '<数据库用户>'
 $env:EASYCHAT_DB_PASSWORD = '<数据库密码>'
 $env:EASYCHAT_REDIS_HOST = '127.0.0.1'
 $env:EASYCHAT_REDIS_PORT = '6379'
+$env:EASYCHAT_WS_HOST = '127.0.0.1'
 $env:EASYCHAT_PROJECT_FOLDER = 'D:\EasyChat-data'
 $env:EASYCHAT_INSTANCE_ID = 'easychat-local-dev'
+$env:EASYCHAT_ADMIN_USER_IDS = 'U12345678901'
 
 cd backend
 mvn spring-boot:run
 ```
 
-`EASYCHAT_INSTANCE_ID` 是可靠事件投递节点的唯一标识；本地单实例可使用稳定名称，部署多个节点时必须各不相同。生产环境必须使用受控的密钥与配置管理，不得把账号或密码写回 `application.properties`。
+`EASYCHAT_INSTANCE_ID` 是可靠事件投递节点的唯一标识；本地单实例可使用稳定名称，部署多个节点时必须各不相同。`EASYCHAT_ADMIN_USER_IDS` 是逗号分隔的管理员用户 ID 白名单，默认为空；管理员接口每次请求都会依据该白名单重新授权。`EASYCHAT_WS_HOST` 控制 Netty WebSocket 的绑定地址，本地联调应使用 `127.0.0.1`，需要远程客户端连接的服务器可保留默认值 `0.0.0.0`。生产环境必须使用受控的密钥与配置管理，不得把账号或密码写回 `application.properties`。
 
 ## 验证
 

@@ -25,7 +25,6 @@ import com.easychat.utils.CopyTools;
 import com.easychat.utils.PasswordHasher;
 import com.easychat.utils.StringTools;
 import com.easychat.websocket.DomainEventPublisher;
-import org.apache.commons.lang3.ArrayUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -292,12 +291,7 @@ public class UserInfoServiceImpl implements UserInfoService {
         tokenUserInfoDto.setUserId(userInfo.getUserId());
         tokenUserInfoDto.setNickName(userInfo.getNickName());
 
-        String adminEmails = appConfig.getAdminEmails();
-        if (!StringTools.isEmpty(adminEmails) && ArrayUtils.contains(adminEmails.split(","), userInfo.getEmail())) {
-            tokenUserInfoDto.setAdmin(true);
-        } else {
-            tokenUserInfoDto.setAdmin(false);
-        }
+        tokenUserInfoDto.setAdmin(appConfig.isAdminUserId(userInfo.getUserId()));
         return tokenUserInfoDto;
     }
 
@@ -305,6 +299,9 @@ public class UserInfoServiceImpl implements UserInfoService {
     @Transactional(rollbackFor = Exception.class)
     public void updateUserInfo(UserInfo userInfo, MultipartFile avatarFile, MultipartFile avatarCover) throws IOException {
         if (avatarFile != null) {
+            if (avatarCover == null || avatarCover.isEmpty()) {
+                throw new BusinessException("头像缩略图不能为空");
+            }
             String baseFolder = appConfig.getProjectFolder() + Constants.FILE_FOLDER_FILE;
             File targetFileFolder = new File(baseFolder + Constants.FILE_FOLDER_AVATAR_NAME);
             if (!targetFileFolder.exists()) {

@@ -4,9 +4,9 @@
         <el-form :model="formData" @submit.prevent ref="formDataRef" label-width="80px" :rules="rules">
             <el-form-item label="版本信息">
                 <div class="version-info">
-                    <div>微信 1.0.0</div>
+                    <div>EasyChat 1.0.0</div>
                     <div>
-                        <el-button type="primary" @click="checkUpdate">检查更新</el-button>
+                        <el-button type="primary" @click="checkUpdate" :loading="updateLoading">检查更新</el-button>
                         <el-button @click="loadDiagnostics" :loading="diagnosticsLoading">刷新诊断</el-button>
                     </div>
                  
@@ -28,11 +28,6 @@
                     <div>安全会话：{{ diagnostics.secureSession.available ? '可用' : '不可用' }}</div>
                 </div>
             </el-form-item>
-            <el-form-item>
-                <el-button type="primary" @click="changeFolder">更改</el-button>
-                <el-button type="primary" @click="openLocalFolder">打开文件夹</el-button>
-            </el-form-item>
-           
         </el-form>
         
     </ContactPanel>
@@ -42,24 +37,37 @@
 
 <script setup>
 import { ref, getCurrentInstance, onMounted } from 'vue';
+import { useUserInfoStore } from '../../stores/UserInfoStore';
+import { checkAvailableVersion } from './aboutVersion';
 
 const {proxy}=getCurrentInstance();
+const userInfoStore=useUserInfoStore();
 const formDataRef=ref();
 const formData=ref({});
 const rules={};
 const diagnostics=ref(null);
 const diagnosticsLoading=ref(false);
+const updateLoading=ref(false);
 
-const checkUpdate=()=>{
-    proxy.Message.warning('当前已是最新版本');
-}
-
-const changeFolder=()=>{
-    proxy.Message.warning('请在文件管理中修改文件保存位置');
-}
-
-const openLocalFolder=()=>{
-    proxy.Message.warning('请在文件管理中打开文件夹');
+const checkUpdate=async()=>{
+    updateLoading.value=true;
+    try {
+        const state=await checkAvailableVersion({
+            request:proxy.Request,
+            url:proxy.Api.checkVersion,
+            appVersion:'1.0.0',
+            userId:userInfoStore.getInfo()?.userId
+        });
+        if (state.kind==='latest') {
+            proxy.Message.success('当前已是最新版本');
+        } else if (state.kind==='available') {
+            proxy.Message.warning(`发现新版本 ${state.update.version || ''}，请联系管理员获取安装包`);
+        } else {
+            proxy.Message.warning('检查更新失败，请确认服务连接后重试');
+        }
+    } finally {
+        updateLoading.value=false;
+    }
 }
 
 const loadDiagnostics=async()=>{

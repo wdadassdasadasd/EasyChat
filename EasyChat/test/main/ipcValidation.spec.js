@@ -6,7 +6,6 @@ import {
   validateOpenChat,
   validateSaveSendMessage,
   validateSyncRuntimeDiagnostics,
-  validateStoreWrite,
   validateUploadSourceChunk,
   validateWindowOperation
 } from '../../src/main/ipcValidation'
@@ -40,19 +39,6 @@ describe('IPC validation', () => {
   it('rejects malformed identifiers and window operations', () => {
     expectValidationError(() => validateLoadChatMessage({ sessionId: '', beforeMessageId: -1 }))
     expectValidationError(() => validateWindowOperation({ action: 'execute', data: {} }))
-  })
-
-  it('restricts local settings to known URL keys and protocols', () => {
-    expect(() =>
-      validateStoreWrite({
-        key: 'prodWsDomain',
-        value: 'wss://chat.example.com/ws'
-      })
-    ).not.toThrow()
-    expectValidationError(() =>
-      validateStoreWrite({ key: 'prodWsDomain', value: 'file:///tmp/socket' })
-    )
-    expectValidationError(() => validateStoreWrite({ key: 'token', value: 'secret' }))
   })
 
   it('rejects non-http downloads and relative file paths', () => {

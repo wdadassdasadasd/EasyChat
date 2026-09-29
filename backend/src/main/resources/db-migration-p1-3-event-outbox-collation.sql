@@ -5,3 +5,6 @@
 ALTER TABLE chat_event_outbox
   MODIFY COLUMN target_id VARCHAR(64)
   CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL;
+
+INSERT IGNORE INTO easychat_schema_migration(version, applied_at)
+VALUES ('p1-3-event-outbox-collation', UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000);

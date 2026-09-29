@@ -5,6 +5,7 @@ import com.easychat.entity.config.AppConfig;
 import com.easychat.entity.constants.Constants;
 import com.easychat.entity.dto.SysSettingDto;
 import com.easychat.entity.vo.ResponseVO;
+import com.easychat.exception.BusinessException;
 import com.easychat.redis.RedisComponet;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -29,6 +30,9 @@ public class AdminSettingController extends ABaseController {
                                      MultipartFile robotFile,
                                      MultipartFile robotCover) throws IOException {
         if (robotFile != null) {
+            if (robotCover == null || robotCover.isEmpty()) {
+                throw new BusinessException("机器人头像缩略图不能为空");
+            }
             String baseFolder = appConfig.getProjectFolder() + Constants.FILE_FOLDER_FILE;
             File targetFileFolder = new File(baseFolder + Constants.FILE_FOLDER_AVATAR_NAME);
             if (!targetFileFolder.exists()) {

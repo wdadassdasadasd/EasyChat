@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS easychat_schema_migration (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 ALTER TABLE chat_message
-  ADD COLUMN IF NOT EXISTS file_storage_provider VARCHAR(16) NULL,
-  ADD COLUMN IF NOT EXISTS file_object_key VARCHAR(512) NULL;
+  ADD COLUMN file_storage_provider VARCHAR(16) NULL,
+  ADD COLUMN file_object_key VARCHAR(512) NULL;
 
 CREATE TABLE IF NOT EXISTS chat_upload_session (
   message_id BIGINT NOT NULL,

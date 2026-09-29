@@ -14,6 +14,7 @@ import com.easychat.entity.vo.ResponseVO;
 import com.easychat.exception.BusinessException;
 import com.easychat.service.GroupInfoService;
 import com.easychat.service.UserContactService;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -32,6 +33,7 @@ import java.util.List;
  */
 @RestController("groupController")
 @RequestMapping("/group")
+@Validated
 public class GroupController extends ABaseController {
 
     @Resource
@@ -49,6 +51,9 @@ public class GroupController extends ABaseController {
                                 @NotNull Integer joinType,
                                 MultipartFile avatarFile,
                                 MultipartFile avatarCover) {
+        if (avatarFile != null && (avatarCover == null || avatarCover.isEmpty())) {
+            throw new BusinessException("头像缩略图不能为空");
+        }
         TokenUserInfoDto tokenUserInfoDto = getTokenUserInfo(request);
         GroupInfo groupInfo = new GroupInfo();
         groupInfo.setGroupId(groupId);

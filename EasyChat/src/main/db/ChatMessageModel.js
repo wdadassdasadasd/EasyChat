@@ -141,6 +141,48 @@ const upsertFtsMessage = async (message = {}) => {
   }, 'upsert fts message')
 }
 
+const upsertFtsMessages = async (messages = []) => {
+  const indexedMessages = messages.filter((message) => message?.messageId)
+  if (indexedMessages.length === 0) {
+    return false
+  }
+
+  return runFtsSafe(async () => {
+    const userId = store.getUserId()
+    const deleteBatchSize = Math.max(1, MAX_SQL_IN_PARAMS - 1)
+    for (let offset = 0; offset < indexedMessages.length; offset += deleteBatchSize) {
+      const batch = indexedMessages.slice(offset, offset + deleteBatchSize)
+      const placeholders = batch.map(() => '?').join(',')
+      await runStrict(
+        `delete from chat_message_fts where user_id=? and message_id in (${placeholders})`,
+        [userId, ...batch.map((message) => message.messageId)]
+      )
+    }
+
+    const valuesPerMessage = 5
+    const insertBatchSize = Math.max(1, Math.floor(MAX_SQL_IN_PARAMS / valuesPerMessage))
+    const rowPlaceholders = '(?, ?, ?, ?, ?)'
+    for (let offset = 0; offset < indexedMessages.length; offset += insertBatchSize) {
+      const batch = indexedMessages.slice(offset, offset + insertBatchSize)
+      await runStrict(
+        [
+          'insert into chat_message_fts',
+          '(user_id, session_id, message_id, message_content, file_name)',
+          `values ${batch.map(() => rowPlaceholders).join(',')}`
+        ].join(' '),
+        batch.flatMap((message) => [
+          userId,
+          message.sessionId || '',
+          message.messageId,
+          message.messageContent || '',
+          message.fileName || ''
+        ])
+      )
+    }
+    return true
+  }, 'upsert fts messages')
+}
+
 const deleteFtsBySessionId = (sessionId) => {
   if (!sessionId) {
     return Promise.resolve(false)
@@ -565,9 +607,7 @@ const saveMessageBatch = async (
       userId: store.getUserId()
     }))
     await insertOrReplaceManyStrict('chat_message', messagesToSave)
-    for (const item of messagesToSave) {
-      await upsertFtsMessage(item)
-    }
+    await upsertFtsMessages(messagesToSave)
 
     return {
       savedCount: messagesToSave.length,

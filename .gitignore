@@ -12,3 +12,14 @@ cookies.txt
 AGENTS.md
 .runtime/
 EasyChat/test-results/
+
+# Local development, verification, and packaging output
+.codex-workflow/
+.integration-runtime/
+EasyChat/.local-dev/
+backend/target/
+EasyChat/out/
+EasyChat/dist/
+EasyChat/test-results/
+EasyChat/playwright-report/
+EasyChat/coverage/

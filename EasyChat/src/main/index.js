@@ -1,10 +1,10 @@
+import './appIdentityBootstrap.js'
 import { app, dialog, shell, BrowserWindow, Menu, Tray } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import {
-  onGetLocalStore,
   onLoadSessionData,
   onLocalFileFolder,
   onLoginOnRegister,
@@ -12,7 +12,6 @@ import {
   onOpenTempVideoFile,
   onChatFileDownload,
   onResetToLogin,
-  onSetLocalStore,
   winTitleOp,
   onDelChatSession,
   onMarkSessionRead,
@@ -47,7 +46,7 @@ let ipcHandlersRegistered = false
 function createWindow() {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
-    title: 'WeChat',
+    title: 'EasyChat',
     icon: icon,
     width: login_width,
     height: login_height,
@@ -85,10 +84,15 @@ function createWindow() {
     mainWindow.webContents.openDevTools()
   }
 
-  mainWindow.on('ready-to-show', () => {
+  const showMainWindow = () => {
+    if (mainWindow.isDestroyed()) return
     mainWindow.show()
-    mainWindow.setTitle('WeChat')
-  })
+    mainWindow.setTitle('EasyChat')
+  }
+  mainWindow.once('ready-to-show', showMainWindow)
+  // Some Windows GPU and cache failures prevent ready-to-show even after the
+  // renderer has loaded. Do not leave the native window hidden in that case.
+  mainWindow.webContents.once('did-finish-load', showMainWindow)
 
   // 窗口最大化/还原时通知渲染进程，保持 WinOp 按钮图标与实际状态同步。
   mainWindow.on('maximize', () => {
@@ -181,8 +185,6 @@ function createWindow() {
       }
     })
 
-    onSetLocalStore()
-    onGetLocalStore()
     // 聊天链路 IPC 集中注册：renderer 只发事件，主进程负责查询/更新本地 SQLite。
     onLoadSessionData()
     onDelChatSession()
@@ -251,7 +253,7 @@ function createWindow() {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.easychat.desktop')
   // 旧版本把 token 以可逆混淆形式保存；安全升级后不迁移该数据，要求重新登录。
   store.clearLegacyTokenData()
 

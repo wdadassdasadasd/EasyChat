@@ -8,6 +8,7 @@ import com.easychat.entity.vo.PaginationResultVO;
 import com.easychat.entity.vo.ResponseVO;
 import com.easychat.exception.BusinessException;
 import com.easychat.service.GroupInfoService;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -16,6 +17,7 @@ import javax.validation.constraints.NotEmpty;
 
 @RestController("adminGroupController")
 @RequestMapping("/admin")
+@Validated
 public class AdminGroupController extends ABaseController {
 
     @Resource
@@ -35,7 +37,7 @@ public class AdminGroupController extends ABaseController {
     public ResponseVO dissolutionGroup(@NotEmpty String groupId) {
         GroupInfo groupInfo = groupInfoService.getGroupInfoByGroupId(groupId);
         if (null == groupInfo) {
-            throw new BusinessException(ResponseCodeEnum.CODE_200);
+            throw new BusinessException(ResponseCodeEnum.CODE_600);
         }
         groupInfoService.dissolutionGroup(groupInfo.getGroupOwnerId(), groupId);
         return getSuccessResponseVO(null);
